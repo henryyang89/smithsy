@@ -1,6 +1,575 @@
-import { h } from './dom.js';
+// Help tab: short how-to-play, then a live NUMBERS reference built from CONFIG (ctx.cfg).
+// Nothing here is hardcoded: every number is read from config or computed with the core formulas,
+// so the page stays correct when js/config.js is rebalanced.
+// UI-only state: ctx.ui.help_open = { sectionId: true } (which reference sections are expanded).
+import { h, num } from './dom.js';
+import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
+import { hitChance, hitDamage, adventurerCombatant } from '../core/combat.js';
+import { STAT_LABELS, craftMinutes, repairInfo } from '../core/gear.js';
+import { enemyCombatant, growth } from '../core/enemies.js';
+import { skillDefs, xpToNext } from '../core/skills.js';
+import { gainForPoint } from '../core/intel.js';
+import { formatClock, formatDuration, cap } from '../core/util.js';
 
-// STUB — to be implemented.
+// ------------------------------------------------------------------ helpers ----
+const p = (v, d = 1) => `${num(v, d)}%`;
+const mins = (m) => formatDuration(m);
+const x = (v) => `×${num(v, 2)}`;
+const statLabel = (k) => STAT_LABELS[k] || k;
+const gradeSpan = (g) => h('span', { class: `grade-${g}` }, g === 'F' ? 'Fail' : g);
+const gradeHead = () => GRADES.map((g) => ({ v: gradeSpan(g), cls: 'num' }));
+const OUTCOMES = ['S', 'A', 'B', 'C', 'D', 'F'];
+
+function tbl(head, rows, cls = '') {
+  const cell = (tag, c) => {
+    if (c && typeof c === 'object' && !(c instanceof Node) && !Array.isArray(c) && 'v' in c) {
+      return h(tag, { class: c.cls, title: c.title, colspan: c.span }, c.v);
+    }
+    return h(tag, {}, c);
+  };
+  return h('div', { class: 'mi-scroll' },
+    h('table', { class: `mi-table mi-compact ${cls}` },
+      head ? h('thead', {}, h('tr', {}, head.map((c) => cell('th', c)))) : null,
+      h('tbody', {}, rows.map((r) => (Array.isArray(r)
+        ? h('tr', {}, r.map((c) => cell('td', c)))
+        : h('tr', r.attrs || {}, r.cells.map((c) => cell('td', c))))))));
+}
+
+const n = (v, d = 1) => ({ v: num(v, d), cls: 'num' });
+const np = (v, d = 1) => ({ v: p(v, d), cls: 'num' });
+
+// Label / value grid.
+function kv(pairs) {
+  return h('dl', { class: 'mi-kv' }, pairs.filter(Boolean).flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)]));
+}
+
+function formula(text, note) {
+  return h('div', { class: 'mi-formula' }, h('code', {}, text.replace(/ x /g, ' × ')), note ? h('div', { class: 'mi-note' }, note) : null);
+}
+
+function sub(title) {
+  return h('h4', {}, title);
+}
+
+// Weights -> percentages (same keys).
+function toPct(weights) {
+  const total = Object.values(weights).reduce((a, b) => a + Math.max(0, b), 0) || 1;
+  return Object.fromEntries(Object.entries(weights).map(([k, w]) => [k, (Math.max(0, w) / total) * 100]));
+}
+
+function avgCount(weights) {
+  const pc = toPct(weights);
+  return Object.entries(pc).reduce((a, [k, v]) => a + Number(k) * (v / 100), 0);
+}
+
+function ordinal(i) {
+  const s = i % 100 >= 11 && i % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[i % 10] || 'th');
+  return `${i}${s}`;
+}
+
+// Map distances worth listing: enough rows to show the weight tables and the usual 5x5 detours.
+function maxDistance(cfg) {
+  return Math.max(cfg.field.oreWeights.length, cfg.field.gemWeights.length, 2 * Math.floor(cfg.map.size / 2) + 2);
+}
+
+function lootChance(cfg, d) {
+  const l = cfg.field.lootChance;
+  return Math.min(l.max, l.base + l.perDistance * (d - 1));
+}
+
+// A collapsible reference section. Open state survives re-renders via ctx.ui.help_open.
+function det(ctx, id, title, ...body) {
+  const open = !!(ctx.ui.help_open && ctx.ui.help_open[id]);
+  const remember = (v) => {
+    if (!ctx.ui.help_open) ctx.ui.help_open = {};
+    ctx.ui.help_open[id] = v;
+  };
+  // click fires before the browser toggles (so the state is saved even if a re-render follows at once);
+  // toggle also covers find-in-page auto-expanding.
+  const d = h('details', { class: 'panel mi-det', open, id: `help-${id}` },
+    h('summary', { onclick: () => remember(!d.open) }, title),
+    h('div', { class: 'mi-det-body' }, ...body));
+  d.addEventListener('toggle', () => remember(d.open));
+  return d;
+}
+
+// --------------------------------------------------------------------- main ----
+const SECTIONS = [
+  ['time', 'Time', timeSection],
+  ['map', 'World map & travel', mapSection],
+  ['field', 'Fields & searching', fieldSection],
+  ['process', 'Refining & cutting', processSection],
+  ['gear', 'Gear', gearSection],
+  ['gems', 'Gem infusions', gemSection],
+  ['adventurer', 'Adventurer', adventurerSection],
+  ['combat', 'Combat formulas', combatSection],
+  ['enemies', 'Enemies', enemySection],
+  ['rings', 'Rings', ringSection],
+  ['skills', 'Skills', skillSection],
+  ['intel', 'Intel', intelSection],
+  ['repair', 'Durability & repair', repairSection],
+];
+
 export function renderHelp(root, ctx) {
-  root.append(h('p', {}, 'help: coming soon'));
+  const setAll = (open) => {
+    ctx.ui.help_open = Object.fromEntries(SECTIONS.map(([id]) => [id, open]));
+    ctx.rerender();
+  };
+  root.append(h('div', { class: 'mi-root mi-help' },
+    howToPlay(ctx),
+    h('section', { class: 'panel mi-numbers-head' },
+      h('div', { class: 'mi-head' },
+        h('h3', {}, 'Numbers reference'),
+        h('div', { class: 'row' },
+          h('button', { class: 'small', onclick: () => setAll(true) }, 'Expand all'),
+          h('button', { class: 'small', onclick: () => setAll(false) }, 'Collapse all'))),
+      h('p', { class: 'mi-note' }, 'Every number below is read live from ', h('code', {}, 'js/config.js'),
+        ' (or computed with the game\'s own formulas). To rebalance, edit that file; ', h('code', {}, 'docs/BALANCE.md'), ' explains each number.'),
+      h('div', { class: 'chips' }, SECTIONS.map(([id, title]) => h('button', {
+        class: 'small ghost',
+        onclick: () => {
+          if (!ctx.ui.help_open) ctx.ui.help_open = {};
+          ctx.ui.help_open[id] = true;
+          ctx.rerender();
+          const el = document.getElementById(`help-${id}`);
+          if (el) el.scrollIntoView({ block: 'start' });
+        },
+      }, title)))),
+    SECTIONS.map(([id, title, fn]) => det(ctx, id, title, ...[].concat(fn(ctx.cfg, ctx)))),
+    h('p', { class: 'mi-note mi-foot' }, 'Tuning: change numbers in js/config.js; see docs/BALANCE.md for what each one does and quick balance levers.')));
+}
+
+// -------------------------------------------------------------- how to play ----
+function howToPlay(ctx) {
+  const cfg = ctx.cfg;
+  const t = cfg.time;
+  const dayLen = t.dayEndMin - t.dayStartMin;
+  const tiers = cfg.enemies.tiers;
+  const rosterN = TIERS.reduce((a, k) => a + tiers[k].count, 0);
+  const rosterMix = TIERS.map((k) => `${tiers[k].count} ${k}`).join(', ');
+  const scores = TIERS.map((k) => `${k} ${tiers[k].score}`).join(', ');
+  const wear = cfg.gear.durabilityLoss;
+  const tab = (id, label) => h('a', { href: '#', class: 'mi-link', onclick: (e) => { e.preventDefault(); ctx.setTab(id); } }, label);
+
+  return h('section', { class: 'panel' },
+    h('h3', {}, 'How to play'),
+    h('p', {}, 'You are a miner and blacksmith. Your adventurer fights one enemy a day with the gear you make. ',
+      h('b', {}, 'If the adventurer loses a fight, the run is over.'), ` Each win scores points (${scores}) and drops a ring.`),
+    h('ol', { class: 'mi-steps' },
+      h('li', {}, h('b', {}, `Work from ${formatClock(t.dayStartMin)} to ${formatClock(t.dayEndMin)} (${dayLen} minutes). `),
+        'Only actions cost time. On the ', tab('map', 'Map'), ', travel to a field, search 3x3 areas for ore and gems, and carry them home in your bag ',
+        `(${cfg.bag.slots} slots). Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
+      h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear.'),
+      h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
+        `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings.`),
+      h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
+        'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
+        `It comes back at the end of the day; every item that was used loses ${wear.min}-${wear.max}% durability (0% = destroyed).`),
+      h('li', {}, h('b', {}, 'Day 1 is a rest day. '), 'From day 2 on there is a fight every day; it cannot be skipped.')),
+    h('ul', { class: 'mi-list' },
+      h('li', {}, 'Enemy attributes and reward rings are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them.'),
+      h('li', {}, 'The plan screen can simulate the fight to estimate your win chance before you confirm.'),
+      h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
+      h('li', {}, 'Skills level up on their own as you work (small bonuses). Farther fields are richer but cost more travel time.')));
+}
+
+// -------------------------------------------------------------------- time ----
+function timeSection(cfg) {
+  const t = cfg.time;
+  const g = cfg.gear;
+  const byMinutes = (table) => {
+    const groups = {};
+    for (const [k, v] of Object.entries(table)) (groups[v.minutes] ||= []).push(k);
+    const entries = Object.entries(groups);
+    if (entries.length === 1) return `${mins(Number(entries[0][0]))} each`;
+    return entries.map(([m, ks]) => `${ks.join(', ')} ${mins(Number(m))}`).join(' · ');
+  };
+  return [
+    kv([
+      ['Work day', `${formatClock(t.dayStartMin)} - ${formatClock(t.dayEndMin)} (${t.dayEndMin - t.dayStartMin} minutes)`],
+      ['Time limit rule', `Field actions (travel out, search, clear debris) need enough time left to walk back to camp by ${formatClock(t.dayEndMin)} at your current load. The trip back is always allowed, even if it ends late. The day can only be ended at camp.`],
+      ['Time bonuses', `Rings and skills reduce times; the total reduction is capped at ${p(cfg.processing.maxTimeReduction)}.`],
+    ]),
+    sub('What costs time (base, before bonuses)'),
+    tbl(['Activity', 'Base time'], [
+      ['Travel', `${mins(cfg.map.travelMinPerStep)} per map step, +${p(cfg.map.loadPenaltyPerItem)} per item in the bag`],
+      ['Search a 3x3 area', mins(cfg.field.searchMin)],
+      ['Clear debris', `${mins(cfg.field.debrisClearMin)} per debris cell`],
+      ['Refine a bar', byMinutes(cfg.refine)],
+      ['Cut a gem', byMinutes(cfg.cut)],
+      ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem`],
+      ['Repair gear', `${p(g.repair.timeFraction)} of the smithing time x fraction repaired`],
+      ['Pick up / drop items, unload at camp', 'free'],
+    ]),
+  ];
+}
+
+// --------------------------------------------------------------------- map ----
+function mapSection(cfg) {
+  const m = cfg.map;
+  const loads = [0, Math.round(cfg.bag.slots / 2), cfg.bag.slots];
+  const rows = [];
+  for (let d = 1; d <= maxDistance(cfg); d++) {
+    rows.push([String(d), ...loads.map((items) => n(d * m.travelMinPerStep * (1 + (m.loadPenaltyPerItem * items) / 100)))]);
+  }
+  return [
+    kv([
+      ['Map', `${m.size} x ${m.size} fields, camp in the center. ${m.blockedCells} cells are blocked (impassable); every field stays reachable.`],
+      ['Travel time', formula(`steps x ${m.travelMinPerStep}m x (1 + ${m.loadPenaltyPerItem}% x items in bag)`, 'Steps = shortest path around blocked cells. You can travel field to field.')],
+      ['Bag', `${cfg.bag.slots} slots, 1 raw ore or gem per slot. A full bag adds ${p(m.loadPenaltyPerItem * cfg.bag.slots)} travel time. Camp storage is unlimited.`],
+      ['Bonuses', `Travel rings reduce every trip; the Return travel skill reduces trips to camp. Total capped at ${p(cfg.processing.maxTimeReduction)}.`],
+    ]),
+    sub('Base travel minutes by distance and bag load'),
+    tbl(['Steps', ...loads.map((l) => ({ v: l === 0 ? 'Empty bag' : `${l} items`, cls: 'num' }))], rows),
+  ];
+}
+
+// ------------------------------------------------------------------- field ----
+function fieldSection(cfg) {
+  const f = cfg.field;
+  const cells = f.size * f.size;
+  const avg = avgCount(f.itemCountWeights);
+  const countPct = toPct(f.itemCountWeights);
+  const searchesToFinish = Math.ceil(100 / f.searchEfficiency);
+  const lootRows = [];
+  for (let d = 1; d <= maxDistance(cfg); d++) {
+    const base = lootChance(cfg, d);
+    const deb = Math.min(100, base + f.debrisLootBonus);
+    const perCell = ((1 - f.debrisChance / 100) * base + (f.debrisChance / 100) * deb) / 100;
+    const items = cells * perCell * avg;
+    lootRows.push([String(d), np(base), np(deb), n(items, 0), n(items * (f.oreShare / 100), 0), n(items * (1 - f.oreShare / 100), 0)]);
+  }
+  const weightTable = (rows, keys) => tbl(['Distance', ...keys.map((k) => ({ v: cap(k), cls: 'num' }))],
+    rows.map((w, i) => {
+      const pc = toPct(w);
+      const label = i === rows.length - 1 ? `${i + 1}+` : String(i + 1);
+      return [label, ...keys.map((k) => (pc[k] > 0 ? np(pc[k], 0) : { v: '·', cls: 'num muted' }))];
+    }));
+  const oreKeys = Object.keys(f.oreWeights[0]);
+  const gemKeys = Object.keys(f.gemWeights[0]);
+  return [
+    kv([
+      ['Field', `${f.size} x ${f.size} = ${cells} cells. Contents are hidden.`],
+      ['Search', `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
+      ['Hidden depth', 'Each item has a hidden depth from 0 to 100. It is found once the cell\'s searched % passes its depth. A fully searched cell gives up everything.'],
+      ['Debris', `${p(f.debrisChance)} of cells. Blocks searching until cleared (${mins(f.debrisClearMin)} per cell; clearing works on a 3x3 area). Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
+      ['Ore sight', `Each searched cell has a chance to reveal everything still in it: ${p(cfg.intel.tracks.oreSight.base)} base (intel), plus intel points and Ore sight rings.`],
+      ['Items per loot cell', `${Object.entries(countPct).map(([k, v]) => `${k} (${p(v, 0)})`).join(', ')}, average ${num(avg, 2)}`],
+      ['Ores vs gems', `${p(f.oreShare, 0)} ores, ${p(100 - f.oreShare, 0)} gems`],
+      ['Full bag', 'Found items stay on the ground (visible); pick them up later.'],
+    ]),
+    sub('Richness by distance from camp'),
+    tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
+    h('p', { class: 'mi-note' }, `Cell chance = ${f.lootChance.base}% + ${f.lootChance.perDistance}% per step beyond the first, max ${f.lootChance.max}%. Item estimates = ${cells} cells x average chance (incl. debris) x ${num(avg, 2)} items.`),
+    h('div', { class: 'mi-two' },
+      h('div', {}, sub('Ore mix by distance'), weightTable(f.oreWeights, oreKeys)),
+      h('div', {}, sub('Gem mix by distance'), weightTable(f.gemWeights, gemKeys))),
+  ];
+}
+
+// -------------------------------------------------------------- processing ----
+function processSection(cfg) {
+  const distCells = (dist) => OUTCOMES.map((g) => (dist[g] > 0 ? np(dist[g], 0) : { v: '·', cls: 'num muted' }));
+  const outHead = () => OUTCOMES.map((g) => ({ v: gradeSpan(g), cls: 'num' })); // fresh nodes per table
+  const barRows = BARS.map((b) => {
+    const r = cfg.refine[b];
+    return [h('b', {}, cap(b)), Object.entries(r.input).map(([o, k]) => `${k} ${o}`).join(' + '), n(r.minutes), ...distCells(r.dist)];
+  });
+  const gemRows = GEMS.map((g) => {
+    const c = cfg.cut[g];
+    return [h('b', {}, cap(g)), `1 raw ${g}`, n(c.minutes), ...distCells(c.dist)];
+  });
+  return [
+    sub('Refining ore into bars'),
+    tbl(['Bar', 'Needs', { v: 'Minutes', cls: 'num' }, ...outHead()], barRows),
+    sub('Cutting gems'),
+    tbl(['Gem', 'Needs', { v: 'Minutes', cls: 'num' }, ...outHead()], gemRows),
+    h('ul', { class: 'mi-list' },
+      h('li', {}, 'Fail = the material is lost. The Workshop shows these chances already adjusted by your rings and skills.'),
+      h('li', {}, 'Time: Refining rings (refining and cutting) + Refining / Cutting speed skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
+      h('li', {}, 'Upgrade luck: Bar luck / Gem luck rings + the grade skill for that bar or gem. After a successful roll, that % chance moves the result up one grade (S stays S).'),
+      h('li', {}, 'Failure reduction: the refining / cutting skill for that material moves failure chance into grade D.')),
+  ];
+}
+
+// -------------------------------------------------------------------- gear ----
+function gearSection(cfg) {
+  const g = cfg.gear;
+  const mats = Object.keys(g.materialMult);
+  const slotRows = SLOTS.map((s) => {
+    const def = g.slots[s];
+    return [h('b', {}, cap(s)), n(def.bars, 0), { v: mins(craftMinutes(s, false, cfg)), cls: 'num' },
+      Object.entries(def.stats).map(([k, v]) => `${statLabel(k)} ${num(v, 2)}`).join(', ')];
+  });
+  // One small card per slot stat: material x grade.
+  const cards = [];
+  for (const s of SLOTS) {
+    for (const [stat, base] of Object.entries(g.slots[s].stats)) {
+      cards.push(h('div', { class: 'mi-card' },
+        h('div', { class: 'mi-card-title' }, `${cap(s)}: ${statLabel(stat)}`),
+        tbl(['', ...gradeHead()], mats.map((m) => [cap(m), ...GRADES.map((gr) => n(base * g.materialMult[m] * g.gradeMult[gr]))]))));
+    }
+  }
+  return [
+    kv([
+      ['Stat formula', formula('stat = slot base x material multiplier x grade multiplier')],
+      ['Bars', 'All bars in one item must be the same material and grade. The item\'s grade is the bars\' grade.'],
+      ['Smithing time', `${mins(g.smithMinPerBar)} per bar, +${mins(g.infuseMin)} to infuse a cut gem (optional, any gem grade).`],
+      ['Armor', 'Defense % reduces physical damage (defense from all armor pieces adds up, capped in combat). Gloves add accuracy; boots add dodge and speed.'],
+    ]),
+    sub('Slots (base stats = copper, grade D)'),
+    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Smith time', cls: 'num' }, 'Base stats'], slotRows),
+    h('div', { class: 'mi-two' },
+      h('div', {}, sub('Material multiplier'), tbl(mats.map((m) => ({ v: cap(m), cls: 'num' })), [mats.map((m) => ({ v: x(g.materialMult[m]), cls: 'num' }))])),
+      h('div', {}, sub('Grade multiplier'), tbl(gradeHead(), [GRADES.map((gr) => ({ v: x(g.gradeMult[gr]), cls: 'num' }))]))),
+    sub('Resulting stats by material and grade (before gems)'),
+    h('div', { class: 'mi-cards' }, cards),
+  ];
+}
+
+// -------------------------------------------------------------------- gems ----
+function gemSection(cfg) {
+  const mult = cfg.gear.gemArmorMult;
+  const special = ARMOR_SLOTS.filter((s) => mult[s] !== 1);
+  const rows = [];
+  for (const gem of GEMS) {
+    const fx = cfg.gemEffects[gem];
+    for (const [k, arr] of Object.entries(fx.weapon)) {
+      rows.push([h('b', {}, cap(gem)), 'Sword', statLabel(k), ...arr.map((v) => n(v, 2))]);
+    }
+    for (const [k, arr] of Object.entries(fx.armor)) {
+      rows.push([h('b', {}, cap(gem)), 'Armor', statLabel(k), ...arr.map((v) => ({
+        v: h('span', {}, num(v, 2), special.length ? h('span', { class: 'mi-sub' }, special.map((s) => `${s} ${num(v * mult[s], 2)}`).join(' · ')) : null),
+        cls: 'num',
+      }))]);
+    }
+  }
+  return [
+    h('p', {}, 'Infusing a cut gem while smithing adds a bonus. The gem\'s grade (not the gear\'s) sets the strength. Swords get the weapon effect, armor the armor effect.'),
+    special.length ? h('p', { class: 'mi-note' }, `Armor effects are multiplied by slot: ${ARMOR_SLOTS.map((s) => `${s} ${x(mult[s])}`).join(', ')} (small numbers under each value).`) : null,
+    tbl(['Gem', 'On', 'Effect', ...gradeHead()], rows, 'mi-gems'),
+    h('ul', { class: 'mi-list' },
+      h('li', {}, 'Ruby: magic damage = % of weapon damage, ignores defense / armor magic resistance.'),
+      h('li', {}, 'Topaz: chance per hit to stun (delays the target\'s next attack) / reduces enemy stun chance and duration.'),
+      h('li', {}, 'Emerald: accuracy rating / dodge rating.'),
+      h('li', {}, 'Sapphire: slows the target\'s attacks for a few seconds on hit / reduces enemy slow strength and duration.'),
+      h('li', {}, 'Diamond: piercing (% of enemy defense ignored) / pierce resistance (points subtracted from enemy piercing).')),
+  ];
+}
+
+// -------------------------------------------------------------- adventurer ----
+function adventurerSection(cfg) {
+  const a = cfg.adventurer;
+  return [
+    kv([
+      ['HP', num(a.hp)],
+      ['Unarmed damage', `${num(a.unarmedDamage)} per hit (a sword replaces this)`],
+      ['Attack interval', `${num(a.attackInterval, 2)}s at 0% speed (${num(1 / a.attackInterval, 2)} attacks per second)`],
+      ['Accuracy', num(a.accuracy)],
+      ['Dodge', num(a.dodge)],
+    ]),
+    h('p', { class: 'mi-note' }, 'Gear stats and worn adventurer ring totals add on top. Health rings raise max HP by a %. The adventurer uses at most one item per slot in a fight.'),
+  ];
+}
+
+// ------------------------------------------------------------------ combat ----
+function combatSection(cfg) {
+  const c = cfg.combat;
+  const a = cfg.adventurer;
+  const [lo, hi] = c.damageRoll;
+  const ratios = [0.5, 0.75, 1, 1.5, 2];
+  const hitRows = ratios.map((r) => [n(r, 2), `${num(a.accuracy * r)} vs ${num(a.dodge)}`, np(hitChance(a.accuracy * r, a.dodge, cfg) * 100)]);
+
+  // Worked examples using the real combat formulas (day 1, every enemy attribute Normal).
+  const allNormal = Object.fromEntries(Object.keys(cfg.enemies.attributes).map((k) => [k, 'normal']));
+  const enemies = TIERS.map((t) => ({ tier: t, c: enemyCombatant(t, 1, allNormal, t, cfg) }));
+  const mats = Object.keys(cfg.gear.materialMult);
+  const lowM = mats[0];
+  const highM = mats[mats.length - 1];
+  const lowG = GRADES[0];
+  const highG = GRADES[GRADES.length - 1];
+  const sword = (m, gr) => adventurerCombatant([{ slot: 'sword', material: m, grade: gr, gem: null }], {}, cfg);
+  const swords = [
+    { label: 'No sword', c: adventurerCombatant([], {}, cfg) },
+    { label: `${lowG} ${cap(lowM)} sword`, c: sword(lowM, lowG) },
+    { label: `${highG} ${cap(highM)} sword`, c: sword(highM, highG) },
+  ];
+  const armorSet = (m, gr) => adventurerCombatant(ARMOR_SLOTS.map((s) => ({ slot: s, material: m, grade: gr, gem: null })), {}, cfg);
+  const sets = [
+    { label: 'No armor', c: adventurerCombatant([], {}, cfg) },
+    { label: `${lowG} ${cap(lowM)} armor set`, c: armorSet(lowM, lowG) },
+    { label: `${highG} ${cap(highM)} armor set`, c: armorSet(highM, highG) },
+  ];
+  const outRows = enemies.map((e) => [h('span', { class: `tier-${e.tier}` }, cap(e.tier)), np(e.c.defense, 0),
+    ...swords.map((s) => n(hitDamage(s.c, e.c, cfg).total)), np(hitChance(a.accuracy, e.c.dodge, cfg) * 100, 0)]);
+  const inRows = enemies.map((e) => [h('span', { class: `tier-${e.tier}` }, cap(e.tier)), n(e.c.damage),
+    ...sets.map((s) => n(hitDamage(e.c, s.c, cfg).total)), np(hitChance(e.c.accuracy, a.dodge, cfg) * 100, 0)]);
+  const normalAttr = (k) => cfg.enemies.attributes[k].values.normal;
+
+  return [
+    sub('Formulas'),
+    formula(`hit chance = acc² / (acc² + ${c.hitK} x dodge²), clamped to ${c.minHitPct}%..${c.maxHitPct}%`, 'An S-curve: more accuracy always helps, with diminishing returns.'),
+    formula(`attack interval = base interval / (1 + speed% / 100) x (1 + slow% / 100 while slowed)`),
+    formula(`damage roll: each hit deals ${lo}%..${hi}% of the listed damage`),
+    formula(`physical = damage x (1 - effective defense / 100); effective defense = min(defense, ${c.defenseCap}) x (1 - pierce / 100)`,
+      'pierce = attacker piercing - defender pierce resistance (0..100).'),
+    formula(`magic = damage x magic% / 100 x (1 - min(magic resist, ${c.resistCap}) / 100)`, 'Magic ignores defense. A hit deals physical + magic.'),
+    formula(`stun chance = stun% x (1 - min(stun chance reduction, ${c.resistCap}) / 100); stun delays the target's next attack by duration x (1 - reduction)`),
+    formula(`slow: target's interval x (1 + slow% x (1 - reduction)) for duration x (1 - reduction)`, 'Slows do not stack; a new slow refreshes the timer (the stronger slow is kept while active).'),
+    kv([
+      ['Caps', `Defense ${p(c.defenseCap, 0)}. Magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
+      ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
+      ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
+      ['Win-chance estimate', `Plan screen: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination.`],
+    ]),
+    sub('Hit chance by accuracy / dodge ratio'),
+    tbl([{ v: 'Ratio', cls: 'num' }, 'Example', { v: 'Hit chance', cls: 'num' }], hitRows),
+    sub('Your average damage per hit (day 1 enemies, all attributes Normal)'),
+    tbl(['Enemy', { v: 'Defense', cls: 'num' }, ...swords.map((s) => ({ v: s.label, cls: 'num' })), { v: 'Your hit chance', cls: 'num' }], outRows),
+    sub('Enemy average damage per hit on you (day 1, all attributes Normal)'),
+    tbl(['Enemy', { v: 'Damage', cls: 'num' }, ...sets.map((s) => ({ v: s.label, cls: 'num' })), { v: 'Its hit chance', cls: 'num' }], inRows),
+    h('p', { class: 'mi-note' }, `Normal enemies here have ${p(normalAttr('piercing'), 0)} piercing and ${p(normalAttr('magical'), 0)} extra magic damage. Hit chances use base accuracy ${num(a.accuracy)} / dodge ${num(a.dodge)} (no gloves, boots or emeralds).`),
+  ];
+}
+
+// ----------------------------------------------------------------- enemies ----
+function enemySection(cfg) {
+  const e = cfg.enemies;
+  const tierRows = TIERS.map((t) => {
+    const d = e.tiers[t];
+    const ringPct = toPct(cfg.rings.gradeWeights[t] || {});
+    return [h('b', { class: `tier-${t}` }, cap(t)), n(d.count, 0), n(d.hp), n(d.damage), np(d.defense, 0),
+      LEVELS.map((lv) => d.levels[lv]).join(' / '), n(d.score, 0),
+      Object.entries(ringPct).filter(([, v]) => v > 0).map(([g, v]) => `${g} ${p(v, 0)}`).join(', ')];
+  });
+  const days = [1, 5, 10, 20, 30, 50];
+  const growthRows = days.map((day) => {
+    const gr = growth(day, cfg);
+    return [n(day, 0), { v: x(gr.hpDamage), cls: 'num' }, { v: x(gr.ratings), cls: 'num' },
+      ...TIERS.map((t) => ({ v: `${num(e.tiers[t].hp * gr.hpDamage, 0)} / ${num(e.tiers[t].damage * gr.hpDamage)}`, cls: 'num' }))];
+  });
+  const attrRows = [];
+  e.pairs.forEach((pair, i) => {
+    pair.forEach((k, j) => {
+      const a = e.attributes[k];
+      attrRows.push({
+        attrs: { class: i > 0 && j === 0 ? 'mi-pairstart' : '' },
+        cells: [h('b', {}, a.name), a.side === 'O' ? 'Offense' : 'Defense', ...LEVELS.map((lv) => ({ v: num(a.values[lv], 2), cls: `num attr-${lv}` })), a.desc],
+      });
+    });
+  });
+  const rosterN = TIERS.reduce((a, t) => a + e.tiers[t].count, 0);
+  return [
+    kv([
+      ['Roster', `${rosterN} enemies each day (${TIERS.map((t) => `${e.tiers[t].count} ${t}`).join(', ')}). You pick one for tomorrow.`],
+      ['Attack interval', `${num(e.attackInterval, 2)}s (Fast attribute changes speed)`],
+      ['Stun / slow', `An enemy stun lasts ${num(e.stunDuration, 2)}s; a chilling hit slows you for ${num(e.slowDuration, 2)}s (before your resistances).`],
+      ['Daily growth', formula(`HP & damage x (1 + ${e.growthPerDay.hpDamage}% x (day - 1)); accuracy & dodge x (1 + ${e.growthPerDay.ratings}% x (day - 1))`)],
+      ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base).`],
+    ]),
+    sub('Tiers (base values on day 1)'),
+    tbl(['Tier', { v: 'Per roster', cls: 'num' }, { v: 'HP', cls: 'num' }, { v: 'Damage', cls: 'num' }, { v: 'Defense', cls: 'num' }, 'Low / Normal / High', { v: 'Score', cls: 'num' }, 'Ring grade odds'], tierRows),
+    sub('Growth by day (HP / damage per tier, before the HP attribute)'),
+    tbl([{ v: 'Day', cls: 'num' }, { v: 'HP & dmg', cls: 'num' }, { v: 'Acc & dodge', cls: 'num' }, ...TIERS.map((t) => ({ v: cap(t), cls: 'num' }))], growthRows),
+    sub('Attributes (shown in pairs: offense | defense)'),
+    tbl(['Attribute', 'Side', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning'], attrRows),
+  ];
+}
+
+// ------------------------------------------------------------------- rings ----
+function ringSection(cfg) {
+  const r = cfg.rings;
+  const types = Object.entries(r.types);
+  const weights = Array.from({ length: 5 }, (_, i) => p(r.duplicateFactor ** i * 100, 2));
+  const typeRows = types.map(([, d]) => [h('b', {}, d.name), cap(d.owner), ...d.values.map((v) => n(v, 2)), d.desc]);
+  const oddsRows = TIERS.map((t) => {
+    const pc = toPct(r.gradeWeights[t] || {});
+    return [h('span', { class: `tier-${t}` }, cap(t)), ...GRADES.map((g) => (pc[g] > 0 ? np(pc[g], 0) : { v: '·', cls: 'num muted' }))];
+  });
+  return [
+    kv([
+      ['Source', `Each defeated enemy drops 1 ring. Type: uniform over all ${types.length} types (${p(100 / types.length)} each). Grade: by tier (below).`],
+      ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once; adventurer rings are chosen in each night's plan.`],
+      ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).`],
+    ]),
+    tbl(['Ring', 'Wearer', ...gradeHead(), 'Effect'], typeRows),
+    sub('Ring grade odds by enemy tier'),
+    tbl(['Tier', ...gradeHead()], oddsRows),
+  ];
+}
+
+// ------------------------------------------------------------------ skills ----
+function skillSection(cfg) {
+  const s = cfg.skills;
+  const xpRow = [];
+  let total = 0;
+  for (let l = 0; l < s.maxLevel; l++) {
+    xpRow.push(xpToNext(l, cfg));
+    total += xpToNext(l, cfg);
+  }
+  const defs = skillDefs(cfg);
+  const activity = defs.filter((d) => d.group === 'activity');
+  const actRows = activity.map((d) => [h('b', {}, d.name), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc, d.xpFrom]);
+  const matRows = Object.entries(s.perMaterial).map(([k, d]) => {
+    const isOre = k.startsWith('ore');
+    const label = `${isOre ? 'Bar' : 'Gem'} ${d.name}`;
+    return [h('b', {}, label), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc,
+      `${s.xpPerItem} XP per ${isOre ? 'bar refined' : 'gem cut'} of that type (${isOre ? BARS.join(', ') : GEMS.join(', ')})`];
+  });
+  return [
+    kv([
+      ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity.`],
+      ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, `${xpRow.join(', ')} (total ${total.toLocaleString('en-US')} XP to reach level ${s.maxLevel})`)],
+      ['Bonus', 'per-level value x level. Skill bonuses are smaller than rings and add to them.'],
+    ]),
+    sub('Activity skills'),
+    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], actRows),
+    sub('Per-material skills (one of each per bar type / gem type)'),
+    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], matRows),
+  ];
+}
+
+// ------------------------------------------------------------------- intel ----
+function intelSection(cfg) {
+  const ic = cfg.intel;
+  const k = ic.gainsPerPoint.length;
+  const head = ['Point', ...ic.gainsPerPoint.map((_, i) => ({ v: ordinal(i + 1), cls: 'num' })), { v: `${ordinal(k + 1)}+`, cls: 'num' }];
+  const row = ['Gain', ...ic.gainsPerPoint.map((_, i) => ({ v: `+${gainForPoint(i + 1, cfg)}`, cls: 'num' })), { v: `+${gainForPoint(k + 1, cfg)}`, cls: 'num' }];
+  const trackRows = Object.values(ic.tracks).map((t) => [h('b', {}, t.name), np(t.base, 0), t.desc]);
+  return [
+    kv([
+      ['Earning', `1 intel point at the end of every ${ordinal(ic.daysPerPoint)} day (day ${ic.daysPerPoint}, ${ic.daysPerPoint * 2}, ${ic.daysPerPoint * 3}, ...).`],
+      ['Spending', `Each point raises one track. Diminishing returns per track (below), max ${p(ic.maxChance, 0)}.`],
+    ]),
+    tbl(['Track', { v: 'Base chance', cls: 'num' }, 'What it does'], trackRows),
+    sub('Gain per point spent on the same track'),
+    tbl(head, [row]),
+  ];
+}
+
+// ------------------------------------------------------------------ repair ----
+function repairSection(cfg) {
+  const g = cfg.gear;
+  const loss = g.durabilityLoss;
+  const avgLoss = (loss.min + loss.max) / 2;
+  const fmtBars = (bars) => Object.values(bars).map((v) => num(v, 2)).join(' + ');
+  const rows = SLOTS.map((s) => {
+    const full = repairInfo({ slot: s, material: 'x', grade: GRADES[0], gem: null, durability: 0 }, cfg);
+    const one = repairInfo({ slot: s, material: 'x', grade: GRADES[0], gem: null, durability: 100 - avgLoss }, cfg);
+    return [h('b', {}, cap(s)), n(g.slots[s].bars, 0), { v: `${fmtBars(full.bars)} bars`, cls: 'num' }, { v: mins(full.minutes), cls: 'num' },
+      { v: `${fmtBars(one.bars)} bars`, cls: 'num' }, { v: mins(one.minutes), cls: 'num' }];
+  });
+  const gemFull = repairInfo({ slot: 'chest', material: 'x', grade: GRADES[0], gem: { type: 'gem', grade: GRADES[0] }, durability: 0 }, cfg);
+  const gemExtra = Object.values(gemFull.gems)[0] || 0;
+  return [
+    kv([
+      ['Wear', `Each fight, every item the adventurer actually used loses ${loss.min}-${loss.max}% durability (whole numbers, average ${num(avgLoss)}%). Packed but unused items do not wear. At 0% the item is destroyed.`],
+      ['Repair', 'Only back to 100%, at camp, and not while the item is packed for today\'s fight.'],
+      ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01.')],
+      ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired`)],
+      ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and the infusion time counts in the repair time.`],
+    ]),
+    sub('Repair cost by slot (item without a gem)'),
+    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time', cls: 'num' }], rows),
+  ];
 }

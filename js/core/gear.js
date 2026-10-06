@@ -111,7 +111,8 @@ export function craft(state, spec, cfg = CONFIG) {
   return { ok: true, item, minutes, msg: `Crafted ${gearName(item)} (${minutes}m).` };
 }
 
-const ceil2 = (v) => Math.ceil(v * 100 - 1e-7) / 100;
+// Round up to 0.01 (tiny tolerance for float noise). Math.max avoids returning -0 for a 0 amount.
+const ceil2 = (v) => Math.max(0, Math.ceil(v * 100 - 1e-7) / 100);
 
 // Cost and time to repair an item back to 100%.
 export function repairInfo(item, cfg = CONFIG) {

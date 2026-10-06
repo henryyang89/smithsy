@@ -17,27 +17,31 @@ export function loadouts(gearItems) {
 }
 
 // Pick the loadout with the most wins over `fights` simulated fights (same random seed for each
-// loadout so they are compared fairly). Ties broken by average HP left.
+// loadout so they are compared fairly). Ties broken by average HP left, then (e.g. when every
+// loadout lost every simulated fight) by how much enemy HP was removed in the fights not won.
 export function bestLoadout(combos, ringTotals, enemyC, seed, fights, cfg = CONFIG) {
   if (combos.length === 1) return { index: 0, wins: null };
   let best = -1;
   let bestScore = -Infinity;
+  let bestDealt = -Infinity;
   let bestWins = 0;
   combos.forEach((lo, i) => {
     const adv = adventurerCombatant(lo, ringTotals, cfg);
     const rng = seededRng(seed);
     let wins = 0;
     let hpLeft = 0;
+    let dealt = 0;
     for (let f = 0; f < fights; f++) {
       const r = fight(adv, enemyC, rng.next, false, cfg);
       if (r.win) {
         wins++;
         hpLeft += r.advHp / adv.hp;
-      }
+      } else dealt += 1 - r.enemyHp / enemyC.hp;
     }
     const score = wins + hpLeft / (fights + 1);
-    if (score > bestScore) {
+    if (score > bestScore || (score === bestScore && dealt > bestDealt)) {
       bestScore = score;
+      bestDealt = dealt;
       best = i;
       bestWins = wins;
     }

@@ -1,1 +1,102 @@
-/* styles for js/ui (misc) */
+/* styles for js/ui (misc): Rings, Skills & Intel, Help — all classes prefixed mi- */
+.mi-root h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mi-root h4:first-child { margin-top: 0; }
+.mi-note { font-size: 12px; color: var(--muted); }
+.mi-note.ok { color: var(--ok); }
+p.mi-note { margin: 4px 0 8px; }
+.mi-intro { margin-top: -4px; }
+.mi-foot { text-align: center; margin: 4px 0 16px; }
+.mi-root code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+
+/* tables scroll inside their box and never widen the page */
+.mi-scroll { overflow-x: auto; width: 0; min-width: 100%; }
+.mi-table td, .mi-table th { padding: 4px 8px; vertical-align: middle; }
+.mi-table.mi-compact td, .mi-table.mi-compact th { padding: 2px 8px; font-size: 13px; }
+.mi-table td.mi-c, .mi-table th.mi-c { text-align: center; }
+.mi-table tr.mi-worn td { background: rgba(181, 101, 29, 0.10); }
+.mi-table tr.mi-worn td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.mi-table td.num { white-space: nowrap; }
+.mi-table tr.mi-dim td { color: var(--muted); }
+.mi-table tr.mi-dim td b { color: var(--text); font-weight: 600; }
+.mi-table tr.mi-pairstart td { border-top: 2px solid var(--border); }
+.mi-table .mi-sub { display: block; font-size: 10px; color: var(--muted); white-space: nowrap; font-weight: normal; }
+
+/* headline numbers */
+.mi-kpis { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 2px 0 10px; }
+.mi-kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mi-kpi-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.mi-kpi-sub { font-size: 12px; color: var(--muted); }
+
+.mi-list { margin: 4px 0; padding-left: 20px; }
+.mi-list li { margin: 2px 0; }
+.mi-steps { margin: 6px 0 8px; padding-left: 22px; }
+.mi-steps li { margin: 4px 0; }
+.mi-link { color: var(--accent-2); }
+
+.mi-callout { border-left: 4px solid var(--accent-2); padding: 6px 10px; margin-top: 8px; background: rgba(47, 111, 159, 0.08); border-radius: 0 6px 6px 0; }
+.mi-chips { margin: 6px 0 4px; }
+
+/* panel header with actions on the right */
+.mi-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-bottom: 6px; }
+.mi-head h3 { margin: 0; }
+.mi-seg { display: inline-flex; gap: 0; }
+.mi-seg button { border-radius: 0; margin-left: -1px; }
+.mi-seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.mi-seg button:last-child { border-radius: 0 6px 6px 0; }
+.mi-seg button.sel { background: var(--accent); border-color: var(--accent); color: #fff; position: relative; }
+
+/* rings: owned list + totals side by side, stacked on narrow screens */
+.mi-owner { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px 20px; align-items: start; }
+@media (max-width: 1100px) { .mi-owner { grid-template-columns: minmax(0, 1fr); } }
+.mi-rings { min-width: 560px; }
+.mi-rings td:first-child { width: 1%; white-space: nowrap; }
+.mi-rings td.mi-name { white-space: nowrap; }
+.mi-rings button { min-width: 64px; }
+.mi-totals { min-width: 300px; }
+.mi-totals td:first-child, .mi-reftypes td:first-child { white-space: nowrap; }
+.mi-reftypes { min-width: 560px; }
+.mi-ref { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px 20px; align-items: start; }
+@media (max-width: 1100px) { .mi-ref { grid-template-columns: minmax(0, 1fr); } }
+
+/* skills / intel */
+.mi-group { margin-top: 12px; }
+.mi-xp { display: flex; align-items: center; gap: 8px; min-width: 150px; }
+.mi-xp .bar { flex: 1 1 auto; max-width: 160px; }
+.mi-xpnum { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* fixed layout so the three skill tables line up */
+.mi-skills { table-layout: fixed; min-width: 760px; }
+.mi-skills th:nth-child(1) { width: 29%; }
+.mi-skills th:nth-child(2) { width: 8%; }
+.mi-skills th:nth-child(3) { width: 22%; }
+.mi-skills th:nth-child(4) { width: 10%; }
+.mi-skills th:nth-child(5) { width: 10%; }
+.mi-intel { min-width: 680px; }
+.mi-intel td:first-child { min-width: 200px; }
+.mi-intel td:last-child { white-space: nowrap; }
+.mi-chance { min-width: 160px; }
+.mi-sched { max-width: 640px; }
+
+/* help: reference tables size to their content (cards keep full width) */
+.mi-help .mi-det-body .mi-table { width: auto; min-width: min(100%, 360px); }
+.mi-help .mi-det-body .mi-card .mi-table { width: 100%; min-width: 0; }
+.mi-help .mi-det-body .mi-table td.num, .mi-help .mi-det-body .mi-table th.num { padding-left: 14px; }
+.mi-det { padding: 0; }
+.mi-det > summary { cursor: pointer; padding: 10px 14px; font-weight: 600; font-size: 15px; list-style-position: inside; }
+.mi-det > summary:hover { color: var(--accent); }
+.mi-det[open] > summary { border-bottom: 1px solid var(--border); }
+.mi-det-body { padding: 8px 14px 12px; }
+.mi-numbers-head .chips { margin-top: 6px; }
+.mi-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 4px 0 8px; }
+.mi-kv dt { font-weight: 600; font-size: 13px; }
+.mi-kv dd { margin: 0; }
+@media (max-width: 600px) {
+  .mi-kv { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .mi-kv dd { margin-bottom: 6px; }
+}
+.mi-formula { margin: 4px 0 6px; }
+.mi-formula code { display: inline-block; padding: 3px 8px; border-radius: 6px; background: var(--cell); white-space: normal; }
+.mi-formula .mi-note { margin-top: 2px; }
+.mi-two { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 8px 20px; align-items: start; }
+.mi-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr)); gap: 10px; }
+.mi-card { border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; min-width: 0; }
+.mi-card-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
