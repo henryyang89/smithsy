@@ -74,7 +74,7 @@ export async function estimateWinChance(params, opts = {}, onProgress = null, cf
       const r = fight(adv, enemyC, er.next, false, cfg);
       fights++;
       timeSum += r.time;
-      if (r.win) {
+      if (r.win || r.draw) {
         wins++;
         hpSum += r.advHp / adv.hp;
       }
@@ -107,7 +107,8 @@ export function estimateWinChanceSync(params, opts = {}, cfg = CONFIG) {
     const adv = adventurerCombatant(combos[pick.index], params.ringTotals, cfg);
     const er = seededRng(mixSeed(params.seed ?? 1, s, 2));
     for (let f = 0; f < o.evalFights; f++) {
-      if (fight(adv, enemyC, er.next, false, cfg).win) wins++;
+      const r = fight(adv, enemyC, er.next, false, cfg);
+      if (r.win || r.draw) wins++;
       fights++;
     }
   }

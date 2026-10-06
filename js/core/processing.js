@@ -1,7 +1,7 @@
 import { CONFIG, GRADES } from '../config.js';
 import { clamp, reduced, round1, EPS } from './util.js';
 import { smithBonuses } from './bonuses.js';
-import { addXp } from './skills.js';
+import { addXp, itemXp } from './skills.js';
 import { rngFor } from './rng.js';
 
 const ORDER = ['S', 'A', 'B', 'C', 'D', 'F'];
@@ -69,8 +69,8 @@ export function refine(state, bar, cfg = CONFIG) {
   state.time += minutes;
   const notes = [];
   addXp(state, 'refineTime', minutes, notes, cfg);
-  addXp(state, `oreGrade_${bar}`, cfg.skills.xpPerItem, notes, cfg);
-  addXp(state, `oreFail_${bar}`, cfg.skills.xpPerItem, notes, cfg);
+  addXp(state, `oreGrade_${bar}`, itemXp(bar, cfg), notes, cfg);
+  addXp(state, `oreFail_${bar}`, itemXp(bar, cfg), notes, cfg);
   if (grade === 'F') return { ok: true, grade, minutes, notes, msg: `Refining ${bar} failed (${round1(minutes)}m). Ore lost.` };
   const k = `${bar}:${grade}`;
   state.storage.bars[k] = (state.storage.bars[k] || 0) + 1;
@@ -89,8 +89,8 @@ export function cut(state, gem, cfg = CONFIG) {
   state.time += minutes;
   const notes = [];
   addXp(state, 'cutTime', minutes, notes, cfg);
-  addXp(state, `gemGrade_${gem}`, cfg.skills.xpPerItem, notes, cfg);
-  addXp(state, `gemFail_${gem}`, cfg.skills.xpPerItem, notes, cfg);
+  addXp(state, `gemGrade_${gem}`, itemXp(gem, cfg), notes, cfg);
+  addXp(state, `gemFail_${gem}`, itemXp(gem, cfg), notes, cfg);
   if (grade === 'F') return { ok: true, grade, minutes, notes, msg: `Cutting ${gem} failed (${round1(minutes)}m). Gem lost.` };
   const k = `${gem}:${grade}`;
   state.storage.cut[k] = (state.storage.cut[k] || 0) + 1;

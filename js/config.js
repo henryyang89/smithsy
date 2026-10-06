@@ -38,6 +38,9 @@ export const CONFIG = {
     debrisChance: 15, // % of cells covered by debris (cannot be searched until cleared)
     debrisClearMin: 15, // minutes to clear one debris cell
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
+    // Regrowth (keeps the endless game supplied): each night, every searched cell has this % chance
+    // to reset to a fresh, unsearched cell with new hidden contents (items on the ground stay).
+    regrowPctPerDay: 2,
     // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
     lootChance: { base: 40, perDistance: 5, max: 70 },
     itemCountWeights: { 1: 50, 2: 35, 3: 15 }, // how many items a loot cell holds (weights)
@@ -119,7 +122,7 @@ export const CONFIG = {
     },
     diamond: {
       weapon: { pierce: [10, 15, 20, 25, 30] }, // % of enemy defense ignored
-      armor: { pierceRes: [4, 6, 8, 10, 12] }, // points subtracted from enemy piercing
+      armor: { pierceRes: [4, 6, 8, 10, 12] }, // % of enemy piercing ignored
     },
   },
 
@@ -154,14 +157,14 @@ export const CONFIG = {
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1)
     growthPerDay: { hpDamage: 5, ratings: 2 }, // HP & damage +5%/day, accuracy & dodge +2%/day
     tiers: {
-      normal: { count: 2, hp: 60, damage: 6, defense: 10, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 90, damage: 8, defense: 15, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 130, damage: 10, defense: 20, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      normal: { count: 2, hp: 60, damage: 6, defense: 20, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
+      elite: { count: 3, hp: 90, damage: 8, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 130, damage: 10, defense: 30, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
     attributes: {
       piercing: { name: 'Piercing', side: 'O', values: { low: 5, normal: 15, high: 25 }, desc: '% of your defense ignored' },
-      pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 10, high: 20 }, desc: 'points subtracted from your piercing' },
+      pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% of your piercing ignored' },
       magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 20, high: 30 }, desc: 'extra magic damage, % of its damage' },
       magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 15, high: 30 }, desc: '% magic damage reduction' },
       stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 10, high: 15 }, desc: '% stun chance per hit' },
@@ -208,7 +211,7 @@ export const CONFIG = {
       oreGrade: { owner: 'smith', name: 'Bar luck', values: [2, 3, 4, 5, 6], desc: '% chance a bar is upgraded one grade' },
       gemGrade: { owner: 'smith', name: 'Gem luck', values: [2, 3, 4, 5, 6], desc: '% chance a gem is upgraded one grade' },
       pierce: { owner: 'adventurer', name: 'Piercing', values: [3, 4, 5, 6, 7], desc: '% of enemy defense ignored' },
-      pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [3, 4, 5, 6, 7], desc: 'points subtracted from enemy piercing' },
+      pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [5, 6, 7, 8, 10], desc: '% of enemy piercing ignored' },
       magicDmg: { owner: 'adventurer', name: 'Magic damage', values: [3, 4, 5, 6, 7], desc: '% of weapon damage added as magic' },
       magicRes: { owner: 'adventurer', name: 'Magic resistance', values: [3, 4, 5, 6, 7], desc: '% magic damage reduction' },
       stunRes: { owner: 'adventurer', name: 'Stun resistance', values: [5, 6, 7, 8, 10], desc: '% less stun chance and duration' },
@@ -221,26 +224,28 @@ export const CONFIG = {
   },
 
   // ------------------------------------------------------------- SKILLS ----
-  // Skills level up automatically from doing the activity.
+  // Skills level up automatically from doing the activity. Bonuses are deliberately smaller than
+  // rings: a level-10 skill is a bit weaker than a D-grade ring of the same kind.
   // XP needed to go from level L to L+1 = xpBase * (L + 1). Level 10 = 5,500 total XP.
   skills: {
     maxLevel: 10,
     xpBase: 100,
-    xpPerItem: 10, // XP per bar refined / gem cut, for the per-material skills
+    // XP per bar refined / gem cut (failures count), for the per-material skills. Rarer = more XP.
+    xpPerItem: { copper: 25, iron: 25, steel: 30, mythril: 50, ruby: 25, topaz: 25, sapphire: 30, emerald: 40, diamond: 50 },
     // Activity skills: XP = minutes spent on the activity. Bonus = perLevel x level.
     activity: {
-      returnTravel: { name: 'Return travel', perLevel: 0.5, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
-      searchTime: { name: 'Search speed', perLevel: 0.5, desc: '% less search time', xpFrom: 'minutes searching' },
-      searchEff: { name: 'Search efficiency', perLevel: 1, desc: '% more searched per search', xpFrom: 'minutes searching' },
+      returnTravel: { name: 'Return travel', perLevel: 0.4, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
+      searchTime: { name: 'Search speed', perLevel: 0.4, desc: '% less search time', xpFrom: 'minutes searching' },
+      searchEff: { name: 'Search efficiency', perLevel: 0.8, desc: '% more searched per search', xpFrom: 'minutes searching' },
       debris: { name: 'Debris clearing', perLevel: 2, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
-      refineTime: { name: 'Refining speed', perLevel: 0.5, desc: '% less refining time', xpFrom: 'minutes refining' },
-      cutTime: { name: 'Cutting speed', perLevel: 0.5, desc: '% less cutting time', xpFrom: 'minutes cutting' },
+      refineTime: { name: 'Refining speed', perLevel: 0.4, desc: '% less refining time', xpFrom: 'minutes refining' },
+      cutTime: { name: 'Cutting speed', perLevel: 0.4, desc: '% less cutting time', xpFrom: 'minutes cutting' },
     },
     // Per-material skills (one per bar type / gem type). XP = xpPerItem per item processed of that type.
     perMaterial: {
-      oreGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the bar one grade' },
+      oreGrade: { name: 'grade', perLevel: 0.15, desc: '% chance to upgrade the bar one grade' },
       oreFail: { name: 'refining', perLevel: 0.3, desc: 'points less failure chance' },
-      gemGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the gem one grade' },
+      gemGrade: { name: 'grade', perLevel: 0.15, desc: '% chance to upgrade the gem one grade' },
       gemFail: { name: 'cutting', perLevel: 0.3, desc: 'points less failure chance' },
     },
   },

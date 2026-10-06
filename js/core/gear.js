@@ -145,6 +145,8 @@ export function repair(state, id, cfg = CONFIG) {
 
 // Destroy (scrap) an item at home. No refund.
 export function scrap(state, id) {
+  const err = campWork(state);
+  if (err) return { ok: false, msg: err };
   const i = state.gear.findIndex((g) => g.id === id);
   if (i < 0) return { ok: false, msg: 'No such gear.' };
   if (state.gear[i].packed) return { ok: false, msg: 'The adventurer has this item today.' };

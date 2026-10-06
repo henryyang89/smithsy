@@ -1,6 +1,12 @@
 import { CONFIG, BARS, GEMS } from '../config.js';
 import { cap } from './util.js';
 
+// XP a per-material skill gets for one bar refined / gem cut of that material.
+export function itemXp(material, cfg = CONFIG) {
+  const x = cfg.skills.xpPerItem;
+  return typeof x === 'number' ? x : x[material] ?? 0;
+}
+
 // Build the flat skill list from config: activity skills + one skill per material.
 export function skillDefs(cfg = CONFIG) {
   const s = cfg.skills;
@@ -9,16 +15,16 @@ export function skillDefs(cfg = CONFIG) {
     defs.push({ key, name: d.name, perLevel: d.perLevel, desc: d.desc, xpFrom: d.xpFrom, group: 'activity' });
   }
   for (const bar of BARS) {
-    defs.push({ key: `oreGrade_${bar}`, name: `${cap(bar)} bar grade`, perLevel: s.perMaterial.oreGrade.perLevel, desc: s.perMaterial.oreGrade.desc, xpFrom: `${s.xpPerItem} XP per ${bar} bar refined`, group: 'ore' });
+    defs.push({ key: `oreGrade_${bar}`, name: `${cap(bar)} bar grade`, perLevel: s.perMaterial.oreGrade.perLevel, desc: s.perMaterial.oreGrade.desc, xpFrom: `${itemXp(bar, cfg)} XP per ${bar} bar refined`, group: 'ore' });
   }
   for (const bar of BARS) {
-    defs.push({ key: `oreFail_${bar}`, name: `${cap(bar)} refining`, perLevel: s.perMaterial.oreFail.perLevel, desc: s.perMaterial.oreFail.desc, xpFrom: `${s.xpPerItem} XP per ${bar} bar refined`, group: 'ore' });
+    defs.push({ key: `oreFail_${bar}`, name: `${cap(bar)} refining`, perLevel: s.perMaterial.oreFail.perLevel, desc: s.perMaterial.oreFail.desc, xpFrom: `${itemXp(bar, cfg)} XP per ${bar} bar refined`, group: 'ore' });
   }
   for (const gem of GEMS) {
-    defs.push({ key: `gemGrade_${gem}`, name: `${cap(gem)} grade`, perLevel: s.perMaterial.gemGrade.perLevel, desc: s.perMaterial.gemGrade.desc, xpFrom: `${s.xpPerItem} XP per ${gem} cut`, group: 'gem' });
+    defs.push({ key: `gemGrade_${gem}`, name: `${cap(gem)} grade`, perLevel: s.perMaterial.gemGrade.perLevel, desc: s.perMaterial.gemGrade.desc, xpFrom: `${itemXp(gem, cfg)} XP per ${gem} cut`, group: 'gem' });
   }
   for (const gem of GEMS) {
-    defs.push({ key: `gemFail_${gem}`, name: `${cap(gem)} cutting`, perLevel: s.perMaterial.gemFail.perLevel, desc: s.perMaterial.gemFail.desc, xpFrom: `${s.xpPerItem} XP per ${gem} cut`, group: 'gem' });
+    defs.push({ key: `gemFail_${gem}`, name: `${cap(gem)} cutting`, perLevel: s.perMaterial.gemFail.perLevel, desc: s.perMaterial.gemFail.desc, xpFrom: `${itemXp(gem, cfg)} XP per ${gem} cut`, group: 'gem' });
   }
   return defs;
 }

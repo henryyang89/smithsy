@@ -10,7 +10,8 @@ export function ringValue(ring, cfg = CONFIG) {
 
 export function ringLabel(ring, cfg = CONFIG) {
   const d = ringDef(ring.type, cfg);
-  return `${d.name} ${ring.grade} (${ringValue(ring, cfg)} ${d.desc})`;
+  const v = ringValue(ring, cfg);
+  return `${d.name} ${ring.grade} (${d.desc.startsWith('%') ? `${v}${d.desc}` : `${v} ${d.desc}`})`;
 }
 
 // Sum ring bonuses with duplicate penalties.

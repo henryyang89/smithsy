@@ -69,26 +69,46 @@ export function generateMap(rng, cfg = CONFIG) {
   throw new Error('Could not generate a connected map');
 }
 
-export function generateField(rng, dist, cfg = CONFIG) {
+// Roll one fresh cell for a field at distance `dist` from camp.
+export function rollCell(rng, dist, cfg = CONFIG) {
   const f = cfg.field;
-  const row = Math.min(dist, f.oreWeights.length) - 1;
-  const oreW = f.oreWeights[Math.max(0, row)];
+  const oreW = f.oreWeights[Math.max(0, Math.min(dist, f.oreWeights.length) - 1)];
   const gemW = f.gemWeights[Math.max(0, Math.min(dist, f.gemWeights.length) - 1)];
   const baseLoot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (dist - 1));
-  const cells = [];
-  for (let i = 0; i < f.size * f.size; i++) {
-    const debris = rng.chance(f.debrisChance);
-    const items = [];
-    if (rng.chance(baseLoot + (debris ? f.debrisLootBonus : 0))) {
-      const n = Number(rng.weighted(f.itemCountWeights));
-      for (let k = 0; k < n; k++) {
-        const t = rng.chance(f.oreShare) ? `ore:${rng.weighted(oreW)}` : `gem:${rng.weighted(gemW)}`;
-        items.push({ t, d: rng.float(0, 100) }); // d = depth: found once "searched %" passes it
-      }
+  const debris = rng.chance(f.debrisChance);
+  const items = [];
+  if (rng.chance(baseLoot + (debris ? f.debrisLootBonus : 0))) {
+    const n = Number(rng.weighted(f.itemCountWeights));
+    for (let k = 0; k < n; k++) {
+      const t = rng.chance(f.oreShare) ? `ore:${rng.weighted(oreW)}` : `gem:${rng.weighted(gemW)}`;
+      items.push({ t, d: rng.float(0, 100) }); // d = depth: found once "searched %" passes it
     }
-    cells.push({ debris, searched: 0, items, revealed: false, ground: [] });
   }
+  return { debris, searched: 0, items, revealed: false, ground: [] };
+}
+
+export function generateField(rng, dist, cfg = CONFIG) {
+  const cells = [];
+  for (let i = 0; i < cfg.field.size * cfg.field.size; i++) cells.push(rollCell(rng, dist, cfg));
   return { dist, cells };
+}
+
+// Nightly regrowth: each searched cell has regrowPctPerDay % chance to become a fresh cell.
+// Items lying on the ground stay where they are. Returns the number of regrown cells.
+export function regrowFields(state, rng, cfg = CONFIG) {
+  const pct = cfg.field.regrowPctPerDay || 0;
+  if (pct <= 0) return 0;
+  let n = 0;
+  for (const field of Object.values(state.map.fields)) {
+    field.cells.forEach((cell, i) => {
+      if (cell.searched <= 0 || !rng.chance(pct)) return;
+      const fresh = rollCell(rng, field.dist, cfg);
+      fresh.ground = cell.ground;
+      field.cells[i] = fresh;
+      n++;
+    });
+  }
+  return n;
 }
 
 // % of the field searched (debris cells count as unsearched until cleared and searched).
@@ -255,6 +275,8 @@ export function clearDebris(state, cx, cy, cfg = CONFIG) {
 
 // Pick up items lying on the ground in a cell (free). Takes as many as fit.
 export function pickUp(state, cellIndex, cfg = CONFIG) {
+  const err = requireWork(state);
+  if (err) return err;
   const field = currentField(state);
   if (!field) return { ok: false, msg: 'You are at camp.' };
   const cell = field.cells[cellIndex];
@@ -270,6 +292,8 @@ export function pickUp(state, cellIndex, cfg = CONFIG) {
 
 // Drop a bag item onto the ground of a cell in the current field (free).
 export function dropItem(state, bagIndex, cellIndex, cfg = CONFIG) {
+  const err = requireWork(state);
+  if (err) return err;
   const field = currentField(state);
   if (!field) return { ok: false, msg: 'Drop items in a field (at camp they are stored automatically).' };
   if (bagIndex < 0 || bagIndex >= state.bag.length) return { ok: false, msg: 'No such item.' };

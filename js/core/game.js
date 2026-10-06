@@ -2,7 +2,7 @@
 // UI and tools call these functions; each action returns { ok, msg, ... }.
 import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../config.js';
 import { rngFor, seededRng, mixSeed } from './rng.js';
-import { generateMap, atCamp } from './map.js';
+import { generateMap, atCamp, regrowFields } from './map.js';
 import { newSkills } from './skills.js';
 import { newIntel } from './intel.js';
 import { generateRoster, enemyCombatant, knownLevels } from './enemies.js';
@@ -133,6 +133,8 @@ export function confirmPlan(state, plan, cfg = CONFIG) {
   state.report = null;
   state.stats.bestDay = Math.max(state.stats.bestDay, state.day);
   state.roster = generateRoster(rngFor(state), state.day + 1, cfg);
+  const regrown = regrowFields(state, rngFor(state), cfg);
+  if (regrown) addLog(state, `Overnight, ${regrown} searched cell(s) across the map regrew.`);
   const packed = state.gear.filter((g) => g.packed).map(gearName);
   addLog(state, `Day ${state.day}. The adventurer heads out to fight ${enemy.name} (${enemy.tier}) with ${packed.length ? packed.join(', ') : 'no gear'}.`);
   return { ok: true };
@@ -190,7 +192,10 @@ export function resolveBattle(state, cfg = CONFIG) {
     destroyed,
     ring: ring ? { ...ring } : null,
     ringText: ring ? ringLabel(ring, cfg) : null,
-    log: result.log,
+    // keep saves small: very long fights keep the first 1500 and last 500 lines
+    log: result.log.length > 2000 ? [...result.log.slice(0, 1500), ...result.log.slice(-500)] : result.log,
+    logTrimmed: result.log.length > 2000 ? result.log.length - 2000 : 0,
+    packedIds: [...plan.gearIds],
     summary: result.summary,
   };
   state.battles.push(report);
