@@ -63,7 +63,9 @@ body {
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
 .panel h3 { margin: 0 0 8px; font-size: 15px; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px; align-items: start; }
+.cols > * { min-width: 0; }
+#main, #sidelog { min-width: 0; }
 button {
   font: inherit; padding: 5px 10px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--border); background: var(--panel); color: var(--text);

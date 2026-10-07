@@ -144,4 +144,11 @@ d11-30 fights n/e/c 31/69/0% | mining 68% trips/day 1.3 idle 9m | repair 0.4% ba
 - Session 2 docs refresh: BALANCE.md rewritten against the current code (all examples recomputed with
   the core modules, Appendix A/B/C regenerated, "Balance targets and current results" with bot runs and
   ablations); README (commands, balance flags, GitHub Pages steps), SPEC and this file updated.
+- Session 2 review fixes (commit 86c4cab+): reviewers (spec, core correctness, E2E browser playtest) with
+  adversarial verification. Fixed: drop-search-pickup time exploit (pickUpLimit), smith ring lock,
+  ore sight wasted on finished cells, plan ring selection sync + today's ring preselect, confirmations
+  (End day with time left, risky plans), per-item pick-up, formatDuration rounding, grammar, stat units,
+  favicon, phone-width overflow on the battle report. 215 tests pass.
+  Not changed (raise with the user): exact-grade repair materials make high-grade/infused gear hard to
+  keep repaired; repairs rarely matter because the best gear is packed nightly.
   (Update this section each session.)
