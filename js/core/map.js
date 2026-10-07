@@ -70,52 +70,64 @@ export function generateMap(rng, cfg = CONFIG) {
 }
 
 // Roll one fresh cell for a field at distance `dist` from camp.
+// debris = remaining debris thickness in search effort (0 = clear).
 export function rollCell(rng, dist, cfg = CONFIG) {
   const f = cfg.field;
   const oreW = f.oreWeights[Math.max(0, Math.min(dist, f.oreWeights.length) - 1)];
   const gemW = f.gemWeights[Math.max(0, Math.min(dist, f.gemWeights.length) - 1)];
   const baseLoot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (dist - 1));
-  const debris = rng.chance(f.debrisChance);
+  const hasDebris = rng.chance(f.debrisChance);
+  const debris = hasDebris ? rng.int(f.debrisAmount.min, f.debrisAmount.max) : 0;
   const items = [];
-  if (rng.chance(baseLoot + (debris ? f.debrisLootBonus : 0))) {
+  if (rng.chance(baseLoot + (hasDebris ? f.debrisLootBonus : 0))) {
     const n = Number(rng.weighted(f.itemCountWeights));
     for (let k = 0; k < n; k++) {
       const t = rng.chance(f.oreShare) ? `ore:${rng.weighted(oreW)}` : `gem:${rng.weighted(gemW)}`;
       items.push({ t, d: rng.float(0, 100) }); // d = depth: found once "searched %" passes it
     }
   }
-  return { debris, searched: 0, items, revealed: false, ground: [] };
+  return { debris, boulder: false, searched: 0, items, revealed: false };
+}
+
+// A cell covered by a boulder: can never be cleared or searched.
+export function boulderCell() {
+  return { debris: 0, boulder: true, searched: 0, items: [], revealed: false };
 }
 
 export function generateField(rng, dist, cfg = CONFIG) {
+  const n = cfg.field.size * cfg.field.size;
   const cells = [];
-  for (let i = 0; i < cfg.field.size * cfg.field.size; i++) cells.push(rollCell(rng, dist, cfg));
-  return { dist, cells };
+  for (let i = 0; i < n; i++) cells.push(rollCell(rng, dist, cfg));
+  const spots = rng.shuffle([...Array(n).keys()]);
+  for (let b = 0; b < Math.min(cfg.field.boulders || 0, n); b++) cells[spots[b]] = boulderCell();
+  return { dist, cells, pile: [] };
 }
 
 // Nightly regrowth: each searched cell has regrowPctPerDay % chance to become a fresh cell.
-// Items lying on the ground stay where they are. Returns the number of regrown cells.
+// Boulders never change; the field's pile stays. Returns the number of regrown cells.
 export function regrowFields(state, rng, cfg = CONFIG) {
   const pct = cfg.field.regrowPctPerDay || 0;
   if (pct <= 0) return 0;
   let n = 0;
   for (const field of Object.values(state.map.fields)) {
     field.cells.forEach((cell, i) => {
-      if (cell.searched <= 0 || !rng.chance(pct)) return;
-      const fresh = rollCell(rng, field.dist, cfg);
-      fresh.ground = cell.ground;
-      field.cells[i] = fresh;
+      if (cell.boulder || cell.searched <= 0 || !rng.chance(pct)) return;
+      field.cells[i] = rollCell(rng, field.dist, cfg);
       n++;
     });
   }
   return n;
 }
 
-// % of the field searched (debris cells count as unsearched until cleared and searched).
+// % of the field searched, over the cells that can be searched (boulders excluded).
 export function fieldProgress(field) {
-  const total = field.cells.reduce((a, c) => a + c.searched, 0);
-  return total / field.cells.length;
+  const cells = field.cells.filter((c) => !c.boulder);
+  if (!cells.length) return 100;
+  return cells.reduce((a, c) => a + c.searched, 0) / cells.length;
 }
+
+// A cell that still needs work (debris to clear or unsearched part left).
+export const cellOpen = (c) => !c.boulder && (c.debris > EPS || c.searched < 100 - EPS);
 
 // Cells covered by a 3x3 search centered at (cx, cy), clipped to the field.
 export function areaCells(cx, cy, cfg = CONFIG) {
@@ -159,31 +171,24 @@ export function searchEfficiencyRange(state, cfg = CONFIG) {
   return [clamp(e - r, 0, 100), clamp(e + r, 0, 100)];
 }
 
-export function debrisMinutesPerCell(state, cfg = CONFIG) {
-  return round1(reduced(cfg.field.debrisClearMin, smithBonuses(state, cfg).debrisPct, cfg.processing.maxTimeReduction));
+// Debris cleared per point of search effort (1 + debris skill %).
+export function debrisClearMult(state, cfg = CONFIG) {
+  return 1 + smithBonuses(state, cfg).debrisPct / 100;
 }
 
-// Can a field action of `minutes` start now and still leave time to walk home?
-function fitsWithReturn(state, minutes, cfg) {
-  return state.time + minutes + returnMinutes(state, state.location, state.bag.length, cfg) <= cfg.time.dayEndMin + EPS;
+// Load used for the "can still walk home" check in a field: as much as you could carry
+// (bag + this field's pile, up to the bag size). Leaving items behind doesn't buy extra time.
+export function projectedLoad(state, cfg = CONFIG) {
+  const f = currentField(state);
+  return Math.min(cfg.bag.slots, state.bag.length + (f ? f.pile.length : 0));
+}
+
+// Can a field action of `minutes` start now and still leave time to walk home with a full load?
+export function fitsWithReturn(state, minutes, cfg = CONFIG) {
+  return state.time + minutes + returnMinutes(state, state.location, projectedLoad(state, cfg), cfg) <= cfg.time.dayEndMin + EPS;
 }
 
 const endClock = (cfg) => formatClock(cfg.time.dayEndMin);
-
-// How many items the bag may hold after a free pick-up: as many as still let you walk home by day
-// end, but never fewer than the bag held after the last timed field action (state.loadMark), so
-// late swaps stay possible. This closes "drop everything, search, pick it all back up for free".
-export function pickUpLimit(state, cfg = CONFIG) {
-  const mark = state.loadMark ?? state.bag.length;
-  let byTime = 0;
-  for (let n = cfg.bag.slots; n > 0; n--) {
-    if (state.time + returnMinutes(state, state.location, n, cfg) <= cfg.time.dayEndMin + EPS) {
-      byTime = n;
-      break;
-    }
-  }
-  return Math.min(cfg.bag.slots, Math.max(mark, byTime));
-}
 
 // ---------------------------------------------------------------- actions ----
 function requireWork(state) {
@@ -191,13 +196,15 @@ function requireWork(state) {
   return null;
 }
 
-export function travel(state, to, cfg = CONFIG) {
+// Travel to a map cell. `carry` (optional, when leaving a field) picks what to take first:
+// { bag: [bag indexes], pile: [pile indexes] } — see setCarry. Without it you take your current bag.
+export function travel(state, to, cfg = CONFIG, carry = null) {
   const err = requireWork(state);
   if (err) return err;
   const target = mapCell(state.map, to.x, to.y);
   if (!target || target.type === 'blocked') return { ok: false, msg: 'Cannot travel there.' };
   if (sameLoc(state.location, to)) return { ok: false, msg: 'Already there.' };
-  const items = state.bag.length;
+  const items = carry ? carry.bag.length + carry.pile.length : state.bag.length;
   const minutes = travelMinutes(state, state.location, to, items, cfg);
   if (!Number.isFinite(minutes)) return { ok: false, msg: 'No path.' };
   const toCamp = target.type === 'camp';
@@ -207,6 +214,10 @@ export function travel(state, to, cfg = CONFIG) {
       return { ok: false, msg: `Not enough time: ${round1(minutes)}m there + ${round1(back)}m back would pass ${endClock(cfg)}.` };
     }
   }
+  if (carry) {
+    const res = setCarry(state, carry, cfg);
+    if (!res.ok) return res;
+  }
   const notes = [];
   state.time += minutes;
   state.location = { x: to.x, y: to.y };
@@ -215,7 +226,6 @@ export function travel(state, to, cfg = CONFIG) {
     const unloaded = unloadBag(state);
     return { ok: true, msg: `Returned to camp (${round1(minutes)}m).${unloaded ? ` Unloaded ${unloaded} items.` : ''}`, notes, minutes };
   }
-  state.loadMark = state.bag.length;
   return { ok: true, msg: `Travelled to field (${to.x + 1},${to.y + 1}) in ${round1(minutes)}m.`, notes, minutes };
 }
 
@@ -231,6 +241,9 @@ export function unloadBag(state) {
   return n;
 }
 
+// Search a 3x3 area. Each open cell gets its own effort roll (efficiency +/- randomness). On a debris
+// cell the effort clears debris first (x debris skill); leftover effort searches the cell. Found items go
+// to this field's pile; choose what to carry when you leave.
 export function search(state, cx, cy, cfg = CONFIG) {
   const err = requireWork(state);
   if (err) return err;
@@ -239,30 +252,41 @@ export function search(state, cx, cy, cfg = CONFIG) {
   const minutes = searchMinutes(state, cfg);
   if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: `Not enough time to search and still get back by ${endClock(cfg)}.` };
   const idxs = areaCells(cx, cy, cfg);
-  const searchable = idxs.filter((i) => !field.cells[i].debris && field.cells[i].searched < 100 - EPS);
-  if (!searchable.length) return { ok: false, msg: 'Nothing left to search here (fully searched or covered by debris).' };
+  const open = idxs.filter((i) => cellOpen(field.cells[i]));
+  if (!open.length) return { ok: false, msg: 'Nothing left to search here (fully searched or boulders).' };
   const eff = searchEfficiency(state, cfg);
+  const clearMult = debrisClearMult(state, cfg);
   const revealPct = smithBonuses(state, cfg).revealPct;
+  const r = cfg.field.searchRandomness || 0;
   const rng = rngFor(state);
   const found = [];
-  const toGround = [];
   let revealed = 0;
-  for (const i of searchable) {
+  let debrisCleared = 0;
+  let cellsCleared = 0;
+  let searchedCells = 0;
+  for (const i of open) {
     const cell = field.cells[i];
-    const r = cfg.field.searchRandomness || 0;
-    const cellEff = r > 0 ? clamp(eff + rng.float(-r, r), 0, 100) : eff;
-    const s1 = Math.min(100, cell.searched + cellEff);
+    let effort = r > 0 ? clamp(eff + rng.float(-r, r), 0, 100) : eff;
+    if (cell.debris > EPS) {
+      const power = effort * clearMult;
+      const used = Math.min(cell.debris, power);
+      cell.debris -= used;
+      debrisCleared += used;
+      if (cell.debris <= EPS) {
+        cell.debris = 0;
+        cellsCleared++;
+      }
+      effort = (power - used) / clearMult; // leftover effort goes into searching
+    }
+    if (cell.debris > 0 || effort <= EPS || cell.searched >= 100 - EPS) continue;
+    searchedCells++;
+    const s1 = Math.min(100, cell.searched + effort);
     const full = s1 >= 100 - EPS;
     const keep = [];
     for (const it of cell.items) {
       if (full || it.d < s1) {
-        if (state.bag.length < cfg.bag.slots) {
-          state.bag.push(it.t);
-          found.push(it.t);
-        } else {
-          cell.ground.push(it.t);
-          toGround.push(it.t);
-        }
+        field.pile.push(it.t);
+        found.push(it.t);
       } else keep.push(it);
     }
     cell.items = keep;
@@ -274,71 +298,78 @@ export function search(state, cx, cy, cfg = CONFIG) {
     }
   }
   state.time += minutes;
-  state.loadMark = state.bag.length;
   const notes = [];
   addXp(state, 'searchTime', minutes, notes, cfg);
   addXp(state, 'searchEff', minutes, notes, cfg);
-  const skipped = idxs.length - searchable.length;
-  let msg = `Searched ${searchable.length} cells (${round1(minutes)}m): found ${found.length + toGround.length} item(s).`;
-  if (toGround.length) msg += ` Bag full: ${toGround.length} left on the ground.`;
+  if (debrisCleared > 0) addXp(state, 'debris', debrisCleared, notes, cfg);
+  const skipped = idxs.length - open.length;
+  let msg = `Searched ${open.length} cells (${round1(minutes)}m): found ${found.length} item(s), now in this field's pile.`;
+  if (debrisCleared > 0) msg += ` Cleared ${round1(debrisCleared)} debris${cellsCleared ? ` (${cellsCleared} cell(s) now clear)` : ''}.`;
   if (revealed) msg += ` Ore sight revealed ${revealed} cell(s).`;
-  if (skipped) msg += ` ${skipped} cell(s) skipped (debris or done).`;
-  return { ok: true, msg, notes, found, toGround, revealed, minutes };
+  if (skipped) msg += ` ${skipped} cell(s) skipped (done or boulder).`;
+  return { ok: true, msg, notes, found, revealed, debrisCleared, cellsCleared, searchedCells, minutes };
 }
 
-export function clearDebris(state, cx, cy, cfg = CONFIG) {
-  const err = requireWork(state);
-  if (err) return err;
-  const field = currentField(state);
-  if (!field) return { ok: false, msg: 'You are at camp.' };
-  const idxs = areaCells(cx, cy, cfg).filter((i) => field.cells[i].debris);
-  if (!idxs.length) return { ok: false, msg: 'No debris in that area.' };
-  const per = debrisMinutesPerCell(state, cfg);
-  const minutes = round1(per * idxs.length);
-  if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: `Not enough time to clear and still get back by ${endClock(cfg)}.` };
-  for (const i of idxs) field.cells[i].debris = false;
-  state.time += minutes;
-  const notes = [];
-  addXp(state, 'debris', minutes, notes, cfg);
-  state.loadMark = state.bag.length;
-  return { ok: true, msg: `Cleared ${idxs.length} debris cell(s) in ${round1(minutes)}m.`, notes, minutes };
-}
+// ------------------------------------------------------------ carrying ----
+// Rough value order for the default carry choice: rarest first.
+const CARRY_ORDER = ['ore:mythril', 'gem:diamond', 'gem:emerald', 'gem:sapphire', 'gem:topaz', 'gem:ruby', 'ore:coal', 'ore:iron', 'ore:copper'];
+const carryRank = (t) => {
+  const i = CARRY_ORDER.indexOf(t);
+  return i < 0 ? CARRY_ORDER.length : i;
+};
 
-// Pick up items lying on the ground in a cell (free). Takes as many as fit (see pickUpLimit),
-// or only the item at groundIndex when given.
-export function pickUp(state, cellIndex, cfg = CONFIG, groundIndex = null) {
-  const err = requireWork(state);
-  if (err) return err;
-  const field = currentField(state);
-  if (!field) return { ok: false, msg: 'You are at camp.' };
-  const cell = field.cells[cellIndex];
-  if (!cell || !cell.ground.length) return { ok: false, msg: 'Nothing on the ground there.' };
-  if (groundIndex != null && (groundIndex < 0 || groundIndex >= cell.ground.length)) return { ok: false, msg: 'No such item on the ground.' };
-  const limit = pickUpLimit(state, cfg);
-  if (state.bag.length >= cfg.bag.slots) return { ok: false, msg: 'Bag is full.' };
-  if (state.bag.length >= limit) return { ok: false, msg: `Carrying more would make the walk home end after ${endClock(cfg)}.` };
-  let n = 0;
-  if (groundIndex != null) {
-    state.bag.push(cell.ground.splice(groundIndex, 1)[0]);
-    n = 1;
-  } else {
-    while (cell.ground.length && state.bag.length < limit) {
-      state.bag.push(cell.ground.shift());
-      n++;
+// Default selection when leaving a field: keep the bag, fill free slots with the rarest pile items.
+export function defaultCarry(state, cfg = CONFIG) {
+  const f = currentField(state);
+  const bag = state.bag.map((_, i) => i).slice(0, cfg.bag.slots);
+  const pile = [];
+  if (f) {
+    const order = f.pile.map((t, i) => ({ t, i })).sort((a, b) => carryRank(a.t) - carryRank(b.t) || a.i - b.i);
+    for (const { i } of order) {
+      if (bag.length + pile.length >= cfg.bag.slots) break;
+      pile.push(i);
     }
   }
-  return { ok: true, msg: `Picked up ${n} item(s).${cell.ground.length ? ` ${cell.ground.length} still on the ground.` : ''}` };
+  return { bag, pile };
 }
 
-// Drop a bag item onto the ground of a cell in the current field (free).
-export function dropItem(state, bagIndex, cellIndex, cfg = CONFIG) {
+// Choose what to carry from the bag and this field's pile (free). Unchosen items go to the pile.
+export function setCarry(state, sel, cfg = CONFIG) {
   const err = requireWork(state);
   if (err) return err;
-  const field = currentField(state);
-  if (!field) return { ok: false, msg: 'Drop items in a field (at camp they are stored automatically).' };
+  const f = currentField(state);
+  if (!f) return { ok: false, msg: 'You are at camp: your load was unloaded into storage.' };
+  const bagSel = [...new Set(sel.bag || [])].filter((i) => i >= 0 && i < state.bag.length);
+  const pileSel = [...new Set(sel.pile || [])].filter((i) => i >= 0 && i < f.pile.length);
+  if (bagSel.length + pileSel.length > cfg.bag.slots) return { ok: false, msg: `You can carry at most ${cfg.bag.slots} items.` };
+  const newBag = [...bagSel.map((i) => state.bag[i]), ...pileSel.map((i) => f.pile[i])];
+  const newPile = [...f.pile.filter((_, i) => !pileSel.includes(i)), ...state.bag.filter((_, i) => !bagSel.includes(i))];
+  state.bag = newBag;
+  f.pile = newPile;
+  return { ok: true, msg: `Carrying ${newBag.length} item(s); ${newPile.length} left in this field's pile.` };
+}
+
+// Move one carried item to this field's pile (free).
+export function moveToPile(state, bagIndex, cfg = CONFIG) {
+  const err = requireWork(state);
+  if (err) return err;
+  const f = currentField(state);
+  if (!f) return { ok: false, msg: 'You are at camp.' };
   if (bagIndex < 0 || bagIndex >= state.bag.length) return { ok: false, msg: 'No such item.' };
-  const idx = clamp(cellIndex ?? 0, 0, field.cells.length - 1);
   const [t] = state.bag.splice(bagIndex, 1);
-  field.cells[idx].ground.push(t);
-  return { ok: true, msg: `Dropped ${itemType(t)}.` };
+  f.pile.push(t);
+  return { ok: true, msg: `Left ${itemType(t)} in the pile.` };
+}
+
+// Take one item from this field's pile into the bag (free, if there is room).
+export function takeFromPile(state, pileIndex, cfg = CONFIG) {
+  const err = requireWork(state);
+  if (err) return err;
+  const f = currentField(state);
+  if (!f) return { ok: false, msg: 'You are at camp.' };
+  if (pileIndex < 0 || pileIndex >= f.pile.length) return { ok: false, msg: 'No such item in the pile.' };
+  if (state.bag.length >= cfg.bag.slots) return { ok: false, msg: 'Bag is full: leave something in the pile first.' };
+  const [t] = f.pile.splice(pileIndex, 1);
+  state.bag.push(t);
+  return { ok: true, msg: `Picked up ${itemType(t)}.` };
 }

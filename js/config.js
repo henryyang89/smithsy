@@ -28,7 +28,9 @@ export const CONFIG = {
     loadPenaltyPerItem: 1, // +1% travel time per item in the bag
   },
 
-  bag: { slots: 20 }, // field bag: 1 raw ore or raw gem per slot. Camp storage is unlimited.
+  // Items you find go to the field's pile (no limit). When you leave a field you choose what to carry:
+  // up to `slots` raw ores/gems, 1 per slot. The rest stays in that field's pile. Camp storage is unlimited.
+  bag: { slots: 20 },
 
   // -------------------------------------------------------------- FIELD ----
   field: {
@@ -36,8 +38,11 @@ export const CONFIG = {
     searchMin: 30, // minutes per 3x3 search
     searchEfficiency: 35, // % of each cell searched per search, before bonuses (about 3 searches finish a cell)
     searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (35 -> 30..40)
-    debrisChance: 15, // % of cells covered by debris (cannot be searched until cleared)
-    debrisClearMin: 15, // minutes to clear one debris cell
+    debrisChance: 15, // % of cells covered by debris (must be cleared before the cell can be searched)
+    // Debris thickness in search effort (a search gives each cell ~35 effort). Searching a debris cell
+    // clears debris first; leftover effort searches the cell. Thickness is shown on the cell.
+    debrisAmount: { min: 20, max: 60 },
+    boulders: 1, // cells per field covered by a boulder: can never be cleared or searched
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
     // Regrowth: each night, every searched cell has this % chance to reset to a fresh, unsearched cell
     // with new hidden contents (items on the ground stay). OFF (0) for now: fields do not regrow.
@@ -53,10 +58,8 @@ export const CONFIG = {
       { copper: 45, iron: 40, coal: 15, mythril: 0 },
       { copper: 35, iron: 40, coal: 20, mythril: 5 },
     ],
+    // Every gem type is equally likely at every distance.
     gemWeights: [
-      { ruby: 35, topaz: 30, sapphire: 20, emerald: 10, diamond: 5 },
-      { ruby: 30, topaz: 25, sapphire: 20, emerald: 15, diamond: 10 },
-      { ruby: 25, topaz: 25, sapphire: 20, emerald: 15, diamond: 15 },
       { ruby: 20, topaz: 20, sapphire: 20, emerald: 20, diamond: 20 },
     ],
   },
@@ -69,12 +72,15 @@ export const CONFIG = {
     steel: { minutes: 25, input: { iron: 1, coal: 1 }, dist: { S: 3, A: 6, B: 16, C: 25, D: 40, F: 10 } },
     mythril: { minutes: 30, input: { mythril: 1 }, dist: { S: 2, A: 4, B: 14, C: 25, D: 45, F: 10 } },
   },
+  // Gem cutting blends from the `novice` table (grade skill level 0) to the `master` table (max level).
+  // Failure: novice F minus the gem's cutting skill (points). Grade weights D..S blend linearly by the
+  // gem's grade skill and are scaled to fill the rest. Gem luck rings then upgrade on top.
   cut: {
-    ruby: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    topaz: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    sapphire: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    emerald: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    diamond: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    ruby: { minutes: 20, novice: { F: 15, D: 45, C: 25, B: 10, A: 4, S: 1 }, master: { F: 10, D: 20, C: 25, B: 22, A: 15, S: 8 } },
+    topaz: { minutes: 20, novice: { F: 15, D: 45, C: 25, B: 10, A: 4, S: 1 }, master: { F: 10, D: 20, C: 25, B: 22, A: 15, S: 8 } },
+    sapphire: { minutes: 20, novice: { F: 15, D: 45, C: 25, B: 10, A: 4, S: 1 }, master: { F: 10, D: 20, C: 25, B: 22, A: 15, S: 8 } },
+    emerald: { minutes: 20, novice: { F: 15, D: 45, C: 25, B: 10, A: 4, S: 1 }, master: { F: 10, D: 20, C: 25, B: 22, A: 15, S: 8 } },
+    diamond: { minutes: 20, novice: { F: 15, D: 45, C: 25, B: 10, A: 4, S: 1 }, master: { F: 10, D: 20, C: 25, B: 22, A: 15, S: 8 } },
   },
   processing: {
     maxTimeReduction: 75, // time bonuses (rings + skills) are capped at -75%
@@ -228,7 +234,8 @@ export const CONFIG = {
 
   // ------------------------------------------------------------- SKILLS ----
   // Skills level up automatically from doing the activity. A level-10 skill (lots of activity) equals a
-  // C-grade ring of the same kind. Skills without a ring: debris clearing -50% time, failure -5 points.
+  // C-grade ring of the same kind. Skills without a ring: debris clearing +100% (twice as fast), failure
+  // -5 points, gem grade (blends the novice table into the master table).
   // XP needed to go from level L to L+1 = xpBase * (L + 1). Level 10 = 5,500 total XP.
   skills: {
     maxLevel: 10,
@@ -240,7 +247,7 @@ export const CONFIG = {
       returnTravel: { name: 'Return travel', perLevel: 0.6, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
       searchTime: { name: 'Search speed', perLevel: 0.6, desc: '% less search time', xpFrom: 'minutes searching' },
       searchEff: { name: 'Search efficiency', perLevel: 1.2, desc: '% more searched per search', xpFrom: 'minutes searching' },
-      debris: { name: 'Debris clearing', perLevel: 5, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
+      debris: { name: 'Debris clearing', perLevel: 10, desc: '% more debris cleared per search', xpFrom: 'debris cleared (1 XP per point)' },
       refineTime: { name: 'Refining speed', perLevel: 0.6, desc: '% less refining time', xpFrom: 'minutes refining' },
       cutTime: { name: 'Cutting speed', perLevel: 0.6, desc: '% less cutting time', xpFrom: 'minutes cutting' },
     },
@@ -248,7 +255,7 @@ export const CONFIG = {
     perMaterial: {
       oreGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the bar one grade' },
       oreFail: { name: 'refining', perLevel: 0.5, desc: 'points less failure chance' },
-      gemGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the gem one grade' },
+      gemGrade: { name: 'grade', perLevel: 10, desc: '% of the way from the novice to the master grade table' },
       gemFail: { name: 'cutting', perLevel: 0.5, desc: 'points less failure chance' },
     },
   },

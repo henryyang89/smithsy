@@ -12,7 +12,7 @@ import { loadouts, bestLoadout } from './sim.js';
 import { gearName } from './gear.js';
 import { formatClock } from './util.js';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2; // 2 = v1.1: field piles, debris thickness, boulders
 export const MAX_LOG = 300;
 export const MAX_BATTLES = 20;
 
@@ -225,7 +225,26 @@ export function serialize(state) {
 
 export function deserialize(text) {
   const s = JSON.parse(text);
-  if (!s || s.version !== SAVE_VERSION) throw new Error('Incompatible save');
+  if (!s || typeof s.version !== 'number') throw new Error('Incompatible save');
+  if (s.version === 1) migrateV1(s);
+  if (s.version !== SAVE_VERSION) throw new Error('Incompatible save');
+  return s;
+}
+
+// v1.0 saves: per-cell ground items -> the field's pile; debris true/false -> thickness; no boulders.
+export function migrateV1(s, cfg = CONFIG) {
+  const mid = Math.round((cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2);
+  for (const f of Object.values(s.map.fields)) {
+    f.pile = f.pile || [];
+    for (const c of f.cells) {
+      if (Array.isArray(c.ground)) f.pile.push(...c.ground);
+      delete c.ground;
+      c.debris = c.debris === true ? mid : typeof c.debris === 'number' ? c.debris : 0;
+      c.boulder = !!c.boulder;
+    }
+  }
+  delete s.loadMark;
+  s.version = 2;
   return s;
 }
 
