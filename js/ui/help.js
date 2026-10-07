@@ -488,15 +488,12 @@ function enemySection(cfg) {
     return [n(day, 0), { v: x(gr.hpDamage), cls: 'num' }, { v: x(gr.ratings), cls: 'num' },
       ...TIERS.map((t) => ({ v: `${num(e.tiers[t].hp * gr.hpDamage, 0)} / ${num(e.tiers[t].damage * gr.hpDamage)}`, cls: 'num' }))];
   });
-  const attrRows = [];
-  e.pairs.forEach((pair, i) => {
-    pair.forEach((k, j) => {
-      const a = e.attributes[k];
-      attrRows.push({
-        attrs: { class: i > 0 && j === 0 ? 'mi-pairstart' : '' },
-        cells: [h('b', {}, a.name), a.side === 'O' ? 'Offense' : 'Defense', ...LEVELS.map((lv) => ({ v: num(a.values[lv], 2), cls: `num attr-${lv}` })), a.desc],
-      });
-    });
+  // One row per pair: offense on the left, its matching defense on the right.
+  const lvCells = (a) => LEVELS.map((lv) => ({ v: num(a.values[lv], 2), cls: `num attr-${lv}` }));
+  const attrRows = e.pairs.map(([o, d]) => {
+    const ao = e.attributes[o];
+    const ad = e.attributes[d];
+    return [h('b', {}, ao.name), ...lvCells(ao), ao.desc, h('b', {}, ad.name), ...lvCells(ad), ad.desc];
   });
   const rosterN = TIERS.reduce((a, t) => a + e.tiers[t].count, 0);
   return [
@@ -512,7 +509,7 @@ function enemySection(cfg) {
     sub('Growth by day (HP / damage per tier, before the HP attribute)'),
     tbl([{ v: 'Day', cls: 'num' }, { v: 'HP & dmg', cls: 'num' }, { v: 'Acc & dodge', cls: 'num' }, ...TIERS.map((t) => ({ v: cap(t), cls: 'num' }))], growthRows),
     sub('Attributes (shown in pairs: offense | defense)'),
-    tbl(['Attribute', 'Side', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning'], attrRows),
+    tbl(['Offense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning', 'Defense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning'], attrRows),
   ];
 }
 

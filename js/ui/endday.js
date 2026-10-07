@@ -6,9 +6,9 @@
 import { h, section, bar, num } from './dom.js';
 import { SLOTS, GRADES, LEVELS } from '../config.js';
 import * as Game from '../core/game.js';
-import { enemyBase, knownLevels, ringTypeVisible, ringGradeVisible } from '../core/enemies.js';
+import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisible } from '../core/enemies.js';
 import { estimateWinChance, loadouts } from '../core/sim.js';
-import { adventurerCombatant, attackInterval } from '../core/combat.js';
+import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
 import { gearStats } from '../core/gear.js';
 import { spendIntel, intelChance, nextIntelGain } from '../core/intel.js';
@@ -684,6 +684,63 @@ function ringStep(ctx, p, advRings, selRings) {
       : h('p', { class: 'muted' }, 'No adventurer rings yet. Defeated enemies drop rings.'));
 }
 
+// Levels a hidden attribute could still have, given the tier's exact low/normal/high counts.
+function possibleLevels(cfg, tier, known, key) {
+  if (key in known) return [known[key]];
+  const counts = { ...cfg.enemies.tiers[tier].levels };
+  for (const lv of Object.values(known)) counts[lv] -= 1;
+  return LEVELS.filter((lv) => counts[lv] > 0);
+}
+
+// [min, max] of fn(enemyCombatant) over every possible level of the given attributes.
+function rangeOver(cfg, enemy, known, keys, fn) {
+  const lists = keys.map((k) => possibleLevels(cfg, enemy.tier, known, k));
+  let lo = Infinity;
+  let hi = -Infinity;
+  const base = Object.fromEntries(Object.keys(cfg.enemies.attributes).map((k) => [k, 'normal']));
+  const rec = (i, lv) => {
+    if (i === keys.length) {
+      const v = fn(enemyCombatant(enemy.tier, enemy.day, { ...base, ...lv }, enemy.name, cfg));
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+      return;
+    }
+    for (const l of lists[i]) rec(i + 1, { ...lv, [keys[i]]: l });
+  };
+  rec(0, {});
+  return [lo, hi];
+}
+
+// Matchup numbers the player can check without simulating: hit chances, damage per hit,
+// attack speed, HP and a rough time-to-kill each way. Hidden attributes show as a range.
+function matchupTable(ctx, sel, preview) {
+  const cfg = ctx.cfg;
+  const known = knownLevels(ctx.state, sel, cfg);
+  const advInt = attackInterval(preview, false, 0);
+  const R = (keys, fn) => rangeOver(cfg, sel, known, keys, fn);
+  const fmt = ([lo, hi], d, unit = '') => (Math.abs(hi - lo) < 10 ** -d / 2 ? `${num(lo, d)}${unit}` : `${num(lo, d)}–${num(hi, d)}${unit}`);
+  const myHit = (e) => hitChance(preview.accuracy, e.dodge, cfg) * 100;
+  const enHit = (e) => hitChance(e.accuracy, preview.dodge, cfg) * 100;
+  const myDmg = (e) => hitDamage(preview, e, cfg).total;
+  const enDmg = (e) => hitDamage(e, preview, cfg).total;
+  const myDps = (e) => (myHit(e) / 100) * myDmg(e) / advInt;
+  const enDps = (e) => (enHit(e) / 100) * enDmg(e) / attackInterval(e, false, 0);
+  const rows = [
+    ['Hit chance', fmt(R(['evasion'], myHit), 1, '%'), fmt(R(['accurate'], enHit), 1, '%')],
+    ['Damage per hit (avg)', fmt(R(['pierceRes', 'magicRes'], myDmg), 1), fmt(R(['piercing', 'magical'], enDmg), 1)],
+    ['Attacks every', `${num(advInt, 2)}s`, fmt(R(['fast'], (e) => attackInterval(e, false, 0)), 2, 's')],
+    ['Expected damage / second', fmt(R(['evasion', 'pierceRes', 'magicRes'], myDps), 2), fmt(R(['accurate', 'piercing', 'magical', 'fast'], enDps), 2)],
+    ['HP', num(preview.hp, 1), fmt(R(['hp'], (e) => e.hp), 1)],
+    ['Rough time to win / to lose', fmt(R(['hp', 'evasion', 'pierceRes', 'magicRes'], (e) => e.hp / Math.max(1e-9, myDps(e))), 0, 's'), fmt(R(['accurate', 'piercing', 'magical', 'fast'], (e) => preview.hp / Math.max(1e-9, enDps(e))), 0, 's')],
+  ];
+  return h('div', {},
+    h('h4', { class: 'adv-h4' }, `Matchup vs ${sel.name}`),
+    h('table', { class: 'adv-stats' },
+      h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', { class: 'num' }, 'Adventurer'), h('th', { class: 'num' }, sel.name))),
+      h('tbody', {}, rows.map((r) => h('tr', {}, h('td', {}, r[0]), h('td', { class: 'num' }, r[1]), h('td', { class: 'num' }, r[2]))))),
+    h('p', { class: 'adv-tight muted adv-small' }, 'Uses the preview gear above. Ranges cover the levels hidden attributes could still have. Ignores stuns, slows and damage rolls — run the estimate for the full picture.'));
+}
+
 function estimatePanel(ctx, p, sel, selGear, selRings, est, running, key) {
   const s = ctx.state;
   const cfg = ctx.cfg;
@@ -691,7 +748,8 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, key) {
   const left = h('div', {},
     h('h4', { class: 'adv-h4' }, 'Adventurer preview'),
     h('p', { class: 'adv-tight muted adv-small' }, 'With the strongest-looking packed item per slot and the selected rings (the real choice is made by simulation once the enemy is known).'),
-    combatStatsTable([{ label: 'Adventurer', c: preview }]));
+    combatStatsTable([{ label: 'Adventurer', c: preview }]),
+    sel ? matchupTable(ctx, sel, preview) : null);
 
   let right;
   if (!sel) {

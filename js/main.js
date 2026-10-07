@@ -144,9 +144,37 @@ function renderTopbar() {
   el.append(...parts.filter(Boolean));
 }
 
+// Outside the work day (report / plan / game over) the phase screen is the first tab and only
+// the reference tabs stay available, so the player can check numbers while planning.
+const PHASE_SCREENS = {
+  report: { label: 'Battle report', render: renderReport },
+  plan: { label: 'Plan tomorrow', render: renderPlan },
+  over: { label: 'Game over', render: renderGameOver },
+};
+const PHASE_EXTRA_TABS = ['rings', 'skills', 'log', 'help'];
+
+function phaseTabs() {
+  const screen = PHASE_SCREENS[state.phase];
+  return [{ id: 'phase', label: screen.label, render: screen.render }, ...TABS.filter((t) => PHASE_EXTRA_TABS.includes(t.id))];
+}
+
 function renderTabs() {
   const el = clear(document.getElementById('tabs'));
-  if (state.phase !== 'work') return;
+  if (state.phase !== 'work') {
+    if (ui.lastPhase !== state.phase) ui.phaseTab = 'phase';
+    ui.lastPhase = state.phase;
+    for (const t of phaseTabs()) {
+      el.append(h('button', {
+        class: ui.phaseTab === t.id ? 'tab active' : 'tab',
+        onclick: () => {
+          ui.phaseTab = t.id;
+          render();
+        },
+      }, t.label));
+    }
+    return;
+  }
+  ui.lastPhase = state.phase;
   for (const t of TABS) el.append(h('button', { class: ui.tab === t.id ? 'tab active' : 'tab', onclick: () => ctx.setTab(t.id) }, t.label));
 }
 
@@ -163,10 +191,10 @@ function render() {
   renderSideLog();
   const main = clear(document.getElementById('main'));
   try {
-    if (state.phase === 'report') renderReport(main, ctx);
-    else if (state.phase === 'plan') renderPlan(main, ctx);
-    else if (state.phase === 'over') renderGameOver(main, ctx);
-    else (TABS.find((t) => t.id === ui.tab) || TABS[0]).render(main, ctx);
+    if (state.phase !== 'work') {
+      const tabs = phaseTabs();
+      (tabs.find((t) => t.id === ui.phaseTab) || tabs[0]).render(main, ctx);
+    } else (TABS.find((t) => t.id === ui.tab) || TABS[0]).render(main, ctx);
   } catch (e) {
     console.error(e);
     main.append(h('pre', { class: 'error' }, `Render error: ${e.message}\n${e.stack}`));

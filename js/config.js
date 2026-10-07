@@ -239,7 +239,7 @@ export const CONFIG = {
       returnTravel: { name: 'Return travel', perLevel: 0.4, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
       searchTime: { name: 'Search speed', perLevel: 0.4, desc: '% less search time', xpFrom: 'minutes searching' },
       searchEff: { name: 'Search efficiency', perLevel: 0.8, desc: '% more searched per search', xpFrom: 'minutes searching' },
-      debris: { name: 'Debris clearing', perLevel: 2, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
+      debris: { name: 'Debris clearing', perLevel: 0.5, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
       refineTime: { name: 'Refining speed', perLevel: 0.4, desc: '% less refining time', xpFrom: 'minutes refining' },
       cutTime: { name: 'Cutting speed', perLevel: 0.4, desc: '% less cutting time', xpFrom: 'minutes cutting' },
     },
