@@ -34,13 +34,14 @@ export const CONFIG = {
   field: {
     size: 8, // each map field is an 8x8 grid
     searchMin: 30, // minutes per 3x3 search
-    searchEfficiency: 50, // % of each cell searched per search (2 searches = fully searched)
+    searchEfficiency: 35, // % of each cell searched per search, before bonuses (about 3 searches finish a cell)
+    searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (35 -> 30..40)
     debrisChance: 15, // % of cells covered by debris (cannot be searched until cleared)
     debrisClearMin: 15, // minutes to clear one debris cell
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
-    // Regrowth (keeps the endless game supplied): each night, every searched cell has this % chance
-    // to reset to a fresh, unsearched cell with new hidden contents (items on the ground stay).
-    regrowPctPerDay: 5,
+    // Regrowth: each night, every searched cell has this % chance to reset to a fresh, unsearched cell
+    // with new hidden contents (items on the ground stay). OFF (0) for now: fields do not regrow.
+    regrowPctPerDay: 0,
     // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
     lootChance: { base: 40, perDistance: 5, max: 70 },
     itemCountWeights: { 1: 50, 2: 35, 3: 15 }, // how many items a loot cell holds (weights)
@@ -226,8 +227,8 @@ export const CONFIG = {
   },
 
   // ------------------------------------------------------------- SKILLS ----
-  // Skills level up automatically from doing the activity. Bonuses are deliberately smaller than
-  // rings: a level-10 skill is a bit weaker than a D-grade ring of the same kind.
+  // Skills level up automatically from doing the activity. A level-10 skill (lots of activity) equals a
+  // C-grade ring of the same kind. Skills without a ring: debris clearing -50% time, failure -5 points.
   // XP needed to go from level L to L+1 = xpBase * (L + 1). Level 10 = 5,500 total XP.
   skills: {
     maxLevel: 10,
@@ -236,19 +237,19 @@ export const CONFIG = {
     xpPerItem: { copper: 25, iron: 25, steel: 30, mythril: 50, ruby: 25, topaz: 25, sapphire: 30, emerald: 40, diamond: 50 },
     // Activity skills: XP = minutes spent on the activity. Bonus = perLevel x level.
     activity: {
-      returnTravel: { name: 'Return travel', perLevel: 0.4, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
-      searchTime: { name: 'Search speed', perLevel: 0.4, desc: '% less search time', xpFrom: 'minutes searching' },
-      searchEff: { name: 'Search efficiency', perLevel: 0.8, desc: '% more searched per search', xpFrom: 'minutes searching' },
-      debris: { name: 'Debris clearing', perLevel: 0.5, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
-      refineTime: { name: 'Refining speed', perLevel: 0.4, desc: '% less refining time', xpFrom: 'minutes refining' },
-      cutTime: { name: 'Cutting speed', perLevel: 0.4, desc: '% less cutting time', xpFrom: 'minutes cutting' },
+      returnTravel: { name: 'Return travel', perLevel: 0.6, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
+      searchTime: { name: 'Search speed', perLevel: 0.6, desc: '% less search time', xpFrom: 'minutes searching' },
+      searchEff: { name: 'Search efficiency', perLevel: 1.2, desc: '% more searched per search', xpFrom: 'minutes searching' },
+      debris: { name: 'Debris clearing', perLevel: 5, desc: '% less clearing time', xpFrom: 'minutes clearing debris' },
+      refineTime: { name: 'Refining speed', perLevel: 0.6, desc: '% less refining time', xpFrom: 'minutes refining' },
+      cutTime: { name: 'Cutting speed', perLevel: 0.6, desc: '% less cutting time', xpFrom: 'minutes cutting' },
     },
     // Per-material skills (one per bar type / gem type). XP = xpPerItem per item processed of that type.
     perMaterial: {
-      oreGrade: { name: 'grade', perLevel: 0.15, desc: '% chance to upgrade the bar one grade' },
-      oreFail: { name: 'refining', perLevel: 0.3, desc: 'points less failure chance' },
-      gemGrade: { name: 'grade', perLevel: 0.15, desc: '% chance to upgrade the gem one grade' },
-      gemFail: { name: 'cutting', perLevel: 0.3, desc: 'points less failure chance' },
+      oreGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the bar one grade' },
+      oreFail: { name: 'refining', perLevel: 0.5, desc: 'points less failure chance' },
+      gemGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the gem one grade' },
+      gemFail: { name: 'cutting', perLevel: 0.5, desc: 'points less failure chance' },
     },
   },
 

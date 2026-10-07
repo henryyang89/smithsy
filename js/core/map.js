@@ -147,8 +147,16 @@ export function searchMinutes(state, cfg = CONFIG) {
   return round1(reduced(cfg.field.searchMin, smithBonuses(state, cfg).searchTimePct, cfg.processing.maxTimeReduction));
 }
 
+// Average % of each cell searched per search (base x bonuses). Each cell rolls +/- searchRandomness.
 export function searchEfficiency(state, cfg = CONFIG) {
   return cfg.field.searchEfficiency * (1 + smithBonuses(state, cfg).searchEffPct / 100);
+}
+
+// [min, max] % a single cell can get from one search.
+export function searchEfficiencyRange(state, cfg = CONFIG) {
+  const e = searchEfficiency(state, cfg);
+  const r = cfg.field.searchRandomness || 0;
+  return [Math.max(0, e - r), Math.min(100, e + r)];
 }
 
 export function debrisMinutesPerCell(state, cfg = CONFIG) {
@@ -241,7 +249,9 @@ export function search(state, cx, cy, cfg = CONFIG) {
   let revealed = 0;
   for (const i of searchable) {
     const cell = field.cells[i];
-    const s1 = Math.min(100, cell.searched + eff);
+    const r = cfg.field.searchRandomness || 0;
+    const cellEff = r > 0 ? clamp(eff + rng.float(-r, r), 0, 100) : eff;
+    const s1 = Math.min(100, cell.searched + cellEff);
     const full = s1 >= 100 - EPS;
     const keep = [];
     for (const it of cell.items) {

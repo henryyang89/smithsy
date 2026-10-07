@@ -151,22 +151,82 @@ export function repairInfo(item, cfg = CONFIG) {
   return { missing, bars, gems, minutes };
 }
 
+// Is it night (after the fight report, while planning)? Repairs then cost no time and need no camp visit.
+export function isNight(state) {
+  return state.phase === 'report' || state.phase === 'plan';
+}
+
+// Which stock a repair will actually use: the exact grade if there is enough, otherwise the lowest
+// higher grade that has enough (no benefit from the higher grade). Returns
+// { ok, reason, bars, gems, substitutes: [{ kind, need, use, qty }], minutes, missing }.
+export function repairPlan(state, item, cfg = CONFIG) {
+  const info = repairInfo(item, cfg);
+  const pick = (storage, type, grade, qty) => {
+    const gi = GRADES.indexOf(grade);
+    for (let i = gi; i < GRADES.length; i++) {
+      const k = `${type}:${GRADES[i]}`;
+      if (has(storage, k, qty)) return GRADES[i];
+    }
+    return null;
+  };
+  const out = { ok: true, reason: null, bars: {}, gems: {}, substitutes: [], minutes: isNight(state) ? 0 : info.minutes, missing: info.missing };
+  const barQty = Object.values(info.bars)[0] || 0;
+  if (barQty > 0) {
+    const g = pick(state.storage.bars, item.material, item.grade, barQty);
+    if (!g) {
+      out.ok = false;
+      out.reason = `Need ${barQty} ${item.material} bars of grade ${item.grade} or higher.`;
+    } else {
+      out.bars[barKey(item.material, g)] = barQty;
+      if (g !== item.grade) out.substitutes.push({ kind: `${item.material} bars`, need: item.grade, use: g, qty: barQty });
+    }
+  }
+  if (item.gem) {
+    const gemQty = Object.values(info.gems)[0] || 0;
+    if (gemQty > 0) {
+      const g = pick(state.storage.cut, item.gem.type, item.gem.grade, gemQty);
+      if (!g) {
+        out.ok = false;
+        out.reason = (out.reason ? `${out.reason} ` : '') + `Need ${gemQty} cut ${item.gem.type} of grade ${item.gem.grade} or higher.`;
+      } else {
+        out.gems[`${item.gem.type}:${g}`] = gemQty;
+        if (g !== item.gem.grade) out.substitutes.push({ kind: `cut ${item.gem.type}`, need: item.gem.grade, use: g, qty: gemQty });
+      }
+    }
+  }
+  return out;
+}
+
+export function substituteWarning(plan) {
+  if (!plan.substitutes.length) return null;
+  return `Uses higher grade: ${plan.substitutes.map((x) => `${x.qty} ${x.use} ${x.kind} instead of ${x.need}`).join('; ')} (no extra benefit).`;
+}
+
+// Repair to 100%. By day: at camp, costs time. At night (report/plan): free of time, anywhere.
 export function repair(state, id, cfg = CONFIG) {
-  const err = campWork(state);
-  if (err) return { ok: false, msg: err };
+  const night = isNight(state);
+  if (!night) {
+    const err = campWork(state);
+    if (err) return { ok: false, msg: err };
+  }
   const item = state.gear.find((g) => g.id === id);
   if (!item) return { ok: false, msg: 'No such gear.' };
   if (item.packed) return { ok: false, msg: 'The adventurer has this item today.' };
   if (item.durability >= 100) return { ok: false, msg: 'Already at 100%.' };
-  const info = repairInfo(item, cfg);
-  for (const [k, n] of Object.entries(info.bars)) if (!has(state.storage.bars, k, n)) return { ok: false, msg: `Need ${n} ${k.replace(':', ' ')} bars.` };
-  for (const [k, n] of Object.entries(info.gems)) if (!has(state.storage.cut, k, n)) return { ok: false, msg: `Need ${n} cut ${k.replace(':', ' ')}.` };
-  if (state.time + info.minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
-  for (const [k, n] of Object.entries(info.bars)) take(state.storage.bars, k, n);
-  for (const [k, n] of Object.entries(info.gems)) take(state.storage.cut, k, n);
+  const plan = repairPlan(state, item, cfg);
+  if (!plan.ok) return { ok: false, msg: plan.reason };
+  if (!night && state.time + plan.minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
+  for (const [k, n] of Object.entries(plan.bars)) take(state.storage.bars, k, n);
+  for (const [k, n] of Object.entries(plan.gems)) take(state.storage.cut, k, n);
   item.durability = 100;
-  state.time += info.minutes;
-  return { ok: true, minutes: info.minutes, msg: `Repaired ${gearName(item)} to 100% (${info.minutes}m).` };
+  state.time += plan.minutes;
+  const warn = substituteWarning(plan);
+  return {
+    ok: true,
+    minutes: plan.minutes,
+    substitutes: plan.substitutes,
+    msg: `Repaired ${gearName(item)} to 100% (${night ? 'at night, no time' : `${plan.minutes}m`}).${warn ? ` ${warn}` : ''}`,
+  };
 }
 
 // Destroy (scrap) an item at home. No refund.
