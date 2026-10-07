@@ -34,23 +34,23 @@ export const CONFIG = {
   field: {
     size: 8, // each map field is an 8x8 grid
     searchMin: 30, // minutes per 3x3 search
-    searchEfficiency: 25, // % of each cell searched per search (4 searches = fully searched)
+    searchEfficiency: 50, // % of each cell searched per search (2 searches = fully searched)
     debrisChance: 15, // % of cells covered by debris (cannot be searched until cleared)
     debrisClearMin: 15, // minutes to clear one debris cell
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
     // Regrowth (keeps the endless game supplied): each night, every searched cell has this % chance
     // to reset to a fresh, unsearched cell with new hidden contents (items on the ground stay).
-    regrowPctPerDay: 2,
+    regrowPctPerDay: 5,
     // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
     lootChance: { base: 40, perDistance: 5, max: 70 },
     itemCountWeights: { 1: 50, 2: 35, 3: 15 }, // how many items a loot cell holds (weights)
     oreShare: 70, // % of items that are ores (the rest are gems)
     // Ore / gem weights by distance from camp (row 1 = distance 1). Last row is used for farther fields.
     oreWeights: [
-      { copper: 60, iron: 30, coal: 10, mythril: 0 },
-      { copper: 45, iron: 35, coal: 15, mythril: 5 },
-      { copper: 30, iron: 35, coal: 25, mythril: 10 },
-      { copper: 20, iron: 30, coal: 30, mythril: 20 },
+      { copper: 80, iron: 20, coal: 0, mythril: 0 },
+      { copper: 60, iron: 35, coal: 5, mythril: 0 },
+      { copper: 45, iron: 40, coal: 15, mythril: 0 },
+      { copper: 35, iron: 40, coal: 20, mythril: 5 },
     ],
     gemWeights: [
       { ruby: 35, topaz: 30, sapphire: 20, emerald: 10, diamond: 5 },
@@ -63,17 +63,17 @@ export const CONFIG = {
   // --------------------------------------------------------- PROCESSING ----
   // Grade outcome tables (% chance). F = failure (material lost). Each row sums to 100.
   refine: {
-    copper: { minutes: 10, input: { copper: 1 }, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    iron: { minutes: 12, input: { iron: 1 }, dist: { S: 4, A: 8, B: 18, C: 25, D: 35, F: 10 } },
-    steel: { minutes: 15, input: { iron: 1, coal: 1 }, dist: { S: 3, A: 6, B: 16, C: 25, D: 40, F: 10 } },
-    mythril: { minutes: 20, input: { mythril: 1 }, dist: { S: 2, A: 4, B: 14, C: 25, D: 45, F: 10 } },
+    copper: { minutes: 15, input: { copper: 1 }, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    iron: { minutes: 20, input: { iron: 1 }, dist: { S: 4, A: 8, B: 18, C: 25, D: 35, F: 10 } },
+    steel: { minutes: 25, input: { iron: 1, coal: 1 }, dist: { S: 3, A: 6, B: 16, C: 25, D: 40, F: 10 } },
+    mythril: { minutes: 30, input: { mythril: 1 }, dist: { S: 2, A: 4, B: 14, C: 25, D: 45, F: 10 } },
   },
   cut: {
-    ruby: { minutes: 15, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    topaz: { minutes: 15, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    sapphire: { minutes: 15, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    emerald: { minutes: 15, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    diamond: { minutes: 15, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    ruby: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    topaz: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    sapphire: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    emerald: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    diamond: { minutes: 20, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
   },
   processing: {
     maxTimeReduction: 75, // time bonuses (rings + skills) are capped at -75%
@@ -105,15 +105,15 @@ export const CONFIG = {
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
   gemEffects: {
     ruby: {
-      weapon: { magicPct: [10, 15, 20, 25, 30] }, // + magic damage as % of weapon damage (ignores defense)
+      weapon: { magicPct: [5, 8, 10, 12, 15] }, // + magic damage as % of weapon damage (ignores defense)
       armor: { magicRes: [4, 6, 8, 10, 12] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [4, 6, 8, 10, 12], stunDur: [0.5, 0.6, 0.7, 0.8, 1.0] }, // % per hit, seconds
+      weapon: { stunChance: [10, 12, 15, 18, 20], stunDur: [1, 1, 1.2, 1.4, 1.5] }, // % per hit, seconds
       armor: { stunChanceRed: [4, 6, 8, 10, 12], stunDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     emerald: {
-      weapon: { accuracy: [10, 15, 20, 25, 30] }, // accuracy rating
+      weapon: { accuracy: [20, 30, 40, 50, 60] }, // accuracy rating
       armor: { dodge: [4, 6, 8, 10, 12] }, // dodge rating
     },
     sapphire: {
@@ -121,7 +121,7 @@ export const CONFIG = {
       armor: { slowRed: [4, 6, 8, 10, 12], slowDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     diamond: {
-      weapon: { pierce: [10, 15, 20, 25, 30] }, // % of enemy defense ignored
+      weapon: { pierce: [20, 30, 40, 50, 60] }, // % of enemy defense ignored
       armor: { pierceRes: [4, 6, 8, 10, 12] }, // % of enemy piercing ignored
     },
   },
@@ -155,11 +155,13 @@ export const CONFIG = {
     stunDuration: 1.0, // seconds, when an enemy with Stunning lands a stun
     slowDuration: 2.0, // seconds, when an enemy with Chilling hits
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1)
-    growthPerDay: { hpDamage: 5, ratings: 2 }, // HP & damage +5%/day, accuracy & dodge +2%/day
+    growthPerDay: { hpDamage: 3, ratings: 1 }, // HP & damage +3%/day, accuracy & dodge +1%/day
+    // Tiers differ mostly by attribute levels (normal: 6 low, champion: 6 high) and defense,
+    // so base HP/damage stay close together.
     tiers: {
-      normal: { count: 2, hp: 60, damage: 6, defense: 20, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 90, damage: 8, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 130, damage: 10, defense: 30, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      normal: { count: 2, hp: 80, damage: 8, defense: 20, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
+      elite: { count: 3, hp: 80, damage: 9, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 90, damage: 10, defense: 30, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
     attributes: {
@@ -258,7 +260,7 @@ export const CONFIG = {
     maxChance: 100,
     tracks: {
       oreSight: { name: 'Ore sight', base: 10, desc: 'chance per searched cell to see everything left in it' },
-      enemySight: { name: 'Enemy scouting', base: 25, desc: 'chance to see each enemy attribute' },
+      enemySight: { name: 'Enemy scouting', base: 10, desc: 'chance to see each enemy attribute' },
       ringTypeSight: { name: 'Ring type scouting', base: 25, desc: 'chance to see each reward ring type' },
       ringGradeSight: { name: 'Ring grade scouting', base: 25, desc: 'chance to see each reward ring grade' },
     },
