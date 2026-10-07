@@ -3,7 +3,7 @@
 import { CONFIG } from './config.js';
 import * as Game from './core/game.js';
 import { atCamp, timeLeft, currentField, returnMinutes } from './core/map.js';
-import { formatClock, formatDuration } from './core/util.js';
+import { formatClock, formatDuration, EPS } from './core/util.js';
 import { h, clear } from './ui/dom.js';
 import { renderMap } from './ui/mapview.js';
 import { renderWorkshop } from './ui/workshop.js';
@@ -118,7 +118,7 @@ function renderTopbar() {
   const parts = [
     h('div', { class: 'brand' }, 'Smithsy'),
     h('div', { class: 'stat' }, h('b', {}, `Day ${state.day}`)),
-    h('div', { class: 'stat' }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > 0 ? `${formatDuration(left)} left` : 'day over')),
+    h('div', { class: 'stat' }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > EPS ? `${formatDuration(left)} left` : 'day over')),
     h('div', { class: 'stat' }, locationText()),
     h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`),
     !atCamp(state) && working ? h('div', { class: 'stat muted' }, `Return: ${formatDuration(returnMinutes(state))}`) : null,
@@ -131,7 +131,10 @@ function renderTopbar() {
         class: 'primary',
         disabled: !canEnd,
         title: canEnd ? 'End the day: resolve the fight and plan tomorrow' : 'Return to camp first',
-        onclick: () => ctx.act(() => Game.endDay(state)),
+        onclick: () => {
+          if (left >= 30 && !confirm(`End day ${state.day} with ${formatDuration(left)} still left?`)) return;
+          ctx.act(() => Game.endDay(state));
+        },
       }, 'End day')
       : null,
     h('button', {
@@ -174,6 +177,7 @@ function renderTabs() {
     }
     return;
   }
+  if (ui.lastPhase === 'plan') ui.tab = 'map'; // a new day starts on the Map
   ui.lastPhase = state.phase;
   for (const t of TABS) el.append(h('button', { class: ui.tab === t.id ? 'tab active' : 'tab', onclick: () => ctx.setTab(t.id) }, t.label));
 }

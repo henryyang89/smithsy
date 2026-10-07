@@ -3,7 +3,7 @@
 import { h, section, bar, num } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, repairInfo, repair, scrap, STAT_LABELS } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, repairInfo, repair, scrap, STAT_LABELS, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, round2, EPS } from '../core/util.js';
@@ -22,7 +22,7 @@ const enough = (have, need) => (have || 0) + EPS >= need;
 const outcomeLabel = (g) => (g === 'F' ? 'Fail' : g);
 // pierce resistance is a % of the enemy's piercing ignored
 const statLabel = (k) => (k === 'pierceRes' ? 'Pierce resistance %' : STAT_LABELS[k] || k);
-const statLine = (stats) => Object.entries(stats).map(([k, v]) => `${statLabel(k)} ${num(v)}`).join(', ');
+const statLine = (stats) => Object.entries(stats).map(([k, v]) => fmtStat(k, v)).join(', ');
 const mins = (m) => formatDuration(m);
 
 // Small table. Cells: string | Node | { v, cls, title, span }. Rows: array of cells, or { attrs, cells }.
@@ -225,7 +225,7 @@ function gradeButtons(selected, counts, need, onPick, unit) {
 }
 
 function fxText(effects, gi, mult = 1) {
-  return Object.entries(effects).map(([k, arr]) => `${statLabel(k)} ${num(arr[gi] * mult)}`).join(', ');
+  return Object.entries(effects).map(([k, arr]) => fmtStat(k, arr[gi] * mult)).join(', ');
 }
 
 function smithPanel(ctx, blocked) {

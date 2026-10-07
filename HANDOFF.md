@@ -80,8 +80,15 @@ endless. Plain HTML + ES modules, no build step, hosted on GitHub Pages
 - Debris cells are 20 points more likely to hold items.
 - The day does not auto-end at 18:00; the player presses End day at camp. Past 18:00 only the walk home
   (and free pick-up/drop) is possible.
-- Smith rings apply at once. Adventurer ring toggles on the Rings tab outside the plan only change
-  tonight's default selection, never today's fight.
+- Smith rings apply at once but lock once the day's first action happens (changeable at 8:00 at camp
+  or while planning at night); otherwise swapping before every action made the 10-ring limit meaningless.
+  Adventurer ring toggles on the Rings tab outside the plan only change tonight's default selection, never
+  today's fight (during planning they are mirrored into the plan selection).
+- Free pick-ups are time-limited (see SPEC "Bag"); a specific ground item can be picked up by clicking it.
+- Ore sight only rolls on cells that still have something hidden after the search.
+- Confirmations: End day with 30+ minutes left; confirming a plan that packs nothing / leaves an owned
+  slot empty / has an estimated win chance under 50%.
+- A ring won today is pre-selected in tonight's plan when there is a free ring slot.
 - During report/plan/game over, the Rings, Skills & Intel, Log and Help tabs stay available.
 
 ## Balance status (current config, commit 22b062f)

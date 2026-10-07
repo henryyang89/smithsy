@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { clamp, reduced, round1, EPS } from './util.js';
+import { clamp, reduced, round1, EPS, formatClock } from './util.js';
 import { smithBonuses } from './bonuses.js';
 import { addXp } from './skills.js';
 import { rngFor } from './rng.js';
@@ -160,6 +160,23 @@ function fitsWithReturn(state, minutes, cfg) {
   return state.time + minutes + returnMinutes(state, state.location, state.bag.length, cfg) <= cfg.time.dayEndMin + EPS;
 }
 
+const endClock = (cfg) => formatClock(cfg.time.dayEndMin);
+
+// How many items the bag may hold after a free pick-up: as many as still let you walk home by day
+// end, but never fewer than the bag held after the last timed field action (state.loadMark), so
+// late swaps stay possible. This closes "drop everything, search, pick it all back up for free".
+export function pickUpLimit(state, cfg = CONFIG) {
+  const mark = state.loadMark ?? state.bag.length;
+  let byTime = 0;
+  for (let n = cfg.bag.slots; n > 0; n--) {
+    if (state.time + returnMinutes(state, state.location, n, cfg) <= cfg.time.dayEndMin + EPS) {
+      byTime = n;
+      break;
+    }
+  }
+  return Math.min(cfg.bag.slots, Math.max(mark, byTime));
+}
+
 // ---------------------------------------------------------------- actions ----
 function requireWork(state) {
   if (state.phase !== 'work') return { ok: false, msg: 'Not during the work day.' };
@@ -179,7 +196,7 @@ export function travel(state, to, cfg = CONFIG) {
   if (!toCamp) {
     const back = travelMinutes(state, to, state.map.camp, items, cfg);
     if (state.time + minutes + back > cfg.time.dayEndMin + EPS) {
-      return { ok: false, msg: `Not enough time: ${round1(minutes)}m there + ${round1(back)}m back would pass 6pm.` };
+      return { ok: false, msg: `Not enough time: ${round1(minutes)}m there + ${round1(back)}m back would pass ${endClock(cfg)}.` };
     }
   }
   const notes = [];
@@ -190,6 +207,7 @@ export function travel(state, to, cfg = CONFIG) {
     const unloaded = unloadBag(state);
     return { ok: true, msg: `Returned to camp (${round1(minutes)}m).${unloaded ? ` Unloaded ${unloaded} items.` : ''}`, notes, minutes };
   }
+  state.loadMark = state.bag.length;
   return { ok: true, msg: `Travelled to field (${to.x + 1},${to.y + 1}) in ${round1(minutes)}m.`, notes, minutes };
 }
 
@@ -211,7 +229,7 @@ export function search(state, cx, cy, cfg = CONFIG) {
   const field = currentField(state);
   if (!field) return { ok: false, msg: 'You are at camp. Travel to a field first.' };
   const minutes = searchMinutes(state, cfg);
-  if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: 'Not enough time to search and still get back by 6pm.' };
+  if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: `Not enough time to search and still get back by ${endClock(cfg)}.` };
   const idxs = areaCells(cx, cy, cfg);
   const searchable = idxs.filter((i) => !field.cells[i].debris && field.cells[i].searched < 100 - EPS);
   if (!searchable.length) return { ok: false, msg: 'Nothing left to search here (fully searched or covered by debris).' };
@@ -239,12 +257,14 @@ export function search(state, cx, cy, cfg = CONFIG) {
     }
     cell.items = keep;
     cell.searched = full ? 100 : s1;
-    if (!cell.revealed && rng.chance(revealPct)) {
+    // ore sight only rolls on cells that still have something to reveal (not just finished)
+    if (!full && !cell.revealed && rng.chance(revealPct)) {
       cell.revealed = true;
       revealed++;
     }
   }
   state.time += minutes;
+  state.loadMark = state.bag.length;
   const notes = [];
   addXp(state, 'searchTime', minutes, notes, cfg);
   addXp(state, 'searchEff', minutes, notes, cfg);
@@ -265,28 +285,38 @@ export function clearDebris(state, cx, cy, cfg = CONFIG) {
   if (!idxs.length) return { ok: false, msg: 'No debris in that area.' };
   const per = debrisMinutesPerCell(state, cfg);
   const minutes = round1(per * idxs.length);
-  if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: 'Not enough time to clear and still get back by 6pm.' };
+  if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: `Not enough time to clear and still get back by ${endClock(cfg)}.` };
   for (const i of idxs) field.cells[i].debris = false;
   state.time += minutes;
   const notes = [];
   addXp(state, 'debris', minutes, notes, cfg);
+  state.loadMark = state.bag.length;
   return { ok: true, msg: `Cleared ${idxs.length} debris cell(s) in ${round1(minutes)}m.`, notes, minutes };
 }
 
-// Pick up items lying on the ground in a cell (free). Takes as many as fit.
-export function pickUp(state, cellIndex, cfg = CONFIG) {
+// Pick up items lying on the ground in a cell (free). Takes as many as fit (see pickUpLimit),
+// or only the item at groundIndex when given.
+export function pickUp(state, cellIndex, cfg = CONFIG, groundIndex = null) {
   const err = requireWork(state);
   if (err) return err;
   const field = currentField(state);
   if (!field) return { ok: false, msg: 'You are at camp.' };
   const cell = field.cells[cellIndex];
   if (!cell || !cell.ground.length) return { ok: false, msg: 'Nothing on the ground there.' };
+  if (groundIndex != null && (groundIndex < 0 || groundIndex >= cell.ground.length)) return { ok: false, msg: 'No such item on the ground.' };
+  const limit = pickUpLimit(state, cfg);
+  if (state.bag.length >= cfg.bag.slots) return { ok: false, msg: 'Bag is full.' };
+  if (state.bag.length >= limit) return { ok: false, msg: `Carrying more would make the walk home end after ${endClock(cfg)}.` };
   let n = 0;
-  while (cell.ground.length && state.bag.length < cfg.bag.slots) {
-    state.bag.push(cell.ground.shift());
-    n++;
+  if (groundIndex != null) {
+    state.bag.push(cell.ground.splice(groundIndex, 1)[0]);
+    n = 1;
+  } else {
+    while (cell.ground.length && state.bag.length < limit) {
+      state.bag.push(cell.ground.shift());
+      n++;
+    }
   }
-  if (!n) return { ok: false, msg: 'Bag is full.' };
   return { ok: true, msg: `Picked up ${n} item(s).${cell.ground.length ? ` ${cell.ground.length} still on the ground.` : ''}` };
 }
 

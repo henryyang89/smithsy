@@ -5,7 +5,7 @@
 import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
 import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
-import { STAT_LABELS, craftMinutes, repairInfo } from '../core/gear.js';
+import { STAT_LABELS, fmtStat, craftMinutes, repairInfo } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
@@ -308,7 +308,7 @@ function gearSection(cfg) {
   const slotRows = SLOTS.map((s) => {
     const def = g.slots[s];
     return [h('b', {}, cap(s)), n(def.bars, 0), { v: mins(craftMinutes(s, false, cfg)), cls: 'num' },
-      Object.entries(def.stats).map(([k, v]) => `${statLabel(k)} ${num(v, 2)}`).join(', ')];
+      Object.entries(def.stats).map(([k, v]) => fmtStat(k, v)).join(', ')];
   });
   // One small card per slot stat: material x grade.
   const cards = [];
@@ -526,7 +526,7 @@ function ringSection(cfg) {
   return [
     kv([
       ['Source', `Each defeated enemy drops 1 ring. Type: uniform over all ${types.length} types (${p(100 / types.length)} each). Grade: by tier (below).`],
-      ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once; adventurer rings are chosen in each night's plan.`],
+      ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once and can be swapped at the start of a day (before your first action) or while planning at night; adventurer rings are chosen in each night's plan.`],
       ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).`],
     ]),
     tbl(['Ring', 'Wearer', ...gradeHead(), 'Effect'], typeRows),

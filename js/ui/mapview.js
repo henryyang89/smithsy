@@ -5,7 +5,7 @@ import { h, section, bar } from './dom.js';
 import {
   travel, search, clearDebris, pickUp, dropItem, travelMinutes, returnMinutes, searchMinutes,
   searchEfficiency, debrisMinutesPerCell, fieldProgress, areaCells, atCamp, currentField, mapCell,
-  itemKind, itemType, key, timeLeft,
+  itemKind, itemType, key, timeLeft, pickUpLimit,
 } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, round1, clamp } from '../core/util.js';
@@ -78,9 +78,9 @@ function doClear(ctx, sel) {
   return ctx.act(() => clearDebris(ctx.state, sel % n, Math.floor(sel / n)), { toast: true });
 }
 
-function doPickUp(ctx, sel) {
+function doPickUp(ctx, sel, groundIndex = null) {
   ctx.ui.map_new = null;
-  return ctx.act(() => pickUp(ctx.state, sel));
+  return ctx.act(() => pickUp(ctx.state, sel, ctx.cfg, groundIndex));
 }
 
 function doDrop(ctx, bagIndex, sel) {
@@ -338,12 +338,12 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
   if (cell.debris) cls.push('debris');
   if (done) cls.push('mv-done');
   if (partial) cls.push('mv-partial');
-  if (cell.revealed) cls.push('mv-revealed');
+  if (cell.revealed && !done) cls.push('mv-revealed');
   if (selected) cls.push('sel');
   if (inArea) cls.push('area');
 
   let content;
-  if (cell.revealed) content = cell.items.length ? cell.items.map((it) => itemTag(it.t)) : h('span', { class: 'mv-empty' }, 'empty');
+  if (cell.revealed && !done) content = cell.items.length ? cell.items.map((it) => itemTag(it.t)) : h('span', { class: 'mv-empty' }, 'empty');
   else if (cell.debris) content = h('span', { class: 'mv-debris-l' }, 'debris');
   else if (done) content = h('span', { class: 'mv-done-l' }, 'done');
   else if (partial) content = h('span', { class: 'mv-pct' }, pctText(cell.searched));
@@ -352,8 +352,8 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
   const title = [
     `Cell ${cellLabel(i, n)}: ${pctText(cell.searched)} searched`,
     cell.debris ? 'Covered by debris: clear it before searching.' : null,
-    cell.revealed ? `Revealed: ${cell.items.length ? cell.items.map((it) => itemName(it.t)).join(', ') : 'nothing left'}` : null,
-    !cell.revealed && done ? 'Fully searched: nothing hidden left.' : null,
+    cell.revealed && !done ? `Revealed: ${cell.items.length ? cell.items.map((it) => itemName(it.t)).join(', ') : 'nothing left'}` : null,
+    done ? 'Fully searched: nothing hidden left.' : null,
     cell.ground.length ? `On the ground: ${cell.ground.map(itemName).join(', ')}` : null,
   ].filter(Boolean).join('\n');
 
@@ -409,7 +409,9 @@ function actionsPanel(ctx, field, sel) {
 
   // Pick up
   const g = cell.ground.length;
-  const pWhy = !g ? `Nothing on the ground in cell ${cellLabel(sel, n)}.` : !free ? 'Bag is full: drop something first.' : null;
+  const pLimit = pickUpLimit(state, cfg);
+  const pWhy = !g ? `Nothing on the ground in cell ${cellLabel(sel, n)}.` : !free ? 'Bag is full: drop something first.'
+    : state.bag.length >= pLimit ? `Carrying more would make the walk home end after ${clock(cfg.time.dayEndMin)}.` : null;
 
   const actRow = (label, onclick, disabled, info, why, extra, attrs = {}) => h('div', { class: 'mv-act' },
     h('button', { class: attrs.primary ? 'primary' : '', disabled, onclick, title: why || info, 'data-act': attrs.id }, label),
@@ -443,7 +445,7 @@ function cellPanel(ctx, field, sel) {
   const area = areaCells(sel % n, Math.floor(sel / n), cfg).map((i) => field.cells[i]);
   const avg = area.reduce((a, c) => a + c.searched, 0) / area.length;
   let contents;
-  if (cell.revealed) {
+  if (cell.revealed && !done) {
     contents = cell.items.length
       ? h('span', { class: 'chips' }, cell.items.map((it) => h('span', { class: 'chip' }, itemTag(it.t), ` ${itemName(it.t)}`)))
       : h('span', {}, 'Revealed: nothing left in this cell.');
@@ -456,7 +458,14 @@ function cellPanel(ctx, field, sel) {
       h('span', { class: 'muted' }, 'Debris'), h('span', {}, cell.debris ? `Yes: clear it first (${dur(debrisMinutesPerCell(state, cfg))})` : 'No'),
       h('span', { class: 'muted' }, 'Contents'), contents,
       h('span', { class: 'muted' }, 'On the ground'), cell.ground.length
-        ? h('span', { class: 'chips' }, cell.ground.map((t) => h('span', { class: 'chip' }, itemTag(t), ` ${itemName(t)}`)))
+        ? h('span', {},
+          h('span', { class: 'chips' }, cell.ground.map((t, gi) => h('button', {
+            class: 'chip clickable',
+            title: `Pick up this ${itemName(t)} (free)`,
+            disabled: state.phase !== 'work' || state.bag.length >= Math.min(cfg.bag.slots, pickUpLimit(state, cfg)),
+            onclick: () => doPickUp(ctx, sel, gi),
+          }, itemTag(t), ` ${itemName(t)}`))),
+          h('div', { class: 'muted' }, 'Click an item to pick up just that one.'))
         : h('span', { class: 'muted' }, 'nothing'),
       h('span', { class: 'muted' }, '3x3 area'), h('span', {}, `${area.length} cells, ${pctText(avg)} searched on average, ${area.filter((c) => c.debris).length} under debris, ${area.filter(isDone).length} fully searched`)));
 }

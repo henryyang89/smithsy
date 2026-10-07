@@ -19,9 +19,10 @@ export function formatClock(min) {
 
 // "1h 25m" / "12.5m"
 export function formatDuration(min) {
-  if (min < 60) return `${round1(min)}m`;
-  const h = Math.floor(min / 60);
-  const m = round1(min - h * 60);
+  const r = round1(min); // round first so 119.96 shows as 2h, not 1h 60m
+  if (r < 60) return `${r}m`;
+  const h = Math.floor(r / 60);
+  const m = round1(r - h * 60);
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 

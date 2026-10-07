@@ -59,13 +59,17 @@ randomness adds luck and variety. Starting numbers are round.
   "% searched" with a visual fill). Each item has a hidden depth; it is found when the cell's
   searched % passes its depth. **At base efficiency (50%) two searches finish a cell**; search
   efficiency bonuses move more of a cell's items into the first search.
-- Ore sight: each searched cell has a chance to reveal everything still in it.
+- Ore sight: each searched cell that still has something hidden after the search (not just finished)
+  has a chance to reveal everything still in it.
 - Debris covers some cells; it blocks searching until cleared (costs time). Debris cells are a bit richer.
 - **Regrowth:** each night every searched cell (partly or fully) has a 5% chance to become a
   fresh, unsearched cell with new hidden contents (and a new debris roll). Items lying on the
   ground stay. This keeps the endless game supplied; never-searched cells do not change.
 - Bag: 20 slots, 1 raw item per slot. If full, found items stay on the ground (visible, can pick up later).
-  Items can be dropped. Arriving at camp unloads the bag into unlimited storage.
+  Items can be dropped, and picked up one by one or all at once (free). A free pick-up may not make the
+  walk home end after 18:00, except to refill the bag to the size it had after the last timed field action
+  (so "drop everything, search, pick it all back up" doesn't beat the time rule, but late swaps work).
+  Arriving at camp unloads the bag into unlimited storage.
 
 ## Processing
 - Refine ores into bars: copper, iron, steel (iron + coal), mythril. Cut gems. Better ores take a bit
@@ -131,7 +135,8 @@ randomness adds luck and variety. Starting numbers are round.
   refining/cutting time, bar grade luck, gem grade luck.
 - Adventurer rings: piercing, pierce resistance, magic damage, magic resistance, stun resistance,
   accuracy, dodge, slow resistance, speed, health.
-- Smith rings can be swapped any time and apply at once. Adventurer rings are chosen as part of the
+- Smith rings apply at once but can only be swapped at the start of a day (8:00 at camp, before the first
+  action) or while planning at night, so the 10-ring limit is a real choice. Adventurer rings are chosen as part of the
   nightly plan; toggling an adventurer ring on the Rings tab outside the plan only changes the default
   selection for tonight's plan, never today's fight.
 

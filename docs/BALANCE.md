@@ -447,7 +447,8 @@ the bot ends runs at about level 4 (2% faster).
 | Ore sight ring | `CONFIG.rings.types.reveal.values` | 3 / 4 / 5 / 6 / 7 points (D…S) |
 
 **Formula.** `revealChance = intelChance('oreSight') + oreSightRingTotal` (points). After every search,
-each searched cell that is not yet revealed rolls this chance once. A revealed cell shows every item still
+each searched cell that is not yet revealed and still has something hidden (the search did not just finish
+it) rolls this chance once. A revealed cell shows every item still
 hidden in it (you still have to search to collect them). There is no cap: 100% or more always reveals.
 A regrown cell starts unrevealed again.
 
@@ -467,7 +468,9 @@ spends intel on it.
 | Bag slots | `CONFIG.bag.slots` | 20 (1 raw ore or raw gem per slot) |
 
 **Rules.** When the bag is full, found items stay on the ground of their cell (visible, free to pick up
-later). Items can be dropped onto a cell in the current field for free. Arriving at camp unloads the whole
+later, one by one or all at once). Items can be dropped onto a cell in the current field for free. A free
+pick-up may not make the walk home end after 18:00, except to refill the bag to the size it had after the
+last timed field action (`pickUpLimit` in map.js). Arriving at camp unloads the whole
 bag into unlimited camp storage. Each item in the bag adds `loadPenaltyPerItem` (1%) to travel time.
 
 **Worked example** (economy report, section 3a). One trip from 8:00 to a distance-2 field: 88 min of
@@ -1147,8 +1150,8 @@ Low/High spread.
 | Types and values | `CONFIG.rings.types.<type>.values` | [D, C, B, A, S], see table |
 
 Every defeated enemy drops one ring. Its type is uniform over all 17 types (5.9% each; 7 of 17 are smith
-rings), its grade comes from the tier's weights. No ring on a loss or draw. Smith rings can be changed any
-time and apply at once. Adventurer rings are chosen in the nightly plan (max 10); wearing or removing an
+rings), its grade comes from the tier's weights. No ring on a loss or draw. Smith rings apply at once but
+can only be changed at the start of a day (8:00 at camp, before the first action) or while planning at night. Adventurer rings are chosen in the nightly plan (max 10); wearing or removing an
 adventurer ring on the Rings tab only changes the default selection for tonight's plan, never today's fight.
 
 | Ring | Owner | D / C / B / A / S | Effect (where it goes in the formulas) |

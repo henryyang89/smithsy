@@ -37,12 +37,38 @@ export const STAT_LABELS = {
   slowRed: 'Slow reduction %',
   slowDurRed: 'Slow duration reduction %',
   pierce: 'Piercing %',
-  pierceRes: 'Pierce resistance',
+  pierceRes: 'Pierce resistance %',
 };
+
+// Plain names and units for running text: "Defense 10.8%", "Stun duration 1s".
+export const STAT_NAMES = {
+  damage: ['Damage', ''],
+  accuracy: ['Accuracy', ''],
+  defense: ['Defense', '%'],
+  dodge: ['Dodge', ''],
+  speed: ['Speed', '%'],
+  magicPct: ['Magic damage', '% of weapon'],
+  magicRes: ['Magic resist', '%'],
+  stunChance: ['Stun chance', '%'],
+  stunDur: ['Stun duration', 's'],
+  stunChanceRed: ['Stun chance reduction', '%'],
+  stunDurRed: ['Stun duration reduction', '%'],
+  slowPct: ['Slow', '%'],
+  slowDur: ['Slow duration', 's'],
+  slowRed: ['Slow reduction', '%'],
+  slowDurRed: ['Slow duration reduction', '%'],
+  pierce: ['Piercing', '%'],
+  pierceRes: ['Pierce resistance', '%'],
+};
+
+export function fmtStat(k, v) {
+  const [name, unit] = STAT_NAMES[k] || [k, ''];
+  return `${name} ${round1(v)}${unit}`;
+}
 
 export function statsText(stats) {
   return Object.entries(stats)
-    .map(([k, v]) => `${STAT_LABELS[k] || k} ${round1(v)}`)
+    .map(([k, v]) => fmtStat(k, v))
     .join(', ');
 }
 

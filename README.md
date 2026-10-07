@@ -75,7 +75,7 @@ While the battle report, the plan screen or the game-over screen is open, the **
 **Log** and **Help** tabs stay available so you can check numbers before deciding.
 
 **Other tabs.** **Rings**: wear up to 10 smith rings (they speed up and improve your own work and apply at
-once). Adventurer rings marked as worn there are only the default selection for tonight's plan; the plan
+once; swap them at the start of a day or while planning at night). Adventurer rings marked as worn there are only the default selection for tonight's plan; the plan
 screen decides what the adventurer actually wears, and changes never affect today's fight.
 **Skills & Intel**: skills level up automatically as you work; an intel point arrives every 5 days and
 improves enemy scouting, ring scouting or ore sight. **Log**: everything that happened. **Help**: rules plus

@@ -61,7 +61,7 @@ export function refine(state, bar, cfg = CONFIG) {
   if (err) return { ok: false, msg: err };
   const r = cfg.refine[bar];
   if (!r) return { ok: false, msg: 'Unknown bar.' };
-  if (!canRefine(state, bar, cfg)) return { ok: false, msg: `Not enough ore for a ${bar} bar.` };
+  if (!canRefine(state, bar, cfg)) return { ok: false, msg: `Not enough ore for 1 ${bar} bar.` };
   const minutes = refineMinutes(state, bar, cfg);
   if (state.time + minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
   for (const [ore, n] of Object.entries(r.input)) state.storage.ore[ore] -= n;
@@ -74,7 +74,7 @@ export function refine(state, bar, cfg = CONFIG) {
   if (grade === 'F') return { ok: true, grade, minutes, notes, msg: `Refining ${bar} failed (${round1(minutes)}m). Ore lost.` };
   const k = `${bar}:${grade}`;
   state.storage.bars[k] = (state.storage.bars[k] || 0) + 1;
-  return { ok: true, grade, minutes, notes, msg: `Refined a ${grade}-grade ${bar} bar (${round1(minutes)}m).` };
+  return { ok: true, grade, minutes, notes, msg: `Refined 1 ${grade}-grade ${bar} bar (${round1(minutes)}m).` };
 }
 
 export function cut(state, gem, cfg = CONFIG) {
@@ -94,7 +94,7 @@ export function cut(state, gem, cfg = CONFIG) {
   if (grade === 'F') return { ok: true, grade, minutes, notes, msg: `Cutting ${gem} failed (${round1(minutes)}m). Gem lost.` };
   const k = `${gem}:${grade}`;
   state.storage.cut[k] = (state.storage.cut[k] || 0) + 1;
-  return { ok: true, grade, minutes, notes, msg: `Cut a ${grade}-grade ${gem} (${round1(minutes)}m).` };
+  return { ok: true, grade, minutes, notes, msg: `Cut 1 ${grade}-grade ${gem} (${round1(minutes)}m).` };
 }
 
 // Repeat an action until it fails (out of material or time). Returns a combined result.

@@ -85,9 +85,9 @@ export async function estimateWinChance(params, opts = {}, onProgress = null, cf
     }
   }
   return {
-    winPct: (wins / fights) * 100,
+    winPct: fights ? (wins / fights) * 100 : 0,
     fights,
-    avgTime: timeSum / fights,
+    avgTime: fights ? timeSum / fights : 0,
     avgHpLeftPct: wins ? (hpSum / wins) * 100 : 0,
     usage: combos.map((lo, i) => ({ items: lo.map((g) => g.id), count: usage[i] })).filter((u) => u.count > 0).sort((a, b) => b.count - a.count),
   };
@@ -112,5 +112,5 @@ export function estimateWinChanceSync(params, opts = {}, cfg = CONFIG) {
       fights++;
     }
   }
-  return { winPct: (wins / fights) * 100, fights };
+  return { winPct: fights ? (wins / fights) * 100 : 0, fights };
 }

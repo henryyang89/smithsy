@@ -92,7 +92,7 @@ function statsPanel(ctx) {
       best.length ? `"Best gear" = the strongest-looking owned item per slot (${best.length}).` : 'No gear owned yet.'),
     combatStatsTable([
       { label: 'Base', c: adventurerCombatant([], {}, cfg) },
-      { label: '+ worn rings', c: adventurerCombatant([], rt, cfg) },
+      { label: "+ tonight's rings", c: adventurerCombatant([], rt, cfg) },
       { label: '+ best gear', c: adventurerCombatant(best, rt, cfg) },
     ]),
     h('h4', { class: 'adv-h4' }, `Worn adventurer rings (${worn.length}/${cfg.rings.maxWorn})`),

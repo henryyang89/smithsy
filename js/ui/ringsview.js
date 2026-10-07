@@ -2,7 +2,7 @@
 // All game-state changes go through toggleRing() inside ctx.act(). UI-only state: ctx.ui.rings_filter.
 import { h, num } from './dom.js';
 import { GRADES, TIERS } from '../config.js';
-import { toggleRing, ringTotals, ringContributions, ringValue, ringDef, wornRings } from '../core/rings.js';
+import { toggleRing, ringTotals, ringContributions, ringValue, ringDef, wornRings, smithRingLock } from '../core/rings.js';
 import { cap } from '../core/util.js';
 
 const OWNERS = ['smith', 'adventurer'];
@@ -89,7 +89,7 @@ function summaryPanel(ctx) {
       kpi('Adventurer wears', `${worn.adventurer} / ${max}`, 'default for tonight\'s plan')),
     h('ul', { class: 'mi-list' },
       h('li', {}, `Each wearer can wear up to ${max} rings. Rings of the same type stack with diminishing returns: the best counts ${weights}, and so on.`),
-      h('li', {}, h('b', {}, 'Smith rings'), ' (travel, searching, refining, grade luck) take effect immediately.'),
+      h('li', {}, h('b', {}, 'Smith rings'), ' (travel, searching, refining, grade luck) apply at once, but can only be swapped at the start of a day (before your first action) or while planning at night, so the 10-ring limit is a real choice.'),
       h('li', {}, h('b', {}, 'Adventurer rings'), ' marked as worn are pre-selected on the plan screen at the end of the day. The plan screen decides what the adventurer actually takes.')),
     state.rings.length ? null : h('p', { class: 'muted' }, 'No rings yet. Each defeated enemy drops one ring (drop odds below).'),
     today);
@@ -139,10 +139,11 @@ function ownerPanel(ctx, owner) {
       const gain = ringTotals([...worn, r], cfg)[r.type] - (totals[r.type] || 0);
       counts = h('span', { class: 'muted', title: 'How much the total for this type would rise if you wore it now' }, `+${num(gain, 2)} if worn`);
     }
+    const lock = owner === 'smith' ? smithRingLock(state, cfg) : null;
     const btn = h('button', {
       class: r.worn ? 'small ghost' : 'small',
-      disabled: !r.worn && full,
-      title: r.worn ? 'Take this ring off' : full ? `Already wearing ${max} ${owner} rings. Remove one first.` : 'Put this ring on',
+      disabled: !!lock || (!r.worn && full),
+      title: lock || (r.worn ? 'Take this ring off' : full ? `Already wearing ${max} ${owner} rings. Remove one first.` : 'Put this ring on'),
       onclick: () => toggle(r),
     }, r.worn ? 'Remove' : 'Wear');
     return {
@@ -190,7 +191,7 @@ function ownerPanel(ctx, owner) {
     : h('p', { class: 'muted' }, 'Nothing worn.');
 
   const note = owner === 'smith'
-    ? 'Worn smith rings apply right now, on top of your skills.'
+    ? (smithRingLock(state, cfg) ? 'Worn smith rings apply on top of your skills. Locked for today: change them at the start of a day or while planning at night.' : 'Worn smith rings apply on top of your skills. You can change them now (start of day or night planning); they lock once you start working.')
     : state.plan
       ? 'Worn = the default selection for tonight\'s plan (today\'s fight already has its rings).'
       : 'Worn = the default selection for tonight\'s plan.';

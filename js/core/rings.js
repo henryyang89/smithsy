@@ -58,10 +58,23 @@ export function rollRing(rng, tier, cfg = CONFIG) {
   return { type, grade };
 }
 
+// Smith rings can be changed while planning at night or at the very start of the day (8:00 at camp),
+// so the 10-ring limit is a real choice for the whole day. Returns a reason string, or null.
+export function smithRingLock(state, cfg = CONFIG) {
+  if (state.phase === 'plan' || state.phase === 'report') return null;
+  if (state.phase !== 'work') return 'The game is over.';
+  const atCamp = state.location.x === state.map.camp.x && state.location.y === state.map.camp.y;
+  if (state.time <= cfg.time.dayStartMin + 1e-9 && atCamp) return null;
+  return 'Smith rings can only be changed at the start of the day (before your first action) or while planning at night.';
+}
+
 export function toggleRing(state, id, cfg = CONFIG) {
   const ring = state.rings.find((r) => r.id === id);
   if (!ring) return { ok: false, msg: 'No such ring.' };
   const owner = ringDef(ring.type, cfg).owner;
+  const lock = smithRingLock(state, cfg);
+  if (owner === 'smith' && lock) return { ok: false, msg: lock };
+  if (state.phase === 'over') return { ok: false, msg: 'The game is over.' };
   if (!ring.worn && wornRings(state, owner, cfg).length >= cfg.rings.maxWorn) {
     return { ok: false, msg: `The ${owner} already wears ${cfg.rings.maxWorn} rings.` };
   }

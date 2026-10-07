@@ -437,9 +437,21 @@ function planSel(ctx) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   let p = ctx.ui.plan;
+  const wornNow = defaultRingIds(s, cfg);
   if (!p || p.rosterDay !== s.roster.day || p.seed !== s.seed) {
-    p = ctx.ui.plan = { rosterDay: s.roster.day, seed: s.seed, enemyIndex: null, gearIds: defaultGearIds(s, cfg), ringIds: defaultRingIds(s, cfg) };
+    const ringIds = [...wornNow];
+    // a ring won today is pre-selected when there is room (the player can untick it)
+    const won = s.report && s.report.ring;
+    if (won && isAdvRing(won, cfg) && !ringIds.includes(won.id) && ringIds.length < cfg.rings.maxWorn && s.rings.some((r) => r.id === won.id)) ringIds.push(won.id);
+    p = ctx.ui.plan = { rosterDay: s.roster.day, seed: s.seed, enemyIndex: null, gearIds: defaultGearIds(s, cfg), ringIds, wornKey: sortedIds(wornNow) };
     ctx.ui.plan_est = {};
+  } else if (p.wornKey !== sortedIds(wornNow)) {
+    // rings worn / removed on the Rings tab while planning: apply the difference to the plan
+    const before = new Set((p.wornKey || '').split(',').filter(Boolean).map(Number));
+    const now = new Set(wornNow);
+    p.ringIds = p.ringIds.filter((id) => !(before.has(id) && !now.has(id)));
+    for (const id of wornNow) if (!before.has(id) && !p.ringIds.includes(id) && p.ringIds.length < cfg.rings.maxWorn) p.ringIds.push(id);
+    p.wornKey = sortedIds(wornNow);
   }
   ctx.ui.plan_est ||= {};
   p.gearIds = p.gearIds.filter((id) => s.gear.some((g) => g.id === id));
@@ -822,6 +834,16 @@ function confirmBar(ctx, p, sel, selGear, selRings, est, running, key, err) {
           ctx.toast(e2, 'err');
           return;
         }
+        // A loss ends the game, so double-check risky plans.
+        const warn = [];
+        const st = ctx.state;
+        if (st.gear.length && !plan.gearIds.length) warn.push('You own gear but packed none.');
+        for (const slot of SLOTS) {
+          if (st.gear.some((g) => g.slot === slot) && !plan.gearIds.some((id) => st.gear.find((g) => g.id === id)?.slot === slot)) warn.push(`No ${slot} packed, though you own one.`);
+        }
+        const est = ctx.ui.plan_est && ctx.ui.plan_est[estKey(st, p)];
+        if (est && est.winPct < 50) warn.push(`Estimated win chance is only ${f1(est.winPct)}%.`);
+        if (warn.length && !confirm(`${warn.join('\n')}\n\nA lost fight ends the game. Confirm anyway?`)) return;
         const res = ctx.act(() => Game.confirmPlan(ctx.state, plan, ctx.cfg));
         if (res && res.ok) {
           ctx.ui.plan = null;
