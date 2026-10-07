@@ -758,7 +758,7 @@ function economySection(o) {
   );
   const xpL10 = (cfg.skills.xpBase * maxSk * (maxSk + 1)) / 2;
   note(`Per-material skills need ${xpL10} XP for level ${maxSk} = items of that one material: ` +
-    [...BARS, ...GEMS].map((m) => `${m} ${f0(xpL10 / Math.max(1e-9, itemXp(m, cfg)))}`).join(', ') + '.');
+    [...BARS, ...GEMS].map((m) => `${m} ${Math.ceil(xpL10 / Math.max(1e-9, itemXp(m, cfg)) - 1e-9)}`).join(', ') + '.');
 
   // ---- 5. full sets
   h2('5. A full 5-piece set (sword 2 + chest 3 + helmet 2 + gloves 2 + boots 2 = 11 bars)');

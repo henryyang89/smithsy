@@ -45,7 +45,7 @@ export const CONFIG = {
     boulders: 1, // cells per field covered by a boulder: can never be cleared or searched
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
     // Regrowth: each night, every searched cell has this % chance to reset to a fresh, unsearched cell
-    // with new hidden contents (items on the ground stay). OFF (0) for now: fields do not regrow.
+    // with new hidden contents (boulders and the field's pile stay). OFF (0) for now: fields do not regrow.
     regrowPctPerDay: 0,
     // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
     lootChance: { base: 50, perDistance: 5, max: 80 },

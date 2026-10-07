@@ -380,5 +380,8 @@ from old piles), piles at end 591 (2.7 worth), debris 3.9% of effort | gems cut 
   start-up box); every changed number and worked example recomputed with the core modules; results
   regenerated (`--section economy`, `--section power` (identical to 1.0), `--section bot --seeds 40`, plus
   `--immortal`, all five ablations, the regrowth-5% and `--carry default` what-ifs at 40 seeds, and a
-  1.0-vs-1.1 bot comparison on 120 seeds).
+  1.0-vs-1.1 bot comparison on 120 seeds). The refresh was interrupted by a usage limit and finished in
+  a second pass: all four files re-checked against the code, every bot/economy/power number re-run and
+  matched, two small fixes (184 sapphire cuts for level 10; debris-skill pace about 55 / 140 searches to
+  levels 3 / 5).
   (Update this section each session.)

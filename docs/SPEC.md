@@ -93,9 +93,9 @@ randomness adds luck and variety. Starting numbers are round.
   what to carry" step lists the bag and the pile with a checkbox per item: up to 20 items (1 raw ore or
   gem per slot) can be carried, and the rest stays in the pile. The default is "Rarest first": keep the
   bag, then fill the free slots from the pile in the order mythril, diamond, emerald, sapphire, topaz,
-  ruby, coal, iron, copper. "Keep current bag" and "Clear" are one-click alternatives; the step shows the
-  travel time for the chosen load and refuses a load that could not get back to camp by 18:00 (for a
-  field-to-field trip). Arriving at camp unloads everything carried into unlimited storage.
+  ruby, coal, iron, copper. "Keep current bag" and "Clear" (carry nothing) are one-click alternatives;
+  the step shows the travel time for the chosen load and refuses a load that could not get back to camp
+  by 18:00 (for a field-to-field trip). Arriving at camp unloads everything carried into unlimited storage.
 
 ## Processing
 - Refine ores into bars: copper, iron, steel (iron + coal), mythril. Cut gems. Better ores take a bit

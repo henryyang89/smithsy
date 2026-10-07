@@ -881,7 +881,7 @@ minutes per C-or-better bar; gems 50 minutes per C-or-better cut gem for a novic
 grade makes matching sets of that grade more common. F is a flat material tax. Upgrade luck is weak per
 point (each point moves 1% of each grade up one step), which is why rings give only 2–6. For gems the two
 tables set where a cutter starts and ends, and `gemGrade.perLevel` how fast practice pays (10 = the master
-table at level 10, after 220 ruby or topaz cuts, 183 sapphire, 138 emerald or 110 diamond). A novice's
+table at level 10, after 220 ruby or topaz cuts, 184 sapphire, 138 emerald or 110 diamond). A novice's
 gems are worth about a fifth less than with 1.0's fixed table and a master's about a tenth more; the bot
 cuts about 310 gems per run (F 13%, D 34%, C 25%, B 15%, A 8%, S 4%) and ends with gem skills between 3.1
 (topaz) and 5.8 (emerald). Processing times (15 → 30 min) were raised so that refining and cutting take a
@@ -1672,9 +1672,10 @@ because searches get faster as the skill grows and XP = minutes). Refining 60 my
 gives 3,000 XP: Mythril bar grade and Mythril refining reach level 7 = +2.1% upgrade luck and −3.5 failure
 points. Cutting 60 rubies gives 1,500 XP: Ruby grade and Ruby cutting reach level 5, the halfway table
 (F 12.5, D 32.5, C 25, B 16, A 9.5, S 4.5). Clearing one 40-thick debris cell gives 40 Debris clearing XP,
-so level 1 (+10%) comes after two or three debris cells and level 3 (+30%, 600 XP) after about 15; a
-greedy searcher reaches level 3 after about 70 searches and level 5 after about 150 (a map holds about
-7,550 debris points, level 10 needs 5,500).
+so level 1 (+10%) comes after two or three debris cells and level 3 (+30%, 600 XP) after about 15. A
+field holds about 380 debris points, cleared over its ~35 searches, so a searcher working through whole
+fields reaches level 3 after about 55 searches and level 5 after about 140 (a map holds about 7,550 debris
+points, level 10 needs 5,500).
 
 **What the bot reaches** by the end of a run (about day 53, mean levels): activity skills from 6 to 9
 (search speed and efficiency 8.9, debris clearing 8.7, cutting 8.1, refining 6.9, return travel 6.3) and
