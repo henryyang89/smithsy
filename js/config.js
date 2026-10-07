@@ -157,12 +157,12 @@ export const CONFIG = {
     slowDuration: 2.0, // seconds, when an enemy with Chilling hits
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1)
     growthPerDay: { hpDamage: 3, ratings: 1 }, // HP & damage +3%/day, accuracy & dodge +1%/day
-    // Tiers differ mostly by attribute levels (normal: 6 low, champion: 6 high) and defense,
-    // so base HP/damage stay close together.
+    // All tiers share the same base HP / damage / defense: tiers differ only by attribute levels
+    // (normal: 6 low, elite: 3 low / 3 high, champion: 6 high) and by their score and ring rewards.
     tiers: {
       normal: { count: 2, hp: 80, damage: 8, defense: 20, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 80, damage: 9, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 90, damage: 10, defense: 30, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      elite: { count: 3, hp: 80, damage: 8, defense: 20, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 80, damage: 8, defense: 20, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
     attributes: {
