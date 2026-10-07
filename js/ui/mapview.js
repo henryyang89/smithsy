@@ -4,7 +4,7 @@
 import { h, section, bar } from './dom.js';
 import {
   travel, search, clearDebris, pickUp, dropItem, travelMinutes, returnMinutes, searchMinutes,
-  searchEfficiency, debrisMinutesPerCell, fieldProgress, areaCells, atCamp, currentField, mapCell,
+  searchEfficiency, searchEfficiencyRange, debrisMinutesPerCell, fieldProgress, areaCells, atCamp, currentField, mapCell,
   itemKind, itemType, key, timeLeft, pickUpLimit,
 } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
@@ -20,6 +20,22 @@ const clock = (m) => formatClock(m);
 // "3.5%" below 10, otherwise whole numbers rounded down (so 99.6% never reads as 100%).
 const pctText = (v) => `${v > 0 && v < 10 ? round1(v) : Math.floor(v + 1e-6)}%`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// Search depth per search: each cell rolls its own amount in [lo, hi] around the average.
+// Returns { eff, lo, hi, range: '30–40%', avg: '35%', finish: '3–4' (searches to finish a cell) }.
+function searchDepth(state, cfg) {
+  const eff = searchEfficiency(state, cfg);
+  const [lo, hi] = searchEfficiencyRange(state, cfg);
+  const toFinish = (e) => (e > 0 ? String(Math.ceil(100 / e - 1e-9)) : '?');
+  const finish = toFinish(hi) === toFinish(lo) ? toFinish(hi) : `${toFinish(hi)}–${toFinish(lo)}`;
+  return {
+    eff, lo, hi,
+    range: hi - lo > EPS ? `${round1(lo)}–${round1(hi)}%` : `${round1(eff)}%`,
+    avg: `${round1(eff)}%`,
+    random: hi - lo > EPS,
+    finish,
+  };
+}
 
 function itemName(t) {
   const type = itemType(t);
@@ -241,10 +257,17 @@ function campHint(ctx) {
     h('div', { class: 'mv-kv' },
       h('span', { class: 'muted' }, 'Now'), h('span', {}, `${clock(state.time)} - ${left > 0 ? `${dur(left)} left` : 'day over'} (day ends ${clock(cfg.time.dayEndMin)})`),
       h('span', { class: 'muted' }, 'Walking'), h('span', {}, `${cfg.map.travelMinPerStep}m per step, +${cfg.map.loadPenaltyPerItem}% per item in the bag${b.travelPct ? `, -${round1(b.travelPct)}% (rings)` : ''}${b.returnPct ? `, -${round1(b.returnPct)}% more on the way home (skill)` : ''}`),
-      h('span', { class: 'muted' }, 'Searching'), h('span', {}, `${dur(searchMinutes(state, cfg))} per 3x3 area, each search digs ${round1(searchEfficiency(state, cfg))}% deeper into every cell`),
+      h('span', { class: 'muted' }, 'Searching'), h('span', {}, (() => {
+        const sd = searchDepth(state, cfg);
+        return sd.random
+          ? `${dur(searchMinutes(state, cfg))} per 3x3 area; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so ${sd.finish} searches finish a cell`
+          : `${dur(searchMinutes(state, cfg))} per 3x3 area; each search digs ${sd.avg} deeper into every cell, so ${sd.finish} searches finish a cell`;
+      })()),
       h('span', { class: 'muted' }, 'Ore sight'), h('span', {}, `${round1(b.revealPct)}% chance per searched cell to reveal everything still in it`),
       h('span', { class: 'muted' }, 'Reachable'), h('span', { class: reachable ? '' : 'warn' }, `${reachable} of ${fields.length} fields are close enough to go to and be back by ${clock(cfg.time.dayEndMin)}`),
-      regrow > 0 ? [h('span', { class: 'muted' }, 'Regrowth'), h('span', {}, `searched cells have a ${round1(regrow)}% chance each night to turn fresh and unsearched, with new hidden items`)] : null),
+      h('span', { class: 'muted' }, 'Regrowth'), regrow > 0
+        ? h('span', {}, `searched cells have a ${round1(regrow)}% chance each night to turn fresh and unsearched, with new hidden items`)
+        : h('span', {}, 'none: fields do not regrow, a searched cell stays searched')),
     h('p', { class: 'muted mv-note' }, `You may only head out, search or clear debris if there is still time to walk back by ${clock(cfg.time.dayEndMin)} with your current load. The walk home itself is always allowed. Arriving at camp unloads the bag (${cfg.bag.slots} slots) into storage.`),
     h('div', { class: 'mv-stored' }, h('span', { class: 'muted' }, 'In storage: '),
       stored.length ? stored.map(([t, v]) => h('span', { class: 'chip' }, itemTag(t), ` ${v}`)) : h('span', { class: 'muted' }, 'no raw ore or gems yet')));
@@ -380,7 +403,8 @@ function actionsPanel(ctx, field, sel) {
   const debris = cells.filter((c) => c.debris).length;
   const done = cells.filter(isDone).length;
   const sMin = searchMinutes(state, cfg);
-  const eff = searchEfficiency(state, cfg);
+  const sd = searchDepth(state, cfg);
+  const eff = sd.eff;
   const per = debrisMinutesPerCell(state, cfg);
   const cMin = round1(per * debris);
   const items = state.bag.length;
@@ -394,14 +418,14 @@ function actionsPanel(ctx, field, sel) {
 
   // Search
   const sFits = fitsWithReturn(state, sMin, cfg);
-  const sParts = [`${dur(sMin)}: ${plural(searchable, 'cell')} get +${round1(eff)}% searched`];
+  const sParts = [`${dur(sMin)}: ${plural(searchable, 'cell')} get +${sd.range} searched${sd.random ? ` (${sd.avg} avg)` : ''}`];
   if (debris) sParts.push(`${debris} under debris skipped`);
   if (done) sParts.push(`${done} already done`);
   if (searchable) sParts.push(`done at ${clock(state.time + sMin)}`);
   const sWhy = !searchable ? 'Nothing left to search in this area.' : !sFits ? lateMsg(sMin) : !free ? 'Bag is full: anything found stays on the ground.' : null;
   const bonusBits = [];
   if (sMin < cfg.field.searchMin - EPS) bonusBits.push(`time ${cfg.field.searchMin}m -${round1(b.searchTimePct)}%`);
-  if (eff > cfg.field.searchEfficiency + EPS) bonusBits.push(`depth ${cfg.field.searchEfficiency}% +${round1(b.searchEffPct)}%`);
+  if (eff > cfg.field.searchEfficiency + EPS) bonusBits.push(`depth ${cfg.field.searchEfficiency}% avg +${round1(b.searchEffPct)}% = ${sd.avg} avg`);
 
   // Clear debris
   const cFits = debris > 0 && fitsWithReturn(state, cMin, cfg);
@@ -434,7 +458,10 @@ function actionsPanel(ctx, field, sel) {
       actRow('Clear debris', () => doClear(ctx, sel), !cFits, debris ? `${debris} × ${dur(per)} = ${dur(cMin)} · done at ${clock(state.time + cMin)}` : '0 debris cells in this area', cWhy, null, { id: 'clear' }),
       actRow('Pick up', () => doPickUp(ctx, sel), !!pWhy, `${plural(g, 'item')} on the ground in ${cellLabel(sel, n)} · no time · ${plural(free, 'free slot')}`, g ? pWhy : null, null, { id: 'pickup' }),
       actRow('Return to camp', () => doTravel(ctx, state.map.camp), false, `${dur(ret)} · arrive ${clock(state.time + ret)}${items ? ` · unloads ${plural(items, 'item')} into storage` : ''}`, null, null, { id: 'return' })),
-    h('p', { class: 'muted mv-note' }, `Each search digs ${round1(eff)}% deeper into every searchable cell of the area. Hidden items are found once the searched % passes their random depth (0-100%).`));
+    h('p', { class: 'muted mv-note' }, sd.random
+      ? `Each search digs ${sd.range} deeper into every searchable cell of the area: ${sd.avg} on average, and each cell rolls its own amount (±${cfg.field.searchRandomness}), so ${sd.finish} searches finish a cell. `
+      : `Each search digs ${sd.avg} deeper into every searchable cell of the area, so ${sd.finish} searches finish a cell. `,
+    'Hidden items are found once the searched % passes their random depth (0-100%).'));
 }
 
 function cellPanel(ctx, field, sel) {
@@ -537,7 +564,7 @@ function legend(ctx) {
     h('div', { class: 'mv-leg-title muted' }, 'Field cells'),
     h('div', { class: 'mv-legend mv-field' },
       item(swatch('', ''), 'Not searched yet'),
-      item(swatch('mv-partial', h('span', { class: 'mv-pct' }, '50%'), { fill: 50 }), 'Partly searched: the fill rises with % searched'),
+      item(swatch('mv-partial', h('span', { class: 'mv-pct' }, `${Math.round(ctx.cfg.field.searchEfficiency)}%`), { fill: ctx.cfg.field.searchEfficiency }), 'Partly searched: the fill rises with % searched'),
       item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), (ctx.cfg.field.regrowPctPerDay || 0) > 0 ? 'Fully searched: nothing hidden left (until it regrows overnight)' : 'Fully searched: nothing hidden left'),
       item(swatch('debris', h('span', { class: 'mv-debris-l' }, 'debris')), 'Debris: clear before searching (a bit richer)'),
       item(swatch('mv-revealed', [itemTag('ore:iron'), itemTag('gem:ruby')]), 'Revealed by ore sight: what is still in the cell'),

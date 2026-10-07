@@ -4,7 +4,9 @@ import { CONFIG, BARS, GEMS } from '../js/config.js';
 import { skillDefs, newSkills, xpToNext, addXp, skillBonus, itemXp } from '../js/core/skills.js';
 import { newIntel, gainForPoint, intelChanceFor, intelChance, nextIntelGain, spendIntel } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
-import { game, approx, addRing, setSkillLevel, cfgWith, ringVal } from './helpers.mjs';
+import { debrisMinutesPerCell, searchMinutes, searchEfficiency, returnMinutes } from '../js/core/map.js';
+import { refineDistribution, cutDistribution, refineMinutes, cutMinutes } from '../js/core/processing.js';
+import { game, approx, addRing, setSkillLevel, cfgWith, ringVal, fieldAt } from './helpers.mjs';
 
 // Pinned skill / intel numbers: the hand-computed expectations below hold whatever CONFIG says.
 const SK = cfgWith({
@@ -137,19 +139,81 @@ test('per-material skill descriptions show that material\'s XP', () => {
   for (const d of skillDefs()) if (d.group !== 'activity') assert.match(d.xpFrom, /^\d+(\.\d+)? XP per /, d.key);
 });
 
-test('skill bonuses are smaller than the matching best ring', () => {
-  const R = CONFIG.rings.types;
+// ---------------------------------------------------- spec rules (real config) ----
+// A level-10 (max level) skill is at least as strong as a C-grade ring of the same kind. Skills with
+// no ring: debris clearing is substantial (at least -40% time), failure skills at least -5 points.
+const MAX = CONFIG.skills.maxLevel;
+const allSkillsMax = () => {
+  const s = game(1);
+  for (const k of Object.keys(s.skills)) setSkillLevel(s, k, MAX);
+  return s;
+};
+
+test('spec: every max-level skill with a matching smith ring is at least that ring\'s C value', () => {
   const A = CONFIG.skills.activity;
-  const max = CONFIG.skills.maxLevel;
   const P = CONFIG.skills.perMaterial;
-  const best = (type) => Math.max(...R[type].values);
-  assert.ok(A.returnTravel.perLevel * max <= best('travelTime'));
-  assert.ok(A.searchTime.perLevel * max <= best('searchTime'));
-  assert.ok(A.searchEff.perLevel * max <= best('searchEff'));
-  assert.ok(A.refineTime.perLevel * max <= best('processTime'));
-  assert.ok(A.cutTime.perLevel * max <= best('processTime'));
-  assert.ok(P.oreGrade.perLevel * max <= best('oreGrade'));
-  assert.ok(P.gemGrade.perLevel * max <= best('gemGrade'));
+  const pairs = [
+    ['returnTravel', A.returnTravel.perLevel, 'travelTime'],
+    ['searchTime', A.searchTime.perLevel, 'searchTime'],
+    ['searchEff', A.searchEff.perLevel, 'searchEff'],
+    ['refineTime', A.refineTime.perLevel, 'processTime'],
+    ['cutTime', A.cutTime.perLevel, 'processTime'],
+    ['oreGrade', P.oreGrade.perLevel, 'oreGrade'],
+    ['gemGrade', P.gemGrade.perLevel, 'gemGrade'],
+  ];
+  for (const [skill, perLevel, ring] of pairs) {
+    assert.equal(CONFIG.rings.types[ring].owner, 'smith', ring);
+    assert.ok(perLevel * MAX >= ringVal(ring, 'C') - 1e-9, `${skill} at level ${MAX} = ${perLevel * MAX} < ${ring} C ring ${ringVal(ring, 'C')}`);
+  }
+});
+
+test('spec: in play, max-level skills give at least what worn C-grade smith rings give', () => {
+  const sk = allSkillsMax();
+  const rg = game(1);
+  for (const type of ['travelTime', 'searchTime', 'searchEff', 'processTime', 'oreGrade', 'gemGrade']) addRing(rg, type, 'C', true);
+  const a = smithBonuses(sk);
+  const b = smithBonuses(rg);
+  const ge = (x, y, what) => assert.ok(x >= y - 1e-9, `${what}: skill ${x} < ring ${y}`);
+  ge(a.returnPct, b.travelPct, 'return travel vs travel ring');
+  ge(a.searchTimePct, b.searchTimePct, 'search time');
+  ge(a.searchEffPct, b.searchEffPct, 'search efficiency');
+  ge(a.refineTimePct, b.refineTimePct, 'refine time');
+  ge(a.cutTimePct, b.cutTimePct, 'cut time');
+  for (const bar of BARS) ge(a.oreUpgrade(bar), b.oreUpgrade(bar), `${bar} bar grade`);
+  for (const gem of GEMS) ge(a.gemUpgrade(gem), b.gemUpgrade(gem), `${gem} grade`);
+  // and the actual times / efficiency the player sees
+  assert.ok(searchMinutes(sk) <= searchMinutes(rg) + 1e-9);
+  assert.ok(searchEfficiency(sk) >= searchEfficiency(rg) - 1e-9);
+  for (const bar of BARS) assert.ok(refineMinutes(sk, bar) <= refineMinutes(rg, bar) + 1e-9, bar);
+  for (const gem of GEMS) assert.ok(cutMinutes(sk, gem) <= cutMinutes(rg, gem) + 1e-9, gem);
+  const far = fieldAt(sk, 2);
+  assert.ok(returnMinutes(sk, far, 0) <= returnMinutes(rg, far, 0) + 1e-9, 'walk home');
+});
+
+test('spec: debris clearing at max level is substantial (at least 40% less time)', () => {
+  const bonus = CONFIG.skills.activity.debris.perLevel * MAX;
+  assert.ok(bonus >= 40, `debris skill at level ${MAX}: ${bonus}%`);
+  const s = game(1);
+  setSkillLevel(s, 'debris', MAX);
+  // the time cap does not eat the bonus (rounded to 0.1 minutes)
+  assert.ok(debrisMinutesPerCell(s) <= CONFIG.field.debrisClearMin * 0.6 + 0.05, `${debrisMinutesPerCell(s)} min per cell`);
+  assert.ok(approx(smithBonuses(s).debrisPct, bonus));
+});
+
+test('spec: max-level refining / cutting skills cut the failure chance by at least 5 points', () => {
+  const P = CONFIG.skills.perMaterial;
+  assert.ok(P.oreFail.perLevel * MAX >= 5 - 1e-9, `oreFail at level ${MAX}: ${P.oreFail.perLevel * MAX}`);
+  assert.ok(P.gemFail.perLevel * MAX >= 5 - 1e-9, `gemFail at level ${MAX}: ${P.gemFail.perLevel * MAX}`);
+  const s = allSkillsMax();
+  const plain = game(1);
+  for (const bar of BARS) {
+    const base = refineDistribution(plain, bar).F;
+    assert.ok(refineDistribution(s, bar).F <= Math.max(0, base - 5) + 1e-9, bar);
+  }
+  for (const gem of GEMS) {
+    const base = cutDistribution(plain, gem).F;
+    assert.ok(cutDistribution(s, gem).F <= Math.max(0, base - 5) + 1e-9, gem);
+  }
 });
 
 test('smithBonuses combines rings, skills and intel', () => {

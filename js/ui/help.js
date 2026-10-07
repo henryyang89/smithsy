@@ -9,6 +9,7 @@ import { STAT_LABELS, fmtStat, craftMinutes, repairInfo } from '../core/gear.js'
 import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
+import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade } from './skillsview.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 
 // ------------------------------------------------------------------ helpers ----
@@ -162,7 +163,8 @@ function howToPlay(ctx) {
         `(${cfg.bag.slots} slots). Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
       h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear.'),
       h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
-        `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings.`),
+        `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
+        h('b', {}, 'Repair gear at night'), ' (battle report or plan screen): it costs materials but no time.'),
       h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
         'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
         `It comes back at the end of the day; every item that was used loses ${wear.min}-${wear.max}% durability (0% = destroyed).`),
@@ -172,10 +174,10 @@ function howToPlay(ctx) {
       h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
       h('li', {}, 'The plan screen can simulate the fight to estimate your win chance before you confirm.'),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
-      h('li', {}, 'Skills level up on their own as you work (small bonuses). Farther fields are richer but cost more travel time.'),
+      h('li', {}, `Skills level up on their own as you work${commonSkillRingGrade(cfg) ? ` (a level-${cfg.skills.maxLevel} skill is as strong as a ${commonSkillRingGrade(cfg)}-grade ring of the same kind)` : ''}. Farther fields are richer but cost more travel time.`),
       (cfg.field.regrowPctPerDay || 0) > 0
         ? h('li', {}, `Searched cells slowly regrow: each night every searched cell has a ${p(cfg.field.regrowPctPerDay)} chance to become fresh and unsearched again.`)
-        : null));
+        : h('li', {}, 'Fields do not regrow: a searched cell stays searched for the rest of the run.')));
 }
 
 // -------------------------------------------------------------------- time ----
@@ -203,7 +205,7 @@ function timeSection(cfg) {
       ['Refine a bar', byMinutes(cfg.refine)],
       ['Cut a gem', byMinutes(cfg.cut)],
       ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem`],
-      ['Repair gear', `${p(g.repair.timeFraction)} of the smithing time x fraction repaired`],
+      ['Repair gear', `by day: ${p(g.repair.timeFraction)} of the smithing time x fraction repaired; at night (battle report / plan): no time`],
       ['Pick up / drop items, unload at camp', 'free'],
     ]),
   ];
@@ -235,7 +237,11 @@ function fieldSection(cfg) {
   const cells = f.size * f.size;
   const avg = avgCount(f.itemCountWeights);
   const countPct = toPct(f.itemCountWeights);
-  const searchesToFinish = Math.ceil(100 / f.searchEfficiency);
+  const rnd = f.searchRandomness || 0;
+  const effLo = Math.max(0, f.searchEfficiency - rnd);
+  const effHi = Math.min(100, f.searchEfficiency + rnd);
+  const toFinish = (e) => (e > 0 ? String(Math.ceil(100 / e - 1e-9)) : '?');
+  const searchesToFinish = toFinish(effHi) === toFinish(effLo) ? toFinish(effHi) : `${toFinish(effHi)}-${toFinish(effLo)}`;
   const regrow = f.regrowPctPerDay || 0;
   const lootRows = [];
   for (let d = 1; d <= maxDistance(cfg); d++) {
@@ -256,7 +262,10 @@ function fieldSection(cfg) {
   return [
     kv([
       ['Field', `${f.size} x ${f.size} = ${cells} cells. Contents are hidden.`],
-      ['Search', `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
+      ['Search', rnd > 0
+        ? `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} ± ${num(rnd)} "searched" to every cell in the area: each cell rolls its own amount (${p(effLo)}-${p(effHi)}), so ${searchesToFinish} searches finish a cell.`
+        : `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
+      ['Search efficiency', `${cfg.rings.types.searchEff ? `${cfg.rings.types.searchEff.name} rings` : 'Rings'} and the ${cfg.skills.activity.searchEff ? cfg.skills.activity.searchEff.name : 'search efficiency'} skill raise the average: average = ${p(f.searchEfficiency)} x (1 + bonus %).${rnd > 0 ? ` The ± ${num(rnd)} spread per cell stays the same.` : ''} The Map shows your current range.`],
       ['Hidden depth', 'Each item has a hidden depth from 0 to 100. It is found once the cell\'s searched % passes its depth. A fully searched cell gives up everything.'],
       ['Debris', `${p(f.debrisChance)} of cells. Blocks searching until cleared (${mins(f.debrisClearMin)} per cell; clearing works on a 3x3 area). Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
       ['Ore sight', `Each searched cell has a chance to reveal everything still in it: ${p(cfg.intel.tracks.oreSight.base)} base (intel), plus intel points and Ore sight rings.`],
@@ -265,7 +274,7 @@ function fieldSection(cfg) {
       ['Full bag', 'Found items stay on the ground (visible); pick them up later.'],
       ['Regrowth', regrow > 0
         ? `Each night, every searched cell (even partly searched) has a ${p(regrow)} chance to become a fresh, unsearched cell with new hidden contents rolled for its distance (it may get debris again). Items lying on the ground stay. A fully searched field regrows about ${num((cells * regrow) / 100, 2)} cells per night.`
-        : 'Searched cells do not regrow.'],
+        : 'Off: fields do not regrow. A searched cell stays searched for the rest of the run.'],
     ]),
     sub('Richness by distance from camp'),
     tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
@@ -546,7 +555,11 @@ function skillSection(cfg) {
   }
   const defs = skillDefs(cfg);
   const activity = defs.filter((d) => d.group === 'activity');
-  const actRows = activity.map((d) => [h('b', {}, d.name), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc, d.xpFrom]);
+  const ringCell = (key) => {
+    const m = skillRingMatch(key, cfg);
+    return m ? skillRingText(m) : h('span', { class: 'muted' }, 'no ring');
+  };
+  const actRows = activity.map((d) => [h('b', {}, d.name), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, ringCell(d.key), d.desc, d.xpFrom]);
   const xpRange = (mats) => {
     const xs = mats.map((m) => itemXp(m, cfg));
     const lo = Math.min(...xs);
@@ -556,7 +569,7 @@ function skillSection(cfg) {
   const matRows = Object.entries(s.perMaterial).map(([k, d]) => {
     const isOre = k.startsWith('ore');
     const label = `${isOre ? 'Bar' : 'Gem'} ${d.name}`;
-    return [h('b', {}, label), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc,
+    return [h('b', {}, label), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, ringCell(k), d.desc,
       `${xpRange(isOre ? BARS : GEMS)} XP per ${isOre ? 'bar refined' : 'gem cut'} of that type (by material, table below)`];
   });
   // XP per item by material, and how many items one skill needs to reach max level.
@@ -569,12 +582,12 @@ function skillSection(cfg) {
     kv([
       ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity.`],
       ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, `${xpRow.join(', ')} (total ${total.toLocaleString('en-US')} XP to reach level ${s.maxLevel})`)],
-      ['Bonus', 'per-level value x level. Skill bonuses are smaller than rings and add to them.'],
+      ['Bonus', `per-level value x level; skill bonuses add to ring bonuses. ${skillVsRingText(cfg)}`],
     ]),
     sub('Activity skills'),
-    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], actRows),
+    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, `Level ${s.maxLevel} vs rings`, 'Effect', 'XP from'], actRows),
     sub('Per-material skills (one of each per bar type / gem type)'),
-    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], matRows),
+    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, `Level ${s.maxLevel} vs rings`, 'Effect', 'XP from'], matRows),
     sub('Per-material XP (rarer materials give more; failed attempts count)'),
     h('div', { class: 'mi-two' },
       h('div', {}, xpTable(BARS, 'Bar refined')),
@@ -618,12 +631,12 @@ function repairSection(cfg) {
   return [
     kv([
       ['Wear', `Each fight, every item the adventurer actually used loses ${loss.min}-${loss.max}% durability (whole numbers, average ${num(avgLoss)}%). Packed but unused items do not wear. At 0% the item is destroyed.`],
-      ['Repair', 'Only back to 100%, at camp, and not while the item is packed for today\'s fight.'],
-      ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01.')],
-      ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired`)],
-      ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and the infusion time counts in the repair time.`],
+      ['Repair', 'Only back to 100%, and not while the item is packed for today\'s fight. By day: at camp (Workshop), costs time. At night (battle report or plan screen): any gear at home, no time, materials only.'],
+      ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],
+      ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired`, 'By day only. Repairs at night cost no time.')],
+      ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and, by day, the infusion time counts in the repair time.`],
     ]),
     sub('Repair cost by slot (item without a gem)'),
-    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time', cls: 'num' }], rows),
+    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time by day', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time by day', cls: 'num' }], rows),
   ];
 }

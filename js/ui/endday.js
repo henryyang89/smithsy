@@ -10,10 +10,11 @@ import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisib
 import { estimateWinChance, loadouts } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
-import { gearStats } from '../core/gear.js';
+import { gearStats, isNight } from '../core/gear.js';
 import { spendIntel, intelChance, nextIntelGain } from '../core/intel.js';
 import { mixSeed } from '../core/rng.js';
 import { cap } from '../core/util.js';
+import { repairLine, repairAllButton } from './repairui.js';
 
 // ------------------------------------------------------------------ format ----
 const f1 = (v) => num(v, 1);
@@ -294,8 +295,8 @@ function summaryTable(report, cfg) {
     { st: S.E, foe: S.A, hit: S.hitEA, dmg: S.dmgEA },
   ];
   const row = (label, fn, title) => h('tr', { title }, h('td', {}, label), sides.map((s) => h('td', { class: 'num' }, fn(s))));
-  return h('table', { class: 'adv-stats adv-summary' },
-    h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', { class: 'num' }, `Adventurer → ${en}`), h('th', { class: 'num' }, `${en} → Adventurer`))),
+  return h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-summary' },
+    h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', { class: 'num' }, 'Adventurer → ', h('wbr'), en), h('th', { class: 'num' }, `${en} → `, h('wbr'), 'Adventurer'))),
     h('tbody', {},
       row('Attacks', (s) => String(s.st.attacks)),
       row('Hits', (s) => `${s.st.hits} (${s.st.attacks ? Math.round((s.st.hits / s.st.attacks) * 100) : 0}% landed)`),
@@ -305,7 +306,7 @@ function summaryTable(report, cfg) {
       row('Target defense after piercing', (s) => pctf(s.dmg.effDef), 'Defense x (1 - effective piercing %); effective piercing = piercing x (1 - target\'s pierce resistance %)'),
       row('Total damage', (s) => f1(s.st.dmg)),
       row('Stuns landed', (s) => (s.st.stuns ? `${s.st.stuns} (${f1(s.foe.stunnedFor)}s total)` : '0'), 'A stun stops the target\'s attack bar for its duration (stuns do not stack; a new one refreshes the timer)'),
-      row('Slows landed', (s) => String(s.st.slows), 'A slow makes the target\'s attack bar fill slower for its duration (slows do not stack; the stronger one is kept and the timer refreshes)')));
+      row('Slows landed', (s) => String(s.st.slows), 'A slow makes the target\'s attack bar fill slower for its duration (slows do not stack; the stronger one is kept and the timer refreshes)'))));
 }
 
 // Full report body. opts: { headline (default true), log (default true) }
@@ -347,6 +348,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
     unusedNode,
     wearRows.length ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)) : null,
     destroyed.length ? h('p', { class: 'err' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
+    opts.repair && isNight(ctx.state) ? reportRepair(ctx, report) : null,
     h('h4', { class: 'adv-h4' }, 'Reward'),
     report.ring
       ? h('p', { class: 'adv-tight' }, 'Ring gained: ', h('b', { class: `grade-${report.ring.grade}` }, report.ringText),
@@ -376,6 +378,24 @@ export function renderBattleReport(report, ctx, opts = {}) {
   return h('div', { class: 'adv-report' }, parts);
 }
 
+// Tonight's repairs for the gear the adventurer just used (battle report screen only).
+function reportRepair(ctx, report) {
+  const ids = (report.wear || []).map((w) => w.id);
+  const items = ids.map((id) => ctx.state.gear.find((g) => g.id === id)).filter(Boolean);
+  if (!items.length) return null;
+  const worn = items.filter((g) => g.durability < 100);
+  return h('div', { class: 'rp-report' },
+    h('h4', { class: 'adv-h4' }, 'Repair tonight'),
+    h('p', { class: 'rp-night' }, h('b', {}, 'Repairs tonight cost materials but no time. '),
+      'You can also repair any gear on the plan screen.'),
+    items.map((g) => h('div', { class: 'rp-item' },
+      h('div', {}, gearNameNode(g), ' ', g.durability >= 100
+        ? h('span', { class: 'ok adv-small' }, 'repaired: 100%')
+        : h('span', { class: 'muted adv-small' }, `${f1(g.durability)}% now`)),
+      g.durability < 100 ? repairLine(ctx, g) : null)),
+    worn.length > 1 ? h('div', { class: 'row adv-tight' }, repairAllButton(ctx, worn)) : null);
+}
+
 // ---------------------------------------------------------------- screens ----
 export function renderReport(root, ctx) {
   const s = ctx.state;
@@ -384,7 +404,7 @@ export function renderReport(root, ctx) {
   root.append(h('div', { class: 'adv-screen' },
     h('div', { class: 'adv-titlebar' }, h('h2', {}, `End of day ${s.day}: battle report`), cont()),
     s.day % ctx.cfg.intel.daysPerPoint === 0 ? h('p', { class: 'ok' }, `Day ${s.day} complete: +1 intel point (spend it in the plan).`) : null,
-    r ? renderBattleReport(r, ctx) : h('p', { class: 'muted' }, 'No battle report.'),
+    r ? renderBattleReport(r, ctx, { repair: true }) : h('p', { class: 'muted' }, 'No battle report.'),
     h('div', { class: 'row adv-bottom' }, cont())));
 }
 
@@ -611,7 +631,8 @@ function gearStep(ctx, p, selGear) {
     for (const g of items) {
       const on = p.gearIds.includes(g.id);
       const full = !on && n >= 2;
-      rows.push(h('tr', { class: on ? 'adv-on' : full ? 'adv-off' : '' },
+      const needsRepair = g.durability < 100;
+      rows.push(h('tr', { class: `${on ? 'adv-on' : full ? 'adv-off' : ''}${needsRepair ? ' adv-hasrepair' : ''}` },
         h('td', {}, h('input', {
           type: 'checkbox',
           checked: on,
@@ -624,13 +645,22 @@ function gearStep(ctx, p, selGear) {
         })),
         h('td', {}, gearCell(g, cfg)),
         h('td', {}, durabilityNode(g, cfg))));
+      // free of time tonight: repair right here before packing
+      if (needsRepair) rows.push(h('tr', { class: `adv-repairrow${on ? ' adv-on' : ''}` }, h('td', {}), h('td', { colspan: 2 }, repairLine(ctx, g))));
     }
   }
   const risky = selGear.filter((g) => g.durability <= maxLoss);
   const combos = loadouts(selGear).length;
+  const worn = s.gear.filter((g) => g.durability < 100);
+  const night = isNight(s);
   return section('2. Pack gear',
+    night ? h('div', { class: 'rp-night' },
+      h('b', {}, 'Repairs tonight cost materials but no time.'),
+      worn.length
+        ? [` ${worn.length} item${worn.length === 1 ? '' : 's'} below 100%: use the Repair buttons below. `, repairAllButton(ctx, worn)]
+        : ' All your gear is at 100%.') : null,
     h('p', { class: 'adv-tight muted' }, 'Packed gear is away with the adventurer all day tomorrow: it ',
-      h('b', {}, 'can\'t be repaired'), ' until it comes back in the evening. Only the items actually used lose durability.'),
+      h('b', {}, 'can\'t be repaired'), ' until it comes back in the evening, so repair it tonight. Only the items actually used lose durability.'),
     h('div', { class: 'row adv-tight' },
       h('button', { class: 'small', onclick: () => changeSel(ctx, (pl) => { pl.gearIds = defaultGearIds(ctx.state, ctx.cfg); }) }, 'Best 2 per slot'),
       h('button', { class: 'small', onclick: () => changeSel(ctx, (pl) => { pl.gearIds = []; }) }, 'Pack nothing'),

@@ -3,21 +3,17 @@
 import { h, section, bar, num } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, repairInfo, repair, scrap, STAT_LABELS, fmtStat } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, scrap, STAT_LABELS, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
-import { formatClock, formatDuration, cap, round2, EPS } from '../core/util.js';
+import { formatClock, formatDuration, cap, EPS } from '../core/util.js';
+import { qty, repairLine } from './repairui.js';
 
 const OUTCOMES = GRADE_ORDER; // S A B C D F
 const GRADES_HI = GRADE_ORDER.filter((g) => g !== 'F'); // S A B C D (best first)
 const BASE_STATS = ['damage', 'accuracy', 'defense', 'dodge', 'speed'];
 
 // ------------------------------------------------------------------ helpers ----
-// Quantities: whole numbers as-is, fractional ones (repairs use 0.01 bars) to 2 decimals.
-const qty = (v) => {
-  const r = round2(v || 0);
-  return Number.isInteger(r) ? String(r) : r.toFixed(2);
-};
 const enough = (have, need) => (have || 0) + EPS >= need;
 const outcomeLabel = (g) => (g === 'F' ? 'Fail' : g);
 // pierce resistance is a % of the enemy's piercing ignored
@@ -394,20 +390,6 @@ function smithPanel(ctx, blocked) {
 }
 
 // --------------------------------------------------------------------- gear ----
-function repairBlock(s, item, info, blocked, cfg) {
-  if (item.packed) return 'With the adventurer today';
-  if (item.durability >= 100) return 'At 100%';
-  if (blocked) return `Workshop closed: ${blocked}`;
-  for (const [k, n] of Object.entries(info.bars)) {
-    if (!enough(s.storage.bars[k], n)) return `Need ${qty(n)} ${k.replace(':', ' ')} bars (have ${qty(s.storage.bars[k] || 0)})`;
-  }
-  for (const [k, n] of Object.entries(info.gems)) {
-    if (!enough(s.storage.cut[k], n)) return `Need ${qty(n)} cut ${k.replace(':', ' ')} (have ${qty(s.storage.cut[k] || 0)})`;
-  }
-  if (s.time + info.minutes > cfg.time.dayEndMin + EPS) return 'Not enough time left today';
-  return null;
-}
-
 function gearPanel(ctx, blocked) {
   const s = ctx.state;
   const cfg = ctx.cfg;
@@ -418,31 +400,10 @@ function gearPanel(ctx, blocked) {
   if (!items.length) return section(title, h('p', { class: 'muted' }, 'No gear yet. Smith something above.'));
 
   const rows = items.map((item) => {
-    const info = repairInfo(item, cfg);
-    const why = repairBlock(s, item, info, blocked, cfg);
     const d = item.durability;
-    const costBits = [
-      ...Object.entries(info.bars).map(([k, n]) => {
-        const [m, g] = k.split(':');
-        return h('span', { class: enough(s.storage.bars[k], n) ? '' : 'err' }, `${qty(n)} ${cap(m)} ${g} bar`);
-      }),
-      ...Object.entries(info.gems).map(([k, n]) => {
-        const [t, g] = k.split(':');
-        return h('span', { class: enough(s.storage.cut[k], n) ? '' : 'err' }, `${qty(n)} cut ${cap(t)} ${g}`);
-      }),
-    ];
     const repairCell = d >= 100
       ? h('span', { class: 'muted' }, 'Full durability')
-      : h('div', {},
-        h('div', {}, costBits.map((c, i) => [i ? ' + ' : '', c]), h('span', { class: 'muted' }, ` · ${num(info.minutes)}m`)),
-        h('div', { class: 'row ws-repair-row' },
-          h('button', {
-            class: 'small',
-            disabled: !!why,
-            title: why || `Repair ${info.missing}% for ${num(info.minutes)}m`,
-            onclick: () => ctx.act(() => repair(ctx.state, item.id, cfg), { toast: true }),
-          }, `Repair +${info.missing}%`),
-          why ? h('span', { class: 'ws-reason muted' }, why) : null));
+      : repairLine(ctx, item, { blocked: blocked ? `Workshop closed: ${blocked}` : null });
     const scrapWhy = item.packed ? 'With the adventurer today' : blocked ? `Workshop closed: ${blocked}` : null;
     return {
       attrs: { class: item.packed ? 'ws-packed' : '' },
@@ -465,6 +426,9 @@ function gearPanel(ctx, blocked) {
   });
 
   return section(title,
-    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. A full repair costs ${cfg.gear.repair.materialFraction}% of the original bars (and gem) and ${cfg.gear.repair.timeFraction}% of the smithing time, scaled by the % repaired.`),
+    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. A full repair costs ${cfg.gear.repair.materialFraction}% of the original bars (and gem) and, by day, ${cfg.gear.repair.timeFraction}% of the smithing time, scaled by the % repaired. `,
+      'If you lack the item\'s own grade, the lowest higher grade you have enough of is used instead (no extra benefit).'),
+    h('p', { class: 'rp-night' }, h('b', {}, 'Repairs at night are free of time: '),
+      'after the day ends, the battle report and the plan screen let you repair any gear at home for materials only.'),
     h('div', { class: 'ws-scroll' }, tbl(['Item', 'Stats', 'Durability', 'Repair to 100%', ''], rows, 'ws-gear')));
 }

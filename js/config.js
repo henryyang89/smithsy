@@ -43,8 +43,8 @@ export const CONFIG = {
     // with new hidden contents (items on the ground stay). OFF (0) for now: fields do not regrow.
     regrowPctPerDay: 0,
     // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
-    lootChance: { base: 40, perDistance: 5, max: 70 },
-    itemCountWeights: { 1: 50, 2: 35, 3: 15 }, // how many items a loot cell holds (weights)
+    lootChance: { base: 50, perDistance: 5, max: 80 },
+    itemCountWeights: { 1: 30, 2: 40, 3: 30 }, // how many items a loot cell holds (weights)
     oreShare: 70, // % of items that are ores (the rest are gems)
     // Ore / gem weights by distance from camp (row 1 = distance 1). Last row is used for farther fields.
     oreWeights: [

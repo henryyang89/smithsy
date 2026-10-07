@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { CONFIG, SLOTS, GRADES, BARS } from '../js/config.js';
 import {
   gearStats, craft, canCraft, craftCost, craftMinutes, repairInfo, repair, scrap, gearName, barKey, statsText,
+  repairPlan, substituteWarning, isNight,
 } from '../js/core/gear.js';
-import { game, approx, addGear, standInBlankField, cfgWith, DAY_END, DAY_START } from './helpers.mjs';
+import { endDay, acknowledgeReport, confirmPlan } from '../js/core/game.js';
+import { game, approx, addGear, standInBlankField, cfgWith, WEAK_ENEMIES, DAY_END, DAY_START } from './helpers.mjs';
 
 const item = (slot, material = 'copper', grade = 'D', gem = null, extra = {}) => ({ id: 1, slot, material, grade, gem, durability: 100, packed: false, ...extra });
 const close = (a, b, msg = '') => assert.ok(approx(a, b, 1e-9), `${a} != ${b} ${msg}`);
@@ -314,17 +316,227 @@ test('packed gear cannot be repaired; unknown ids and time are checked', () => {
   assert.equal(repair(s, g.id, PG).ok, true);
 });
 
-test('repair requires camp and the work phase', () => {
+test('by day, repair requires camp (and time); after game over it is refused', () => {
   const s = game(1);
   const g = addGear(s, 'sword', 'copper', 'D', null, { durability: 50 });
   s.storage.bars['copper:D'] = 5;
-  s.phase = 'plan';
-  assert.equal(repair(s, g.id, PG).ok, false);
-  s.phase = 'work';
+  assert.equal(isNight(s), false);
   standInBlankField(s, 1);
   assert.match(repair(s, g.id, PG).msg, /camp/);
   assert.equal(g.durability, 50);
   assert.equal(s.storage.bars['copper:D'], 5);
+  assert.equal(s.time, DAY_START);
+  s.location = { ...s.map.camp };
+  s.phase = 'over';
+  assert.equal(isNight(s), false, 'game over is not night');
+  assert.match(repair(s, g.id, PG).msg, /work day/);
+  assert.equal(g.durability, 50);
+  // by day the plan carries the full repair time
+  s.phase = 'work';
+  assert.equal(repairPlan(s, g, PG).minutes, repairInfo(g, PG).minutes);
+  assert.ok(repairInfo(g, PG).minutes > 0);
+});
+
+test('at night (report and plan) repairs cost no time, work away from camp and do not move the clock', () => {
+  for (const phase of ['report', 'plan']) {
+    const s = game(1);
+    const g = addGear(s, 'chest', 'iron', 'B', { type: 'ruby', grade: 'S' }, { durability: 80 });
+    s.storage.bars['iron:B'] = 1;
+    s.storage.cut['ruby:S'] = 1;
+    s.phase = phase;
+    s.time = DAY_END; // past the end of the work day: a daytime repair would not fit
+    standInBlankField(s, 1); // not at camp
+    assert.equal(isNight(s), true, phase);
+    const plan = repairPlan(s, g, PG);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.minutes, 0, phase);
+    const r = repair(s, g.id, PG);
+    assert.equal(r.ok, true, `${phase}: ${r.msg}`);
+    assert.equal(r.minutes, 0);
+    assert.match(r.msg, /night/);
+    assert.equal(s.time, DAY_END, `${phase}: clock unchanged`);
+    assert.equal(g.durability, 100);
+    // materials are the same as by day: only the time is free
+    assert.equal(s.storage.bars['iron:B'], 0.79);
+    assert.equal(s.storage.cut['ruby:S'], 0.93);
+    // the usual checks still apply at night
+    assert.match(repair(s, g.id, PG).msg, /100%/);
+    assert.equal(repair(s, 9999, PG).ok, false);
+    g.durability = 1;
+    s.storage.bars['iron:B'] = 0;
+    assert.equal(repair(s, g.id, PG).ok, false, 'short on bars');
+    assert.equal(g.durability, 1);
+  }
+});
+
+test('night repair through the real day flow: gear used in the fight is home again and repairs for free', () => {
+  const cfg = cfgWith(WEAK_ENEMIES);
+  const s = game(5, cfg);
+  const sw = addGear(s, 'sword', 'copper', 'D');
+  s.storage.bars['copper:D'] = 5;
+  assert.equal(endDay(s, cfg).ok, true);
+  assert.equal(confirmPlan(s, { enemyIndex: 0, gearIds: [sw.id], ringIds: [] }, cfg).ok, true);
+  // day 2: the adventurer has the sword; packed gear is still refused by day
+  sw.durability = 90;
+  assert.match(repair(s, sw.id, cfg).msg, /adventurer/);
+  assert.equal(sw.durability, 90);
+  sw.durability = 100;
+  assert.equal(endDay(s, cfg).ok, true);
+  assert.equal(s.phase, 'report');
+  assert.equal(sw.packed, false, 'home again');
+  assert.ok(sw.durability < 100, 'the fight wore the sword');
+  const t = s.time;
+  const cost = repairInfo(sw, cfg).bars['copper:D'];
+  const r = repair(s, sw.id, cfg);
+  assert.equal(r.ok, true, r.msg);
+  assert.equal(r.minutes, 0);
+  assert.equal(s.time, t);
+  assert.ok(approx(s.storage.bars['copper:D'], 5 - cost, 1e-9));
+  // planning is night too
+  assert.equal(acknowledgeReport(s).ok, true);
+  sw.durability = 60;
+  assert.equal(repair(s, sw.id, cfg).ok, true);
+  assert.equal(s.time, t);
+  // the next day still starts at the usual time
+  assert.equal(confirmPlan(s, { enemyIndex: 0, gearIds: [], ringIds: [] }, cfg).ok, true);
+  assert.equal(s.time, DAY_START);
+});
+
+// ------------------------------------------------- repair with higher grades ----
+// Chest, iron B + ruby C, 80% -> needs 0.21 iron bars and 0.07 cut ruby (pinned PG numbers).
+function subSetup(bars = {}, cut = {}) {
+  const s = game(1);
+  const g = addGear(s, 'chest', 'iron', 'B', { type: 'ruby', grade: 'C' }, { durability: 80 });
+  Object.assign(s.storage.bars, bars);
+  Object.assign(s.storage.cut, cut);
+  return { s, g };
+}
+
+test('repairPlan uses the exact grade when there is enough, even with higher grades in stock', () => {
+  const { s, g } = subSetup({ 'iron:B': 1, 'iron:A': 5, 'iron:S': 5 }, { 'ruby:C': 1, 'ruby:S': 1 });
+  const info = repairInfo(g, PG);
+  const plan = repairPlan(s, g, PG);
+  assert.deepEqual(plan, { ok: true, reason: null, bars: info.bars, gems: info.gems, substitutes: [], minutes: info.minutes, missing: info.missing });
+  assert.deepEqual(plan.bars, { 'iron:B': 0.21 });
+  assert.deepEqual(plan.gems, { 'ruby:C': 0.07 });
+  assert.equal(substituteWarning(plan), null);
+});
+
+test('repairPlan falls back to the lowest higher grade with enough stock (bars and gem independently)', () => {
+  // bars: B short, A short, S enough (lower grades never count); gem exact
+  let { s, g } = subSetup({ 'iron:D': 9, 'iron:C': 9, 'iron:B': 0.2, 'iron:A': 0.1, 'iron:S': 5 }, { 'ruby:C': 1 });
+  let plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.bars, { 'iron:S': 0.21 });
+  assert.deepEqual(plan.gems, { 'ruby:C': 0.07 });
+  assert.equal(plan.substitutes.length, 1);
+  const [sub] = plan.substitutes;
+  assert.deepEqual([sub.need, sub.use, sub.qty], ['B', 'S', 0.21]);
+  assert.match(sub.kind, /iron/);
+  // A has exactly enough -> A (the lowest higher grade), not S
+  ({ s, g } = subSetup({ 'iron:B': 0.2, 'iron:A': 0.21, 'iron:S': 5 }, { 'ruby:C': 1 }));
+  assert.deepEqual(repairPlan(s, g, PG).bars, { 'iron:A': 0.21 });
+  // gem substituted, bars exact
+  ({ s, g } = subSetup({ 'iron:B': 1 }, { 'ruby:D': 5, 'ruby:C': 0.06, 'ruby:B': 0.5, 'ruby:A': 1 }));
+  plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.bars, { 'iron:B': 0.21 });
+  assert.deepEqual(plan.gems, { 'ruby:B': 0.07 });
+  assert.equal(plan.substitutes.length, 1);
+  assert.equal(plan.substitutes[0].need, 'C');
+  assert.equal(plan.substitutes[0].use, 'B');
+  assert.equal(plan.substitutes[0].qty, 0.07);
+  assert.match(plan.substitutes[0].kind, /ruby/);
+  // both substituted: one entry each, the warning names both
+  ({ s, g } = subSetup({ 'iron:A': 1 }, { 'ruby:S': 1 }));
+  plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.bars, { 'iron:A': 0.21 });
+  assert.deepEqual(plan.gems, { 'ruby:S': 0.07 });
+  assert.deepEqual(plan.substitutes.map((x) => [x.need, x.use]), [['B', 'A'], ['C', 'S']]);
+  const warn = substituteWarning(plan);
+  assert.equal(typeof warn, 'string');
+  for (const x of plan.substitutes) assert.ok(warn.includes(x.kind) && warn.includes(x.use) && warn.includes(String(x.qty)), warn);
+  // substitutes use the same amount as the exact grade would, and the plan's time is unchanged
+  assert.equal(plan.minutes, repairInfo(g, PG).minutes);
+});
+
+test('repairPlan fails with a reason when no grade at or above the needed one has enough', () => {
+  // bars: only lower grades, a different material, and two short higher stacks (they do not combine)
+  let { s, g } = subSetup({ 'iron:D': 10, 'iron:C': 10, 'iron:B': 0.2, 'iron:A': 0.1, 'steel:S': 10 }, { 'ruby:C': 1 });
+  let plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, false);
+  assert.match(plan.reason, /0\.21 iron/);
+  assert.match(plan.reason, /\bB\b/);
+  // gem: lower grade and a different gem type do not help
+  ({ s, g } = subSetup({ 'iron:B': 1 }, { 'ruby:D': 5, 'topaz:S': 5 }));
+  plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, false);
+  assert.match(plan.reason, /0\.07 cut ruby/);
+  assert.doesNotMatch(plan.reason, /iron/);
+  // both missing -> both named
+  ({ s, g } = subSetup({}, {}));
+  plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, false);
+  assert.match(plan.reason, /iron/);
+  assert.match(plan.reason, /ruby/);
+  // an S item needs S
+  const s2 = game(1);
+  const top = addGear(s2, 'sword', 'steel', 'S', null, { durability: 50 });
+  s2.storage.bars['steel:A'] = 10;
+  assert.equal(repairPlan(s2, top, PG).ok, false);
+  // repair refuses with that reason and changes nothing
+  ({ s, g } = subSetup({ 'iron:A': 0.1 }, { 'ruby:S': 1 }));
+  const before = structuredClone(s.storage);
+  const r = repair(s, g.id, PG);
+  assert.equal(r.ok, false);
+  assert.equal(r.msg, repairPlan(s, g, PG).reason);
+  assert.deepEqual(s.storage, before);
+  assert.equal(g.durability, 80);
+  assert.equal(s.time, DAY_START);
+});
+
+test('repair consumes exactly what repairPlan chose and reports substitutes + the warning (no benefit)', () => {
+  for (const phase of ['work', 'plan']) {
+    const { s, g } = subSetup({ 'iron:B': 0.1, 'iron:A': 1, 'iron:S': 1 }, { 'ruby:C': 0, 'ruby:A': 0.5, 'ruby:S': 1 });
+    s.phase = phase;
+    const stats = gearStats(g, PG);
+    const plan = repairPlan(s, g, PG);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.bars, { 'iron:A': 0.21 });
+    assert.deepEqual(plan.gems, { 'ruby:A': 0.07 });
+    const before = structuredClone(s.storage);
+    const r = repair(s, g.id, PG);
+    assert.equal(r.ok, true, r.msg);
+    assert.deepEqual(r.substitutes, plan.substitutes);
+    assert.ok(r.msg.includes(substituteWarning(plan)), r.msg);
+    assert.equal(r.minutes, plan.minutes);
+    for (const store of ['bars', 'cut']) {
+      const used = store === 'bars' ? plan.bars : plan.gems;
+      for (const k of new Set([...Object.keys(before[store]), ...Object.keys(s.storage[store])])) {
+        assert.ok(approx(s.storage[store][k] || 0, (before[store][k] || 0) - (used[k] || 0), 1e-9), `${phase} ${store} ${k}`);
+      }
+    }
+    // no benefit: the item keeps its own grades and stats
+    assert.equal(g.grade, 'B');
+    assert.deepEqual(g.gem, { type: 'ruby', grade: 'C' });
+    assert.deepEqual(gearStats(g, PG), stats);
+    assert.equal(g.durability, 100);
+  }
+  // exact grade: no substitutes, no warning
+  const { s, g } = subSetup({ 'iron:B': 1, 'iron:S': 1 }, { 'ruby:C': 1 });
+  const plan = repairPlan(s, g, PG);
+  const r = repair(s, g.id, PG);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.substitutes, []);
+  assert.equal(substituteWarning(plan), null);
+  assert.equal(r.msg, `Repaired ${gearName(g)} to 100% (${plan.minutes}m).`);
+  assert.equal(s.storage.bars['iron:S'], 1);
+});
+
+test('repairInfo still quotes the exact grade, whatever is in stock', () => {
+  const { g } = subSetup({ 'iron:S': 10 }, { 'ruby:S': 10 });
+  assert.deepEqual(repairInfo(g, PG), { missing: 20, bars: { 'iron:B': 0.21 }, gems: { 'ruby:C': 0.07 }, minutes: 5.5 });
 });
 
 test('scrap removes unpacked gear only', () => {

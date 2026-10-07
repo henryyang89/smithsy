@@ -82,13 +82,39 @@ test('smith rings lock once the work day has started; adventurer rings do not', 
 });
 
 test('ore sight never rolls on a cell the same search finishes', () => {
-  const cfg = cfgWith({ field: { searchEfficiency: 100 } }, { intel: { tracks: { oreSight: { base: 100 } } } });
+  // randomness 0: efficiency 100 finishes every cell in one search
+  const cfg = cfgWith({ field: { searchEfficiency: 100, searchRandomness: 0 } }, { intel: { tracks: { oreSight: { base: 100 } } } });
   const s = game(5, cfg);
   const field = standInBlankField(s, 1, cfg);
   const r = search(s, 3, 3, cfg);
   assert.equal(r.ok, true);
   assert.equal(r.revealed, 0);
   for (const cl of field.cells) assert.equal(cl.revealed, false);
+});
+
+test('ore sight with random search rolls: finished cells are never revealed, unfinished ones roll as usual', () => {
+  // efficiency 100 +/- 10: some cells roll 100 (finished), others 90..100 (not finished)
+  const cfg = cfgWith({ field: { searchEfficiency: 100, searchRandomness: 10 } }, { intel: { tracks: { oreSight: { base: 100 } } } });
+  const s = game(5, cfg);
+  const field = standInBlankField(s, 1, cfg);
+  let finished = 0;
+  let open = 0;
+  for (const [x, y] of [[1, 1], [4, 1], [1, 4], [4, 4], [1, 7], [4, 7]]) {
+    s.time = CONFIG.time.dayStartMin;
+    const r = search(s, x, y, cfg);
+    assert.equal(r.ok, true, r.msg);
+  }
+  for (const cl of field.cells) {
+    if (cl.searched === 0) continue;
+    if (cl.searched >= 100) {
+      finished++;
+      assert.equal(cl.revealed, false, 'finished cell revealed');
+    } else {
+      open++;
+      assert.equal(cl.revealed, true, 'unfinished cell not revealed at 100% ore sight');
+    }
+  }
+  assert.ok(finished > 0 && open > 0, `both kinds of cells occur (${finished} finished, ${open} open)`);
 });
 
 test('formatDuration rounds before splitting hours', () => {

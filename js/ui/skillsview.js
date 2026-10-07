@@ -1,7 +1,7 @@
 // Skills & Intel tab: skill levels/XP/bonuses (grouped) and intel point spending.
 // All game-state changes go through spendIntel() inside ctx.act(). No UI-only state needed.
 import { h, num, bar } from './dom.js';
-import { BARS, GEMS } from '../config.js';
+import { BARS, GEMS, GRADES } from '../config.js';
 import { skillDefs, xpToNext, skillBonus, itemXp } from '../core/skills.js';
 import { spendIntel, intelChance, intelChanceFor, nextIntelGain, gainForPoint } from '../core/intel.js';
 import { smithRingTotals } from '../core/rings.js';
@@ -11,6 +11,63 @@ const GROUPS = [
   { id: 'ore', title: 'Bar skills (one pair per bar type)' },
   { id: 'gem', title: 'Gem skills (one pair per gem type)' },
 ];
+
+// ------------------------------------------------- skills vs smith rings ----
+// The smith ring each skill matches (skills without a ring: debris clearing, refining / cutting failure).
+const SKILL_RING = {
+  returnTravel: 'travelTime', searchTime: 'searchTime', searchEff: 'searchEff',
+  refineTime: 'processTime', cutTime: 'processTime', oreGrade: 'oreGrade', gemGrade: 'gemGrade',
+};
+
+// Which ring grade a max-level skill equals: { ring, grade, value, top, exact } or null (no ring of that kind).
+// key: a skill key ('searchEff', 'oreGrade_iron') or a config key ('oreGrade').
+export function skillRingMatch(key, cfg) {
+  const base = key.split('_')[0];
+  const ring = SKILL_RING[base] && cfg.rings.types[SKILL_RING[base]];
+  const def = cfg.skills.activity[base] || cfg.skills.perMaterial[base];
+  if (!ring || !def) return null;
+  const top = def.perLevel * cfg.skills.maxLevel;
+  let gi = -1;
+  ring.values.forEach((v, i) => {
+    if (v <= top + 1e-9) gi = i;
+  });
+  return { ring: ring.name, grade: gi >= 0 ? GRADES[gi] : null, value: gi >= 0 ? ring.values[gi] : null, top, exact: gi >= 0 && Math.abs(ring.values[gi] - top) < 1e-9 };
+}
+
+// "= C-grade Travel ring", "above a C-grade Travel ring", "below a D-grade Travel ring"
+export function skillRingText(m) {
+  if (!m) return '';
+  if (!m.grade) return `below a ${GRADES[0]}-grade ${m.ring} ring`;
+  return m.exact ? `= ${m.grade}-grade ${m.ring} ring` : `above a ${m.grade}-grade ${m.ring} ring`;
+}
+
+// The grade every ring-matched skill reaches at max level, when they all agree exactly (else null).
+export function commonSkillRingGrade(cfg) {
+  const keys = [...Object.keys(cfg.skills.activity), ...Object.keys(cfg.skills.perMaterial)];
+  const ms = keys.map((k) => skillRingMatch(k, cfg)).filter(Boolean);
+  if (!ms.length || ms.some((m) => !m.exact || m.grade !== ms[0].grade)) return null;
+  return ms[0].grade;
+}
+
+// One sentence on skills vs rings, all from config: "A level-10 skill equals a C-grade ring of the same kind. ..."
+export function skillVsRingText(cfg) {
+  const max = cfg.skills.maxLevel;
+  const grade = commonSkillRingGrade(cfg);
+  const parts = [grade
+    ? `A level-${max} skill equals a ${grade}-grade smith ring of the same kind.`
+    : `At level ${max}, skills compare with smith rings as shown in the table.`];
+  const noRing = [];
+  for (const [k, d] of Object.entries(cfg.skills.activity)) {
+    if (!SKILL_RING[k]) noRing.push(`${d.name.toLowerCase()} ${d.desc.startsWith('%') ? `−${num(d.perLevel * max, 2)}% time` : `${num(d.perLevel * max, 2)} ${d.desc}`}`);
+  }
+  const fails = Object.entries(cfg.skills.perMaterial).filter(([k]) => !SKILL_RING[k]);
+  if (fails.length) {
+    const vals = [...new Set(fails.map(([, d]) => num(d.perLevel * max, 2)))];
+    noRing.push(`${fails.map(([, d]) => d.name).join(' / ')} failure −${vals.join(' / ')} points`);
+  }
+  if (noRing.length) parts.push(`Skills with no ring: ${noRing.join(', ')} at level ${max}.`);
+  return parts.join(' ');
+}
 
 // ------------------------------------------------------------------ helpers ----
 // Split a config description into a unit and the rest: '% less search time' -> { unit: '%', text: 'less search time' }
@@ -85,7 +142,7 @@ function skillsPanel(ctx) {
     h('p', { class: 'mi-note' },
       `Skills level up automatically while you work. Level L to L+1 needs ${cfg.skills.xpBase} x (L+1) XP, so level ${max} takes ${totalXp.toLocaleString('en-US')} XP in total. `,
       'Skill bonuses add to the matching smith ring bonuses (time reductions are capped at ',
-      `${cfg.processing.maxTimeReduction}% in total).`),
+      `${cfg.processing.maxTimeReduction}% in total). `, skillVsRingText(cfg)),
     groups);
 }
 
@@ -97,6 +154,7 @@ function skillRow(state, cfg, d) {
   const now = skillBonus(state, d.key, cfg);
   const { unit, text } = splitUnit(d.desc);
   const next = atMax ? null : d.perLevel * (sk.level + 1);
+  const ring = skillRingMatch(d.key, cfg);
   const progress = atMax
     ? h('span', { class: 'ok' }, 'Max level')
     : h('div', { class: 'mi-xp' },
@@ -105,7 +163,8 @@ function skillRow(state, cfg, d) {
   return {
     attrs: { class: sk.level > 0 ? '' : 'mi-dim' },
     cells: [
-      h('div', {}, h('b', {}, d.name), h('div', { class: 'mi-note' }, `${text} · +${num(d.perLevel, 2)}${unit} per level`)),
+      h('div', {}, h('b', {}, d.name), h('div', { class: 'mi-note' }, `${text} · +${num(d.perLevel, 2)}${unit} per level`,
+        ring ? ` · level ${max} ${skillRingText(ring)}` : ` · level ${max}: ${num(d.perLevel * max, 2)}${unit} (no ring)`)),
       { v: `${sk.level} / ${max}`, cls: 'num' },
       progress,
       { v: h('b', {}, `${num(now, 2)}${unit}`), cls: 'num' },

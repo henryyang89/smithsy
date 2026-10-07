@@ -3,15 +3,17 @@ import assert from 'node:assert/strict';
 import { CONFIG } from '../js/config.js';
 import {
   search, clearDebris, pickUp, dropItem, fieldProgress, areaCells, searchMinutes, searchEfficiency,
-  debrisMinutesPerCell, returnMinutes, currentField,
+  searchEfficiencyRange, debrisMinutesPerCell, returnMinutes, currentField,
 } from '../js/core/map.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { intelChance } from '../js/core/intel.js';
 import { game, cfgWith, cell, idx, standInBlankField, addRing, setSkillLevel, ringVal, DAY_END, DAY_START } from './helpers.mjs';
 
 // Pinned field numbers: the hand-computed times/percentages below hold whatever CONFIG says.
+// searchRandomness 0: every cell gets exactly the efficiency, so exact search depths can be checked
+// (the per-cell roll has its own tests below).
 const PIN = {
-  field: { searchMin: 30, searchEfficiency: 25, debrisClearMin: 15 },
+  field: { searchMin: 30, searchEfficiency: 25, searchRandomness: 0, debrisClearMin: 15 },
   map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
   processing: { maxTimeReduction: 75 },
   skills: { xpBase: 100, maxLevel: 10, activity: { searchTime: { perLevel: 0.5 }, searchEff: { perLevel: 1 }, debris: { perLevel: 2 }, returnTravel: { perLevel: 0.5 } } },
@@ -82,6 +84,8 @@ test('search time / efficiency default to CONFIG with no bonuses', () => {
   const { s } = setup();
   assert.equal(searchMinutes(s), CONFIG.field.searchMin);
   assert.equal(searchEfficiency(s), CONFIG.field.searchEfficiency);
+  const { searchEfficiency: E, searchRandomness: R } = CONFIG.field;
+  assert.deepEqual(searchEfficiencyRange(s), [Math.max(0, E - R), Math.min(100, E + R)]);
   assert.equal(debrisMinutesPerCell(s), CONFIG.field.debrisClearMin);
 });
 
@@ -331,4 +335,116 @@ test('searching a generated field: every item ends up in the bag or on the groun
   assert.equal(got, total);
   assert.equal(f.cells.reduce((a, c) => a + c.items.length, 0), 0);
   assert.equal(s.bag.length + f.cells.reduce((a, c) => a + c.ground.length, 0), total);
+});
+
+// ------------------------------------------------------ search randomness ----
+// Each cell rolls its own efficiency per search: eff + uniform(-r, +r), clamped to 0..100.
+const R = 5;
+const RAND = cfgWith(PIN, { field: { searchRandomness: R } }, { intel: { tracks: { oreSight: { base: 0 } } } });
+// Nine disjoint 3x3 areas that together cover the whole 8x8 field.
+const TILES = [1, 4, 7].flatMap((y) => [1, 4, 7].map((x) => [x, y]));
+const EPS_PCT = 1e-9;
+
+// Search every tile once and return the per-cell searched % gained. The clock is reset so time never
+// runs out, and the search skills are held at their level (searching gives XP, which would otherwise
+// raise the efficiency part-way through the sweep).
+function sweep(s, f, cfg) {
+  const before = f.cells.map((c) => c.searched);
+  const levels = { searchEff: s.skills.searchEff.level, searchTime: s.skills.searchTime.level };
+  for (const [x, y] of TILES) {
+    s.time = DAY_START;
+    const r = search(s, x, y, cfg);
+    assert.equal(r.ok, true, r.msg);
+    for (const [k, lv] of Object.entries(levels)) setSkillLevel(s, k, lv);
+  }
+  return f.cells.map((c, i) => c.searched - before[i]);
+}
+
+test('searchEfficiencyRange = efficiency +/- searchRandomness, clamped to 0..100', () => {
+  const s = game(3);
+  assert.deepEqual(searchEfficiencyRange(s, RAND), [25 - R, 25 + R]);
+  assert.deepEqual(searchEfficiencyRange(s, CFG), [25, 25], 'randomness 0: a single value');
+  assert.deepEqual(searchEfficiencyRange(s, cfgWith(RAND, { field: { searchEfficiency: 98 } })), [98 - R, 100]);
+  assert.deepEqual(searchEfficiencyRange(s, cfgWith(RAND, { field: { searchEfficiency: 2 } })), [0, 2 + R]);
+  // efficiency past 100 + r (huge bonuses): every roll is 100, so the range is [100, 100], never inverted
+  assert.deepEqual(searchEfficiencyRange(s, cfgWith(RAND, { field: { searchEfficiency: 120 } })), [100, 100]);
+});
+
+test('each cell rolls its own search % within searchEfficiencyRange, and the rolls vary between cells', () => {
+  const { s, f } = setup();
+  const [lo, hi] = searchEfficiencyRange(s, RAND);
+  const gained = sweep(s, f, RAND);
+  for (const g of gained) assert.ok(g >= lo - EPS_PCT && g <= hi + EPS_PCT, `${g} outside [${lo}, ${hi}]`);
+  assert.ok(new Set(gained).size > f.cells.length / 2, 'cells roll independently');
+  assert.ok(Math.max(...gained) - Math.min(...gained) > (hi - lo) / 2, 'rolls spread over the range');
+  const mean = gained.reduce((a, b) => a + b, 0) / gained.length;
+  assert.ok(Math.abs(mean - searchEfficiency(s, RAND)) < R / 3, `mean ${mean} centred on the efficiency`);
+  // a second search rolls again (not the same amount as the first time)
+  const again = sweep(s, f, RAND);
+  for (const g of again) assert.ok(g >= lo - EPS_PCT && g <= hi + EPS_PCT);
+  assert.ok(again.some((g, i) => Math.abs(g - gained[i]) > EPS_PCT), 'fresh roll per search');
+});
+
+test('with searchRandomness 0 every cell gets exactly the efficiency', () => {
+  const { s, f } = setup();
+  const e = searchEfficiency(s, CFG);
+  for (const g of sweep(s, f, CFG)) assert.equal(g, e);
+});
+
+test('efficiency bonuses shift the whole roll range', () => {
+  const { s, f } = setup();
+  const [lo0, hi0] = searchEfficiencyRange(s, RAND);
+  addRing(s, 'searchEff', 'S', true); // +20%
+  setSkillLevel(s, 'searchEff', 4); // +4%
+  const e = searchEfficiency(s, RAND);
+  assert.equal(e, 31); // 25 x 1.24
+  const [lo, hi] = searchEfficiencyRange(s, RAND);
+  assert.deepEqual([lo, hi], [e - R, e + R]);
+  assert.equal(lo - lo0, 6);
+  assert.equal(hi - hi0, 6);
+  const gained = sweep(s, f, RAND);
+  for (const g of gained) assert.ok(g >= lo - EPS_PCT && g <= hi + EPS_PCT, `${g} outside [${lo}, ${hi}]`);
+  assert.ok(gained.some((g) => g > hi0), 'bonus reaches past the old maximum');
+});
+
+test('rolls near the limits are clamped: never below 0, never past 100', () => {
+  const high = cfgWith(RAND, { field: { searchEfficiency: 98 } });
+  const { s, f } = setup();
+  sweep(s, f, high);
+  for (const c of f.cells) assert.ok(c.searched >= 98 - R - EPS_PCT && c.searched <= 100);
+  assert.ok(f.cells.some((c) => c.searched === 100), 'rolls of 100 or more finish the cell');
+  const low = cfgWith(RAND, { field: { searchEfficiency: 2 } });
+  const { s: s2, f: f2 } = setup(4);
+  const gained = sweep(s2, f2, low);
+  for (const g of gained) assert.ok(g >= 0 && g <= 2 + R + EPS_PCT, `${g}`);
+});
+
+test('with random rolls, items are still found exactly when the cell\'s searched % passes their depth', () => {
+  const { s, f } = setup();
+  const depths = Array.from({ length: 20 }, (_, i) => i * 5 + 0.5); // 0.5, 5.5, ... 95.5
+  for (const c of areaCells(3, 3)) f.cells[c] = cell(depths.map((d) => ({ t: 'ore:copper', d })));
+  s.bag = [];
+  const r = search(s, 3, 3, cfgWith(RAND, { bag: { slots: 1000 } }));
+  assert.equal(r.ok, true, r.msg);
+  let expected = 0;
+  for (const c of areaCells(3, 3)) {
+    const cl = f.cells[c];
+    expected += depths.filter((d) => d < cl.searched).length;
+    for (const it of cl.items) assert.ok(it.d >= cl.searched, `item at ${it.d} should have been found (searched ${cl.searched})`);
+    assert.equal(cl.items.length, depths.filter((d) => d >= cl.searched).length);
+  }
+  assert.equal(r.found.length, expected);
+});
+
+test('default config: every cell\'s roll stays within searchEfficiencyRange', () => {
+  const { s, f } = setup();
+  const [lo, hi] = searchEfficiencyRange(s);
+  const gained = sweep(s, f, CONFIG);
+  for (const g of gained) assert.ok(g >= lo - EPS_PCT && g <= hi + EPS_PCT, `${g} outside [${lo}, ${hi}]`);
+  if (CONFIG.field.searchRandomness > 0) assert.ok(new Set(gained).size > 1, 'rolls vary');
+});
+
+test('spec: base search efficiency is in the 30-40% range, with some per-cell randomness', () => {
+  assert.ok(CONFIG.field.searchEfficiency >= 30 && CONFIG.field.searchEfficiency <= 40);
+  assert.ok(CONFIG.field.searchRandomness > 0);
 });

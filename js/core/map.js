@@ -156,7 +156,7 @@ export function searchEfficiency(state, cfg = CONFIG) {
 export function searchEfficiencyRange(state, cfg = CONFIG) {
   const e = searchEfficiency(state, cfg);
   const r = cfg.field.searchRandomness || 0;
-  return [Math.max(0, e - r), Math.min(100, e + r)];
+  return [clamp(e - r, 0, 100), clamp(e + r, 0, 100)];
 }
 
 export function debrisMinutesPerCell(state, cfg = CONFIG) {

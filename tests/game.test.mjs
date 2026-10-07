@@ -382,6 +382,25 @@ test('confirmPlan regrows searched cells overnight (regrowPctPerDay), ground ite
   assert.equal(s1.roster.day, 3);
 });
 
+test('spec: fields do not regrow (regrowPctPerDay is 0), so nights leave every field untouched', () => {
+  assert.equal(CONFIG.field.regrowPctPerDay, 0);
+  // WEAK_ENEMIES only changes the enemies, so the field rules are the real ones
+  const cfg = WIN;
+  assert.deepEqual(cfg.field, CONFIG.field);
+  const s = game(8, cfg);
+  for (const f of Object.values(s.map.fields)) {
+    f.cells.slice(0, 10).forEach((c, i) => { c.searched = i < 5 ? 100 : 40; c.ground = ['ore:iron']; });
+  }
+  const fields = structuredClone(s.map.fields);
+  for (let night = 0; night < 10; night++) {
+    assert.equal(endDay(s, cfg).ok, true);
+    if (s.phase === 'report') acknowledgeReport(s);
+    assert.equal(confirmPlan(s, plan(0), cfg).ok, true);
+    assert.deepEqual(s.map.fields, fields, `night ${night + 1}`);
+  }
+  assert.ok(!s.log.some((l) => /regrew/.test(l.text)));
+});
+
 // --------------------------------------------------------------- roster view --
 test('rosterView: known levels follow intel', () => {
   const s = game(8);

@@ -114,10 +114,11 @@ function playDay(s, rng, log, cfg = CONFIG) {
   if (s.intel.points) step('intel', () => spendIntel(s, rng.pick(Object.keys(cfg.intel.tracks)), cfg));
 }
 
-// Plays up to `days` days for each seed; returns { daysPlayed, fights }.
+// Plays up to `days` days for each seed; returns { daysPlayed, fights, nightRepairs }.
 function playRuns(seeds, days, cfg = CONFIG) {
   let daysPlayed = 0;
   let fights = 0;
+  let nightRepairs = 0;
   for (const seed of seeds) {
     const s = newGame(seed, cfg);
     const rng = seededRng(seed * 31 + 7);
@@ -134,7 +135,25 @@ function playRuns(seeds, days, cfg = CONFIG) {
       daysPlayed++;
       if (e.report) fights++;
       if (s.phase === 'over') break;
+      // night repairs (some while the report is open, the rest while planning): free of time, all gear home
+      const nightRepair = (share) => {
+        for (const g of s.gear) {
+          if (g.durability >= 100 || !rng.chance(share)) continue;
+          assert.equal(g.packed, false, 'all gear is home at night');
+          const t = s.time;
+          const r = repair(s, g.id, cfg);
+          assert.equal(typeof r.ok, 'boolean');
+          assert.equal(s.time, t, 'night repair costs no time');
+          if (r.ok) {
+            assert.equal(r.minutes, 0);
+            nightRepairs++;
+          }
+          checkInvariants(s, 'nightRepair', cfg);
+        }
+      };
+      nightRepair(50);
       if (s.phase === 'report') assert.equal(acknowledgeReport(s).ok, true);
+      nightRepair(100);
       // fight the weakest-looking enemy with the best gear and every adventurer ring (max)
       const enemyIndex = s.roster.enemies.findIndex((x) => x.tier === 'normal');
       const ringIds = s.rings.filter((r) => cfg.rings.types[r.type].owner === 'adventurer').slice(0, cfg.rings.maxWorn).map((r) => r.id);
@@ -145,7 +164,7 @@ function playRuns(seeds, days, cfg = CONFIG) {
       assert.deepEqual(back, s);
     }
   }
-  return { daysPlayed, fights };
+  return { daysPlayed, fights, nightRepairs };
 }
 
 test('random playthroughs keep every invariant and never throw (long runs: the adventurer always wins)', () => {
@@ -153,9 +172,10 @@ test('random playthroughs keep every invariant and never throw (long runs: the a
   const cfg = cfgWith(WEAK_ENEMIES, { field: { regrowPctPerDay: 25 } });
   const seeds = Array.from({ length: 8 }, (_, i) => i + 1);
   const days = 14;
-  const { daysPlayed, fights } = playRuns(seeds, days, cfg);
-  if (process.env.SMITHSY_DEBUG) console.log({ daysPlayed, fights });
+  const { daysPlayed, fights, nightRepairs } = playRuns(seeds, days, cfg);
+  if (process.env.SMITHSY_DEBUG) console.log({ daysPlayed, fights, nightRepairs });
   assert.equal(daysPlayed, seeds.length * days, 'nobody died');
+  assert.ok(nightRepairs > 0, 'night repairs happened');
   assert.equal(fights, seeds.length * (days - 1), 'a fight every day from day 2');
 });
 
