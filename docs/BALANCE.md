@@ -15,8 +15,9 @@ happens if you change it.
   supply numbers, `--section bot --seeds 40` for the bot results). Appendix B and C come from direct
   `fight()` simulations (20,000–50,000 fights each). Rerun the tool after any change; see
   [Balance targets and current results](#balance-targets-and-current-results). All numbers here match the
-  config as of commit 5bcae94 (search 35% ± 5 per cell, no field regrowth, level-10 skills = C-grade
-  rings, free night repairs with higher-grade substitutes, richer cells).
+  config as of commit 1e53a91 (all enemy tiers share base HP 80, damage 8 and defense 20%), which builds on
+  5bcae94 (search 35% ± 5 per cell, no field regrowth, level-10 skills = C-grade rings, free night repairs
+  with higher-grade substitutes, richer cells).
 
 ---
 
@@ -28,8 +29,8 @@ These are the knobs with the biggest effect on difficulty and pacing, roughly in
 |---|---|---|---|---|
 | Enemy HP and damage growth per day | `CONFIG.enemies.growthPerDay.hpDamage` | 3 (+3%/day, linear) | Late game gets hard sooner, runs get shorter | Longer runs, gear stays useful longer |
 | Enemy accuracy/dodge growth per day | `CONFIG.enemies.growthPerDay.ratings` | 1 (+1%/day) | Enemies hit you more and dodge more late on | Accuracy/dodge gear keeps its value longer |
-| Enemy tier base stats | `CONFIG.enemies.tiers.<tier>.hp / damage / defense` | normal 80/8/20, elite 80/9/25, champion 90/10/30 | Every fight harder from day 2 | Easier start |
-| Enemy attribute spread | `CONFIG.enemies.attributes.<key>.values` | see 12.3 | Low/High further apart: tiers differ more, scouting matters more | Tiers closer together |
+| Enemy tier base stats | `CONFIG.enemies.tiers.<tier>.hp / damage / defense` | 80 / 8 / 20 for every tier (user decision: champions are no tougher than elites or normals in base stats) | Every fight harder from day 2 | Easier start |
+| Enemy attribute spread | `CONFIG.enemies.attributes.<key>.values` | see 12.3 | Low/High further apart: tiers differ more (attribute levels are now the only difference between them), scouting matters more | Tiers closer together |
 | Material power | `CONFIG.gear.materialMult` | copper 1, iron 1.5, steel 2, mythril 3 | Bigger jump per material tier | Flatter curve, grades matter more |
 | Grade power | `CONFIG.gear.gradeMult` | D 1.0 … S 1.5 | Lucky refines matter more | Material matters more than luck |
 | Refining luck | `CONFIG.refine.<bar>.dist` | F 10, D 30–45 | More weight on D/F: slower gear progress | More weight on S/A/B: faster gear progress |
@@ -50,18 +51,22 @@ These are the knobs with the biggest effect on difficulty and pacing, roughly in
 | Starting scouting | `CONFIG.intel.tracks.enemySight.base` | 10% | Fewer surprises in fights | More hidden attributes, more risk |
 | Day length | `CONFIG.time.dayStartMin / dayEndMin` | 8:00–18:00 (600 min) | Longer day: more work per fight, easier | Shorter day: harder |
 | Skill strength | `CONFIG.skills.activity.<key>.perLevel`, `CONFIG.skills.perMaterial.<key>.perLevel` | 0.6 / 1.2 / 5 per level (time / search efficiency / debris); grade 0.3, fail 0.5 (level 10 = a C-grade ring) | Skills outgrow rings | Skills become a small extra |
-| Champion reward | `CONFIG.enemies.tiers.champion.score` | 50 (normal 10, elite 25) | Risky picks pay more | Safe play dominates |
+| Champion reward | `CONFIG.enemies.tiers.champion.score` | 50 (normal 10, elite 25) | Champions even more attractive (the careful bot already takes one on about 70% of days 11–30) | Fewer champion picks; safe play dominates |
 
-**What the current numbers produce (details in the next section and Appendix A):** a copper C sword +
-chest + boots made on day 1 wins about 93% of day-2 normal fights and 37% of elite fights. A full iron C
-set stays at 90%+ against normals until about day 10; steel C until day 20, mythril C until day 40,
-mythril S until day 60. Against elites the 70% line falls about 5–10 days earlier per tier. Enemy growth
-is linear and never stops while gear tops out at mythril S, so every run ends eventually. That is
-intended (endless, score-chasing). The scripted "careful" bot lives a median of 52 days. Fields do not
-regrow, so the map (about 1,560 items, only about 13 of them mythril) is the whole supply of a run: the bot
-has found 72% of it by day 40 (almost all the mythril) and 87% by day 50. Coal and mythril run low around
-day 50–55, after which even a perfect player cannot improve gear and hits the enemy-growth wall around
-day 55–70 (see "Map supply" below).
+**What the current numbers produce (details in the next section and Appendix A):** all three enemy tiers
+share the same base HP, damage and defense (80 / 8 / 20%), so they differ only by attribute levels, score
+and ring grades. A copper C sword + chest + boots made on day 1 wins about 93% of day-2 normal fights, 63%
+of elite fights and 22% of champion fights. A full iron C set stays at 90%+ against normals until about
+day 10; steel C until day 20, mythril C until day 40, mythril S until day 60. Against elites the 70% line
+falls at the same checkpoint for iron C and steel C (day 10 and day 20) and about 10 days earlier for
+mythril (C day 30, S day 50). Enemy growth is linear and never stops while gear tops out at mythril S, so
+every run ends eventually. That is intended (endless, score-chasing). The scripted "careful" bot lives a
+median of 53.5 days and now fights a champion on most mid-game days (about 70% of days 11–30), so its mean
+score rose to 1,323 (from 777 with the old, tougher elites and champions). Fields do not regrow, so the map
+(about 1,560 items, only about 13 of them mythril) is the whole supply of a run: the bot has found 74% of it
+by day 40 (almost all the mythril) and 90% by day 50. Coal and mythril run low around day 50–55, after
+which even a perfect player cannot improve gear and hits the enemy-growth wall around day 55–70 (see "Map
+supply" below).
 
 ---
 
@@ -69,25 +74,42 @@ day 55–70 (see "Map supply" below).
 
 ### What the tuning aimed for
 
-The targets are written into `tools/balance.mjs` and the tool flags results outside them:
+The targets are written into `tools/balance.mjs` and the tool flags results outside them, except the
+newest one (win rates with on-pace gear), which is checked by reading the power tables:
 
 | Target | Where the tool checks it | Aim | Now |
 |---|---|---|---|
-| Day-2 fight with sensible day-1 gear (a few copper pieces) | `power` section 1 (`DAY2_TARGET`), bot "d2 typical est" | normal 85–95%, elite 40–65%, champion < 20% | reference set 93 / 37 / 1; bot's own day-1 gear 93 / 44 / 2 (on target, elite at the low edge) |
-| Material progression (first pieces / 3 of 5 slots) | bot "Progression milestones" (`PROGRESS_TARGET`) | iron day 5–8, steel day 12–18, mythril day 25+ | iron 3 / 6, steel 8 / 11, mythril 16 / 25 (first pieces 2–9 days before the window; 3 of 5 slots inside it or 1 day early) |
-| Weakest plain set that holds a safe win rate | `power` section 3 | the elite ≥ 70% column should follow the progression above | iron day 2–12, steel day 15–20, mythril day 25+ (on target) |
-| Run length for a careful player | bot "median life" | around 50 days, with most deaths from day 40 on (the endless ramp, not early bad luck) | median 52; 35 of 40 deaths on day 41 or later (on target) |
-| Every system worth using | `--ablate` runs | removing a system should cost survival or score | rings and gems clearly; repair and skills a small loss about the size of the noise; intel within noise (see ablations below) |
+| Win rates with on-pace gear (the user's target, session 4) | `power` section 2: plain C sets late in their material window (iron C day 10, steel C day 20, mythril C day 40) | champion ~30–40%, elite ~60–70%, normal 90%+; erring on the high side (the user wanted higher win rates) | champion 48 / 32 / 21%, elite 83 / 74 / 63%, normal 99 / 95 / 92%; earlier in each window higher (steel C on day 15: 71 / 94 / 100%). On target or above, except mythril C on day 40 vs champions; the bot's real gear (gems, rings) is far above it (see "Champions" below) |
+| Day-2 fight with sensible day-1 gear (a few copper pieces) | `power` section 1 (`DAY2_TARGET`), bot "d2 typical est" | normal 85–98%, elite 50–75%, champion 15–40% (session-4 bands, slightly below the on-pace targets because day-1 gear trails the pace) | reference set 93 / 63 / 22 (inside all three); bot's own day-1 gear 93 / 68 / 32 |
+| Material progression (first pieces / 3 of 5 slots) | bot "Progression milestones" (`PROGRESS_TARGET`) | iron day 5–8, steel day 12–18, mythril day 25+ | iron 3 / 6, steel 8 / 12, mythril 17 / 26 (first pieces 2–8 days before the window; 3 of 5 slots inside it) |
+| Weakest plain set that holds a safe win rate | `power` section 3 | the elite ≥ 70% column should follow the progression above | copper B day 2–3, iron day 5–15, steel day 20–25, mythril day 30+: about 5 days behind the progression, so on-pace gear beats elites with room to spare |
+| Run length for a careful player | bot "median life" | around 50 days, with most deaths from day 40 on (the endless ramp, not early bad luck) | median 53.5; 31 of 40 deaths on day 41 or later (on target; 9 runs die before day 40, was 5) |
+| Every system worth using | `--ablate` runs | removing a system should cost survival or score | rings, gems and skills clearly; repair a small loss; intel within noise (see ablations below) |
 
 There is no target yet for how long the finite map lasts (fields do not regrow); see "Map supply" below.
 
-The tiers are deliberately close in base HP and damage (80/80/90 HP, 8/9/10 damage). Difficulty comes
-mostly from the attribute mix (normal: 6 Low + 6 Normal; champion: 6 Normal + 6 High) and from defense
-(20/25/30%).
+**All three tiers have the same base HP, damage and defense** (80 / 8 / 20%; user decision in session 4,
+commit 1e53a91: "Champions shouldn't have higher HP, damage, or defense than the elites or normals. The
+win rate is too low." Elites were 80 / 9 / 25 and champions 90 / 10 / 30). Difficulty now comes only from
+the attribute mix (normal: 6 Low + 6 Normal; elite: 3 Low + 6 Normal + 3 High; champion: 6 Normal + 6
+High). With the same day-2 reference gear, elite wins rose from 37% to 63% and champion wins from 1% to
+22%.
 
-### Current results (current `js/config.js`, commit 5bcae94)
+**Champions are now the careful bot's main mid-game pick.** The bot takes the enemy with the best
+`win% × (points + 1000)` among those estimated at 90%+, so a 50-point champion beats a 10-point normal once
+its estimate is within about 4% of the normal's. With gems, rings and the better of the roster's two
+champions, its best champion estimate is 93–98% on days 7–35 (table below), so it fights a champion on 47%
+of days 6–10 and about 70% of days 11–30 (was 0–3%), wins 16.5 champions per run (was 0.3) and scores
+1,323 on average (was 777); the champions' B–S rings feed back into its power. It costs a little safety:
+0.5–0.9% of fights are lost on days 11–40 (was 0.3–0.5%) and 9 of 40 runs die before day 40 (was 5). If
+champions should be a rarer, riskier pick for a careful player, the levers are the champion's score
+(section 16), its ring grades (`CONFIG.rings.gradeWeights.champion`, section 13) or the High attribute
+values (section 12.3), not the base stats, which the user wants equal across tiers.
 
-**Economy** (`node tools/balance.mjs --section economy`, about 15 s):
+### Current results (current `js/config.js`, commit 1e53a91)
+
+**Economy** (`node tools/balance.mjs --section economy`, about 15 s; unchanged by the tier change, the
+line below was re-run at commit 1e53a91):
 
 ```
 ECONOMY SUMMARY | items/search by dist d1:1.78 d2:1.88 d3:2.13 d4:2.30 d5+:2.45 | one trip d1/d3: 255/307 min
@@ -100,69 +122,89 @@ Items per search stay close to what 50% searching gave on the old, poorer cells 
 2.47 / 2.71 by distance), so the pacing is kept; searches to finish a cell are in section 3.3. The map is
 the whole supply of a run: 1,557 items on these 100 maps.
 
-**Power curve** (`node tools/balance.mjs --section power`, about 5 s; no combat number changed in this
-round, so it prints the same numbers as before):
+**Power curve** (`node tools/balance.mjs --section power`, about 5 s):
 
 ```
-POWER SUMMARY | day-2 ref (Copper C sword + C chest + C boots) n/e/c 93/37/1% | Cu D sword n/e/c 66/10/0% |
+POWER SUMMARY | day-2 ref (Copper C sword + C chest + C boots) n/e/c 93/63/22% | Cu D sword n/e/c 66/26/4% |
 last day >=90% vs normal: Copper B d5, Iron C d10, Steel C d20, Mythril C d40, Mythril S d60 |
->=70% vs elite: Copper B d-, Iron C d5, Steel C d15, Mythril C d30, Mythril S d50 | ceiling vs normal d60/d80 100/97%
+>=70% vs elite: Copper B d2, Iron C d10, Steel C d20, Mythril C d30, Mythril S d50 | ceiling vs normal d60/d80 100/97%
 ```
 
-The day-2 reference set sits at 37% vs elites, just under the 40–65% band. The bot's own day-1 gear
-(usually a gem in the sword) reaches 44%.
+The normal-tier numbers did not change (normals kept 80 / 8 / 20). The day-2 reference set now wins 63%
+against elites (was 37%) and 22% against champions (was 1%); the bot's own day-1 gear (usually a gem in
+the sword) reaches 68% and 32%. Plain sets on pace with the progression target:
+
+| Plain full set, day | vs normal | vs elite | vs champion |
+|---|---|---|---|
+| iron C, day 5 | 99.9 | 98.2 | 86.2 |
+| iron C, day 10 | 98.6 | 83.4 | 47.9 |
+| steel C, day 15 | 99.7 | 93.5 | 70.7 |
+| steel C, day 20 | 95.0 | 73.9 | 32.1 |
+| mythril C, day 30 | 99.7 | 93.6 | 71.5 |
+| mythril C, day 40 | 91.7 | 63.2 | 20.6 |
+| mythril S, day 50 | 99.7 | 90.0 | 58.6 |
 
 **Careful bot** (`node tools/balance.mjs --section bot --seeds 40`, about 3 minutes). The bot gathers,
 refines, cuts, smiths, repairs at night (free of time), wears rings, spends intel and picks the fight with
-the best `win% × (points + 1000)` among enemies estimated at 90%+ win (so it almost never risks a champion):
+the best `win% × (points + 1000)` among enemies estimated at 90%+ win (a champion needs about 96% of the
+best normal's estimate; it now clears that on most mid-game days):
 
 ```
-BOT SUMMARY | alive d10:98% d20:95% d30:90% d40:88% d50:55% d60:20% d80:0% | median life 52.0 | score 777 |
-d2 typical est n/e/c 93/44/2 | first iron/steel/myth piece d3/8/16 | 3-slot iron/steel/myth d6/11/25 |
-d11-30 fights n/e/c 24/74/2% | mining 66% trips/day 1.4 idle 18m | repair 1.3% bars 0.0% time, 4.8 night/run
-(1.1 subst.) | map found d40:72% d60:91% d80:-%
+BOT SUMMARY | alive d10:95% d20:90% d30:85% d40:78% d50:65% d60:10% d80:0% | median life 53.5 | score 1323 |
+d2 typical est n/e/c 93/68/32 | first iron/steel/myth piece d3/8/17 | 3-slot iron/steel/myth d6/12/26 |
+d11-30 fights n/e/c 2/26/72% | mining 65% trips/day 1.3 idle 18m | repair 1.5% bars 0.0% time, 5.1 night/run
+(1.1 subst.) | map found d40:74% d60:94% d80:-%
 ```
 
 | Survival (end of day) | 2 | 5 | 10 | 15 | 20 | 30 | 40 | 50 | 60 | 70 | 80 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| % of runs alive | 98 | 98 | 98 | 98 | 95 | 90 | 88 | 55 | 20 | 0 | 0 |
+| % of runs alive | 98 | 95 | 95 | 93 | 90 | 85 | 78 | 65 | 10 | 0 | 0 |
 
-Death days (40 runs): 2, 16, 22, 30, 36, 41, 42, 42, 44, 45, 47, 48, 49, 50, 50, 50, 50, 50, 51, 52, 52, 54,
-54, 55, 55, 56, 56, 56, 56, 57, 57, 57, 61, 61, 61, 62, 64, 67, 69, 70.
-Score: mean 777, median 823, max 1,190. Wins per run: 28.6 normal, 18.9 elite, 0.3 champion.
+Death days (40 runs): 2, 5, 14, 17, 23, 26, 31, 33, 36, 44, 45, 45, 49, 50, 51, 52, 53, 53, 53, 53, 54, 54,
+55, 55, 55, 55, 56, 56, 57, 57, 58, 59, 59, 59, 60, 60, 62, 62, 64, 64.
+Score: mean 1,323, median 1,460, max 1,925. Wins per run: 14.9 normal, 14.0 elite, 16.5 champion.
 
 | Progression (median day) | first piece | sword | 3 of 5 slots | all 5 slots | target |
 |---|---|---|---|---|---|
-| iron or better | 3 | 4 | 6 | 9 | 5–8 |
-| steel or better | 8 | 8 | 11 | 16 | 12–18 |
-| mythril | 16 (38/40 runs) | 16 (35/40 runs) | 25 (27/40 runs) | 32 (8/40 runs) | 25+ |
+| iron or better | 3 | 3 | 6 | 9 | 5–8 |
+| steel or better | 8 | 9 | 12 | 16 | 12–18 |
+| mythril | 17 (37/40 runs) | 17 (37/40 runs) | 26 (27/40 runs) | 31 (8/40 runs) | 25+ |
 
 | Days | Fights: normal / elite / champion % | Mean est. win % | Actual win % | Losses per fight % | "No safe option" fights |
 |---|---|---|---|---|---|
-| 2–5 | 87 / 13 / 0 | 98.2 | 99.4 | 0.6 | 9 of 157 |
-| 6–10 | 46 / 54 / 0 | 99.7 | 100.0 | 0.0 | 0 |
-| 11–20 | 21 / 76 / 3 | 99.7 | 99.7 | 0.3 | 0 |
-| 21–30 | 27 / 72 / 1 | 99.7 | 99.5 | 0.5 | 0 |
-| 31–40 | 80 / 20 / 0 | 99.5 | 99.7 | 0.3 | 1 of 356 |
-| 41–50 | 100 / 0 / 0 | 96.8 | 95.8 | 4.2 | 18 of 308 |
-| 51–60 | 100 / 0 / 0 | 84.6 | 90.5 | 9.5 | 79 of 148 |
-| 61–80 | 100 / 0 / 0 | 62.7 | 77.1 | 22.9 | 32 of 35 |
+| 2–5 | 59 / 38 / 3 | 98.1 | 98.7 | 1.3 | 8 of 157 |
+| 6–10 | 8 / 44 / 47 | 99.3 | 100.0 | 0.0 | 0 |
+| 11–20 | 2 / 27 / 70 | 99.4 | 99.5 | 0.5 | 0 |
+| 21–30 | 2 / 25 / 73 | 99.2 | 99.4 | 0.6 | 0 |
+| 31–40 | 22 / 62 / 17 | 99.2 | 99.1 | 0.9 | 1 of 320 |
+| 41–50 | 89 / 11 / 0 | 97.2 | 98.3 | 1.7 | 20 of 293 |
+| 51–60 | 100 / 0 / 0 | 86.8 | 86.6 | 13.4 | 74 of 164 |
+| 61–80 | 100 / 0 / 0 | 63.6 | 66.7 | 33.3 | 12 of 12 |
 
 "No safe option" = even the best enemy on the roster was estimated below the bot's 90% line, so it took
 the best one anyway.
 
+| Best estimated win % on the roster, bot's own gear (mean over runs alive) | d2 | d3 | d5 | d7 | d10 | d15 | d20 | d25 | d30 | d35 | d40 | d50 | d60 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| normal | 94 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 99 | 94 | 73 |
+| elite | 72 | 94 | 99 | 99 | 100 | 100 | 100 | 100 | 100 | 99 | 95 | 79 | 49 |
+| champion | 34 | 74 | 90 | 95 | 98 | 98 | 98 | 98 | 97 | 93 | 81 | 44 | 16 |
+
+(The best of the roster's two champions, with gems, rings and both packed items per slot, which is why
+these numbers sit far above the plain-set table in the power section.)
+
 | Daily time (minutes) | travel | search | clear | refine | cut | smith | repair | idle | mining share of used time |
 |---|---|---|---|---|---|---|---|---|---|
 | day 1 | 44 | 209 | 7 | 169 | 53 | 107 | 0 | 10 | 44% |
-| days 2–5 | 52 | 168 | 13 | 171 | 84 | 103 | 0 | 10 | 39% |
-| days 6–10 | 103 | 185 | 13 | 143 | 77 | 70 | 0 | 10 | 51% |
-| days 11–20 | 157 | 193 | 18 | 116 | 66 | 41 | 0 | 10 | 62% |
-| days 21–30 | 171 | 228 | 44 | 65 | 67 | 15 | 0 | 9 | 75% |
-| days 31–40 | 158 | 261 | 59 | 22 | 85 | 7 | 0 | 9 | 81% |
-| days 41–60 | 126 | 213 | 56 | 12 | 167 | 6 | 0 | 21 | 68% |
-| days 61+ (few runs) | 50 | 57 | 12 | 2 | 149 | 4 | 0 | 327 | 43% |
+| days 2–5 | 50 | 168 | 15 | 172 | 85 | 99 | 0 | 11 | 40% |
+| days 6–10 | 98 | 180 | 14 | 152 | 75 | 72 | 0 | 10 | 49% |
+| days 11–20 | 160 | 197 | 16 | 112 | 62 | 43 | 0 | 9 | 63% |
+| days 21–30 | 176 | 224 | 43 | 60 | 71 | 18 | 0 | 9 | 75% |
+| days 31–40 | 158 | 266 | 61 | 16 | 84 | 5 | 0 | 9 | 82% |
+| days 41–60 | 114 | 196 | 53 | 8 | 192 | 4 | 0 | 33 | 64% |
+| days 61+ (few runs) | 0 | 0 | 0 | 0 | 205 | 5 | 0 | 390 | 0% |
 
-("Mining" = travel + search + clear. The summary line's 66% is the average over all days from day 2.
+("Mining" = travel + search + clear. The summary line's 65% is the average over all days from day 2.
 Repairs show 0 minutes because the bot only repairs at night, when they cost no time.)
 
 **Map supply** (fields do not regrow, so the map is the whole supply; the bot's 40 maps start with 1,568
@@ -171,61 +213,62 @@ cover the 10 days up to that day:
 
 | Day | Runs alive | Found so far | % of map | Coal left | Mythril left | Found/day | Mining min per found item | Idle min/day |
 |---|---|---|---|---|---|---|---|---|
-| 10 | 39 | 213 | 14 | 118 | 14 | 21.3 | 12.6 | 10 |
-| 20 | 38 | 491 | 31 | 84 | 8 | 27.7 | 13.3 | 10 |
-| 30 | 37 | 807 | 51 | 55 | 4 | 31.6 | 14.1 | 9 |
-| 40 | 35 | 1,124 | 72 | 32 | 1 | 31.9 | 15.0 | 9 |
-| 50 | 27 | 1,383 | 87 | 15 | 1 | 27.5 | 16.5 | 9 |
-| 60 | 8 | 1,463 | 91 | 11 | 1 | 12.8 | 21.3 | 61 |
+| 10 | 38 | 211 | 13 | 118 | 14 | 21.1 | 12.6 | 10 |
+| 20 | 36 | 502 | 32 | 86 | 9 | 29.2 | 12.8 | 9 |
+| 30 | 34 | 807 | 51 | 55 | 3 | 30.7 | 14.4 | 9 |
+| 40 | 31 | 1,156 | 74 | 30 | 1 | 34.9 | 13.9 | 9 |
+| 50 | 27 | 1,414 | 90 | 12 | 1 | 25.9 | 17.2 | 8 |
+| 60 | 6 | 1,465 | 94 | 8 | 0 | 5.5 | 29.0 | 169 |
 
 The same bot with `--immortal` (enemies deal no damage, so all 40 runs reach day 80 and show how long the
 map lasts for a careful player who never dies):
 
 | Day | Found so far | % of map | Coal left | Mythril left | Found/day | Mining min per found item | Idle min/day |
 |---|---|---|---|---|---|---|---|
-| 40 | 1,132 | 72 | 29 | 1 | 33.4 | 14.5 | 9 |
-| 50 | 1,399 | 89 | 12 | 0 | 26.8 | 16.7 | 8 |
-| 60 | 1,452 | 93 | 8 | 0 | 5.3 | 24.8 | 154 |
-| 70 | 1,462 | 93 | 7 | 0 | 1.0 | 25.3 | 541 |
-| 80 | 1,469 | 94 | 7 | 0 | 0.7 | 43.5 | 568 |
+| 40 | 1,159 | 74 | 29 | 1 | 35.3 | 13.8 | 9 |
+| 50 | 1,408 | 90 | 11 | 0 | 24.9 | 16.8 | 9 |
+| 60 | 1,442 | 92 | 9 | 0 | 3.4 | 24.1 | 238 |
+| 70 | 1,450 | 92 | 8 | 0 | 0.9 | 26.4 | 556 |
+| 80 | 1,459 | 93 | 7 | 0 | 0.8 | 39.8 | 561 |
 
 **Finding: with no regrowth the map caps a run.** The bot finds about 30 items a day until day 40, by when
-72% of the map and nearly all of its mythril (13 of 14) are gone; coal follows (about 15 left by day 50).
-Coal and mythril run low around day 50–55: the immortal bot's finds fall from about 27 a day (days 41–50)
-to 5 (days 51–60) and 1 after that, its idle time jumps to 150–570 minutes a day, and its gear stops
-improving around day 40–50 (best sword mythril B or C, about 3.4 of 5 slots mythril). A map holds about 13
+74% of the map and nearly all of its mythril (13 of 14) are gone; coal follows (about 12 left by day 50).
+Coal and mythril run low around day 50–55: the immortal bot's finds fall from about 25 a day (days 41–50)
+to 3 (days 51–60) and 1 after that, its idle time jumps to 240–560 minutes a day, and its gear stops
+improving around day 30–40 (best sword mythril B, about 3.3 of 5 slots mythril). A map holds about 13
 mythril while a set of matched mythril C-or-better pieces needs about 26 on average (economy section 5),
 so even a perfect player hits a wall around day 55–70: the best plain set, mythril S, holds 90% against
 normals only until day 60, and only the ceiling loadout (S gems, ten S rings) still wins 97% at day 80
-(Appendix A), which needs far more S-grade material than one map holds. The careful bot itself dies first
-(median day 52), so for it the map is not yet the main limit, but it soon would be. Regrowth can be
-re-enabled via `CONFIG.field.regrowPctPerDay`: with `--set field.regrowPctPerDay=5` the bot keeps finding
-26–28 items a day after day 50, has all 5 slots in mythril by day 60 and survives a little longer (median
-53; alive at day 50 / 60: 65% / 30% instead of 55% / 20%; mean score 709, lower only because of four day-2
-losses, which are noise: regrowth cannot change day-1 gear).
+(Appendix A), which needs far more S-grade material than one map holds. The careful bot dies at about the
+same time (median day 53.5), and the map is now one of its limits: with regrowth on it lives about 5 days
+longer (below; in the previous round, with tougher elites and champions, regrowth gained it only 1 day).
+Regrowth can be re-enabled via `CONFIG.field.regrowPctPerDay`: with `--set field.regrowPctPerDay=5` the
+bot keeps finding about 27 items a day after day 50, has nearly all 5 slots in mythril by day 60 (4.9 of
+5) and lives longer (median 58.5 instead of 53.5; alive at day 50 / 60: 70% / 48% instead of 65% / 10%;
+mean score 1,334, about the same as without regrowth only because of five losses on days 2–3, which are
+noise: regrowth barely changes the first days).
 
-Other bot facts: about 48 rings per run (19.5 smith, 28.4 adventurer); 4.8 repairs per run, all at night,
-costing 1.3% of the bars made (1.1 of them with a higher-grade substitute); 2.0 items per run destroyed by
-wear (2.6% of bars made, mostly mythril that could not be repaired once the map's mythril was gone); 82% of
-the map searched by the end of a run; all intel goes to enemy scouting (9.4 points). Five of 40 runs die
-before day 40, one of them on day 2. After day 40 deaths are a mix of unlucky losses at 90–99% estimates
-and "no safe option" days; from day 51 on, 61% of the bot's fights have no safe option.
+Other bot facts: about 45 rings per run (19.1 smith, 26.3 adventurer); 5.1 repairs per run, all at night,
+costing 1.5% of the bars made (1.1 of them with a higher-grade substitute); 1.5 items per run destroyed by
+wear (2.1% of bars made, two thirds of it mythril that could not be repaired once the map's mythril was
+gone); 79% of the map searched by the end of a run; all intel goes to enemy scouting (8.8 points). Nine
+of 40 runs die before day 40, one of them on day 2. After day 40 deaths are a mix of unlucky losses at
+90–99% estimates and "no safe option" days; from day 51 on, 49% of the bot's fights have no safe option.
 
 **System ablations** (same 40 seeds, `--ablate <system>`). Survival numbers still move by several points
 from noise alone (the tool's help gives ±10 for 20 runs), so only large differences mean something:
 
 | Run | Median life | Alive d40 / d50 / d60 | Mean score | Note |
 |---|---|---|---|---|
-| full game | 52.0 | 88% / 55% / 20% | 777 | |
-| `--ablate rings` | 46.0 | 70% / 28% / 3% | 535 | clear loss: rings are the main late-game power source (fewer elite wins: 7.9 vs 18.9 per run) |
-| `--ablate gems` | 42.0 | 68% / 20% / 0% | 637 | clear loss: without cutting and infusing the bot has 3 mythril slots by day 15 (instead of 25), then has little worth doing: trips fall to 0.1–0.3 a day and it idles 440–540 min a day after day 20 (only 45% of the map found by day 40) |
-| `--ablate repair` | 48.5 | 80% / 43% / 5% | 738 | small loss (free night repairs keep the best gear alive), about the size of the noise |
-| `--ablate skills` | 50.0 | 78% / 50% / 5% | 688 | small loss, about the size of the noise |
-| `--ablate intel` | 51.0 | 83% / 53% / 0% | 715 | within noise |
+| full game | 53.5 | 78% / 65% / 10% | 1,323 | |
+| `--ablate rings` | 45.0 | 63% / 28% / 5% | 783 | clear loss: rings are the main late-game power source, and without them the bot takes far fewer champions (4.8 instead of 16.5 wins per run; champions are 22% of its fights on days 11–30 instead of 72%) |
+| `--ablate gems` | 46.0 | 78% / 3% / 0% | 1,152 | clear loss after day 40: without cutting and infusing the bot has 3 mythril slots by day 15 (instead of 26), then has little worth doing: trips fall to 0.1–0.4 a day and it idles 420–530 min a day after day 20 (only 45% of the map found by day 40); almost every run dies between day 40 and 50 |
+| `--ablate repair` | 49.0 | 75% / 43% / 3% | 1,249 | small loss (free night repairs keep the best gear alive) |
+| `--ablate skills` | 46.0 | 58% / 40% / 8% | 1,158 | a loss, larger than in the previous round (was about the size of the noise) |
+| `--ablate intel` | 52.5 | 75% / 55% / 13% | 1,212 | within noise |
 
-No ablation beats the full game this time. Compared with the previous round (24 seeds, old config), gems
-moved from "no net loss" to a clear loss, and repair and skills from "nothing measurable" to a small loss,
-in line with the free night repairs and the stronger skills.
+No ablation beats the full game. Compared with the previous round (old enemy tiers), skills moved from
+"a small loss about the size of the noise" to a clearer loss; the others kept their rank.
 
 ### Running what-if experiments
 
@@ -262,8 +305,9 @@ overrides it applied at the top (`WHAT-IF overrides`). A `--set` path must alrea
 `--seeds 40` or more.
 
 Example: `--set enemies.growthPerDay.hpDamage=4` moves the power summary to
-`last day >=90% vs normal: ... Steel C d15, Mythril C d30, Mythril S d50 | >=70% vs elite: ... Steel C d10,
-Mythril C d20, Mythril S d40 | ceiling vs normal d60/d80 99/63%`, i.e. every tier loses 5–10 days.
+`last day >=90% vs normal: ... Steel C d15, Mythril C d30, Mythril S d50 | >=70% vs elite: ... Iron C d5,
+Steel C d15, Mythril C d20, Mythril S d40 | ceiling vs normal d60/d80 99/63%`, i.e. every tier loses 5–10
+days.
 
 ---
 
@@ -308,7 +352,7 @@ At 16:30 the same search would end at 17:00 and the walk home at 18:04.8, so it 
 
 **Tuning notes.** Day length scales everything that is "per day" (gathering, refining, smithing) against
 everything that is "per fight" (wear, enemy growth). Longer days = easier game. The 75% cap only matters
-once many rings and skills are stacked (the bot ends runs at about 8–14% total on each time bonus and 25%
+once many rings and skills are stacked (the bot ends runs at about 8–15% total on each time bonus and 24%
 on debris clearing).
 
 ---
@@ -358,7 +402,7 @@ camp, so it is worth about half a ring.
 distance-4 round trip takes 160+ of the 600 minutes. Raising it pushes players to near fields (more copper,
 fewer gems, no coal or mythril); lowering it makes far fields the obvious choice. `loadPenaltyPerItem` is a
 small tax that interacts with bag size (a full 20-item bag = +20% on the way home). The bot spends about
-155–170 min a day travelling on days 11–40, less after that as the reachable fields run dry.
+160–175 min a day travelling on days 11–40, less after that as the reachable fields run dry.
 
 ---
 
@@ -454,8 +498,8 @@ cells (≈ 78 items) regrow per night across all 20 fields, which would be the l
 is spent.
 
 **Tuning notes.** With regrowth off the map is a finite resource that caps the length of a run: the bot
-has found 72% of the map by day 40 and 87% by day 50; mythril is nearly gone by day 40 and coal runs low
-by day 50–55 (about 15 of 126 left at day 50; see "Map supply" in the results). Turning it back on (try
+has found 74% of the map by day 40 and 90% by day 50; mythril is nearly gone by day 40 and coal runs low
+by day 50–55 (about 12 of 126 left at day 50; see "Map supply" in the results). Turning it back on (try
 `--set field.regrowPctPerDay=5` in the balance tool) keeps the endless game supplied, mostly near camp,
 where the player searches most; high values make near fields self-sufficient (less reason to travel).
 
@@ -544,7 +588,7 @@ about 1.4 expected items instead of 1.0; clearing it costs 15 min on top of sear
 report the minutes per extra item found under debris (9–15) are a little lower than plain searching
 (12–17), so clearing is a slightly good deal. Raising `debrisChance` hides more of each field behind a time
 cost. The Debris clearing skill has no ring counterpart and is strong (5% per level, −50% at level 10);
-the bot ends runs at about level 5 (−25%).
+the bot ends runs at about level 5 (about −24%).
 
 ### 3.5 Ore sight
 
@@ -586,8 +630,8 @@ fill the bag (20 items) in about 275 minutes. A second trip the same afternoon b
 38 items. At distance 4 the travel eats more of the day: about 30 items/day.
 
 **Tuning notes.** Bag size is a soft cap on items per trip and pushes players toward near fields or mid-day
-trips home. Raising it mostly helps far-field play. The bot makes 1.4 trips a day on average and its
-trips carry 9.7 items; only 15% of its trips fill the bag (it heads home when the rest of the day is better
+trips home. Raising it mostly helps far-field play. The bot makes 1.3 trips a day on average and its
+trips carry 9.8 items; only 16% of its trips fill the bag (it heads home when the rest of the day is better
 spent refining).
 
 ---
@@ -649,8 +693,8 @@ minutes per C-or-better bar; gems 33 minutes per C-or-better cut gem.
 grade makes matching sets of that grade more common. F is a flat material tax. Upgrade luck is weak per
 point (each point moves 1% of each grade up one step), which is why rings give only 2–6. Processing times
 (15 → 30 min) were raised so that refining and cutting take a real share of the day (the bot spends about
-290–360 min a day at camp refining, cutting and smithing in the first 10 days, falling to about 115 min on
-days 31–40 as it mines more; after day 40, with the map running low, it spends about 170 min a day cutting
+300–360 min a day at camp refining, cutting and smithing in the first 10 days, falling to about 105 min on
+days 31–40 as it mines more; after day 40, with the map running low, it spends about 190 min a day cutting
 stockpiled gems).
 
 ---
@@ -716,9 +760,11 @@ the whole D-to-S grade range.
 
 **Worked example.** Steel A chest: 6 × 2.0 × 1.3 = **15.6% defense**, costs 3 steel A bars and 45 min.
 
-**How much each slot is worth** (power report, steel C set vs an elite on day 20, base 46.2%): upgrading
-one piece to mythril C adds sword +45.0, boots +14.8, chest +10.8, helmet +6.5, gloves +6.1 points;
-removing it costs sword −46.2, boots −24.5, chest −13.6, gloves −10.4, helmet −9.2.
+**How much each slot is worth** (power report, steel C set vs an elite on day 24, base 51.4%; the report
+picks the day where this set is closest to 50%, which moved from day 20 to day 24 when elites lost their
+extra damage and defense): upgrading one piece to mythril C adds sword +41.9, boots +14.6, chest +8.7,
+gloves +7.0, helmet +6.1 points; removing it costs sword −51.4, boots −28.5, chest −15.1, gloves −14.0,
+helmet −10.2.
 
 **Tuning notes.** `materialMult` is the backbone of the power curve. Enemies grow without limit while
 materials stop at mythril, so these values set how many days each material stays viable (Appendix A).
@@ -758,19 +804,21 @@ of the sword's damage. On an iron B sword (18 damage) that is 1.44 extra magic d
 enemy's magic resistance.
 
 **How strong is each gem right now?** Win-% change for a steel C full set against a typical elite on day
-20 (all attributes hidden, base 46.2%; power report):
+24 (all attributes hidden, base 51.4%; power report):
 
 | Gem | Sword C | Sword S | Chest C | All 4 armor pieces C |
 |---|---|---|---|---|
-| Ruby | +11.3 | +21.1 | +2.5 | +8.8 |
-| Diamond | +10.1 | +20.5 | +0.3 | +0.9 |
-| Sapphire | +8.1 | +24.8 | +4.3 | +9.2 |
-| Emerald | +7.1 | +11.0 | +4.1 | +15.9 |
-| Topaz | +4.8 | +11.9 | +0.5 | +2.6 |
+| Ruby | +9.3 | +18.5 | +2.6 | +8.3 |
+| Sapphire | +8.4 | +23.7 | +3.9 | +8.6 |
+| Emerald | +6.7 | +12.8 | +3.6 | +13.6 |
+| Diamond | +5.1 | +14.2 | +0.4 | +2.7 |
+| Topaz | +4.0 | +10.5 | +0.9 | +2.9 |
 
 **Tuning notes.** The sword gems were rebalanced (ruby halved from 10–30% to 5–15%; emerald and diamond
 doubled; topaz stun chance raised from 4–12% to 10–20% and stuns from 0.5–1.0 s to 1–1.5 s; sapphire
-unchanged) so that ruby, diamond and sapphire swords are close, with emerald and topaz a step behind.
+unchanged) so that ruby, diamond and sapphire swords were close, with emerald and topaz a step behind.
+Since every tier has 20% defense (elites had 25%, champions 30%), piercing has less defense to ignore and
+the diamond sword fell from second to fourth (C +5.1, was +10.1); ruby and sapphire now lead.
 Armor gems are much weaker except emerald (dodge) and sapphire (slow resistance against Chilling).
 Diamond armor (pierce resistance) and topaz armor (stun resistance) are nearly worthless because enemy
 Piercing (5–25% of your defense) and Stunning (5–15% chance of a 1 s stun) are small threats; see 10.4 and
@@ -840,13 +888,13 @@ right away. An item that is packed every night is never at home during a work da
 never be repaired; the free night repair fixes that: the battle report offers Repair buttons for the gear
 just used, and the plan screen for every item, before anything is packed. In the bot runs (the bot
 repairs its two best items of each slot at night once they fall below 50%, or below 30% when only a higher
-grade is in stock, and never repairs by day): 4.8 repairs per run, all at night, costing 1.3% of the bars
-made; 1.1 of them use a higher-grade substitute (0.57 better bars per run). 2.0 items per run are still
-destroyed by wear (2.6% of the bars made, two thirds of it mythril): on about 21 nights per run a worn
+grade is in stock, and never repairs by day): 5.1 repairs per run, all at night, costing 1.5% of the bars
+made; 1.1 of them use a higher-grade substitute (0.58 better bars per run). 1.5 items per run are still
+destroyed by wear (2.1% of the bars made, two thirds of it mythril): on about 18 nights per run a worn
 top item has no bars of its material at its grade or higher, and once the finite map's mythril is gone,
 mythril gear cannot be repaired at all.
-`--ablate repair` costs the bot 3.5 days of median life (48.5 instead of 52) and 15 points of survival at
-day 60, a small effect about the size of the noise.
+`--ablate repair` costs the bot 4.5 days of median life (49 instead of 53.5) and 22 points of survival at
+day 50 (43% instead of 65%), a small loss.
 
 **Tuning notes.** Wear and repair cost are the sinks for bars after the first sets are made. With free
 night repairs only the materials count (35% of the bars for a full repair), and the real limit is having
@@ -955,13 +1003,13 @@ magic part. Example: a hit that lists 18 damage deals 16.2 to 19.8.
 **Formula.** `effectiveDefense = min(defense, 75) × (1 − pierce%/100)` (pierce% from 10.4);
 `physical damage = damage × (1 − effectiveDefense/100)`.
 
-**Worked example.** Elite Ogre on day 6 (damage 9 × 1.15 = 10.35) with High Piercing (25) vs adventurer
+**Worked example.** Elite Ogre on day 6 (damage 8 × 1.15 = 9.2) with High Piercing (25) vs adventurer
 defense 18.9 (no pierce resistance): effective defense = 18.9 × 0.75 = 14.175; physical =
-10.35 × (1 − 0.14175) = **8.88**.
+9.2 × (1 − 0.14175) = **7.90**.
 
 **Tuning notes.** The best possible gear defense is 63% (mythril S set) and there are no defense rings, so
 the cap is currently never reached. It only matters if slot defense values or multipliers go up. Enemy
-defense is 20 / 25 / 30% by tier (no daily growth).
+defense is 20% for every tier (no daily growth).
 
 ### 10.4 Piercing and pierce resistance
 
@@ -982,16 +1030,18 @@ effectiveDefense = min(defender.defense, 75) × (1 − pierce% / 100)
   (5–10), capped at 75.
 
 **Worked examples.** Diamond S sword (60) + Piercing ring S (7) = 67 vs a champion with High pierce
-resistance (40): 67 × 0.6 = 40.2% of its 30 defense ignored → effective defense 17.94, physical damage
-×0.821 instead of ×0.70 (**+17%**).
+resistance (40): 67 × 0.6 = 40.2% of its 20 defense ignored → effective defense 11.96, physical damage
+×0.880 instead of ×0.80 (**+10%**).
 Defending: a Pierce resistance ring S (10) + diamond S chest (15) = 25% against High Piercing (25):
 25 × 0.75 = 18.75% of your defense ignored instead of 25%. With a steel C set (30.8 defense) that changes
 damage taken from ×0.769 to ×0.750, only 2.5% less.
 
-**Tuning notes.** Enemy defense (20/25/30) makes adventurer piercing worthwhile (a diamond sword is one of
-the best gems). The reverse is weak: enemy Piercing ignores at most a quarter of your defense, so pierce
-resistance protects very little (pierce resistance rings test at +0.3 to +0.4 points). Raising the enemy
-Piercing values would make diamond armor and the ring matter.
+**Tuning notes.** Enemy defense (20% for every tier) caps what adventurer piercing can win: at most +25%
+physical damage (all 20 points ignored), so a diamond sword is a mid-ranked gem (fourth of five at C in
+section 7) and Piercing rings test at +1.3 to +1.4 points. Raising enemy defense (all tiers or one) would
+make piercing matter more. The reverse is weak too: enemy Piercing ignores at most a quarter of your
+defense, so pierce resistance protects very little (pierce resistance rings test at +0.4 to +0.8 points).
+Raising the enemy Piercing values would make diamond armor and the ring matter.
 
 ### 10.5 Magic damage and magic resistance
 
@@ -1003,8 +1053,8 @@ Magic ignores defense and piercing. Cap: `CONFIG.combat.resistCap` = 75.
 - Enemy magicPct (`magical`) = 10 / 20 / 30 % of its damage. Adventurer magic resistance = ruby armor
   (4–15 per piece) + Magic resistance rings (3–7).
 
-**Worked example.** Iron B sword (18) + ruby C (8%) vs an elite (defense 25) with Low magic resistance (0):
-18 × 0.08 = **1.44** magic per hit on top of 18 × (1 − 0.25) = 13.5 physical = 14.94 total.
+**Worked example.** Iron B sword (18) + ruby C (8%) vs an elite (defense 20) with Low magic resistance (0):
+18 × 0.08 = **1.44** magic per hit on top of 18 × (1 − 0.20) = 14.4 physical = 15.84 total.
 
 **Tuning notes.** Magic is "+X% damage that ignores defense", so it gains value as enemy defense rises.
 Enemy Magical is the most dangerous attribute (Appendix B) because adventurer magic resistance is scarce.
@@ -1074,8 +1124,9 @@ landed hit. Unresisted it is 2.0 × 30 / 130 = 0.46 s per landed hit.
 most of its hits keeps the adventurer slowed nearly all the time: unresisted High Chilling is close to
 −23% attack speed (1/1.3). That is why Chilling, sapphire armor and Slow resistance rings matter more than
 their stun counterparts. Small slows are lumpy: they only change the result when they push an attack past
-the moment a fighter would have died (in Appendix B's setup, a sapphire C sword against Normal or High
-Slow resistance gives the same win rate). To soften Chilling, lower its values or `slowDuration`.
+the moment a fighter would have died (in Appendix B's setup, a sapphire C sword wins 62.2% against Low
+Slow resistance but 51.8% and 50.0% against Normal and High). To soften Chilling, lower its values or
+`slowDuration`.
 
 ### 10.8 Attack interval and speed
 
@@ -1153,8 +1204,8 @@ fights, about 0.1 s in Node with 32 loadouts; in the browser it runs in steps wi
 
 **Worked example.** At a true 50% the sampling error of 1,200 fights is about ±1.4 points (one standard
 deviation), a bit more in practice because the 40 guesses are shared. In the bot runs the mean estimate
-matched the actual win rate within about 1 point up to day 50, and was pessimistic after that (84.6%
-estimated vs 90.5% won on days 51–60; Balance targets section).
+matched the actual win rate within about 1 point up to day 60 (86.8% estimated vs 86.6% won on days
+51–60; Balance targets section); the 12 fights after day 60 are too few to judge.
 
 **Tuning notes.** More `samples` = better coverage of hidden attributes (with enemy scouting at its 10%
 base, about 11 of 12 attributes are guesses). More `fightsPerLoadout` = the simulated gear choice matches
@@ -1181,9 +1232,9 @@ A hidden attribute is shown as a range over every level it could still have (res
 low/normal/high counts); each row varies only the attributes that affect it, the others are taken as
 Normal. Stuns, slows and the 90–110% damage roll are ignored, so use the win-chance estimate for the full
 picture. Example: the Appendix C gear against a day-6 elite with nothing scouted shows hit chance
-80.5–90.3% / 69.6–83.8%, damage per hit 14.5–14.9 / 9.5–12.0, attacks every 1.94 s / 1.90–2.11 s,
-expected damage per second 6.03–6.97 / 3.15–5.27, HP 100 / 82.8–101.2, rough time to win 12–17 s and to
-lose 19–32 s.
+80.5–90.3% / 69.6–83.8%, damage per hit 15.4–15.8 / 8.5–10.7, attacks every 1.94 s / 1.90–2.11 s,
+expected damage per second 6.41–7.39 / 2.80–4.69, HP 100 / 82.8–101.2, rough time to win 11–16 s and to
+lose 21–36 s.
 
 ---
 
@@ -1191,16 +1242,19 @@ lose 19–32 s.
 
 ### 12.1 Tiers and the daily roster
 
-| Tier | Per roster | Base HP | Base damage | Defense | Low / Normal / High attributes | Score |
-|---|---|---|---|---|---|---|
-| Normal | 2 | 80 | 8 | 20 | 6 / 6 / 0 | 10 |
-| Elite | 3 | 80 | 9 | 25 | 3 / 6 / 3 | 25 |
-| Champion | 2 | 90 | 10 | 30 | 0 / 6 / 6 | 50 |
+| Tier | Per roster | Base HP | Base damage | Defense | Low / Normal / High attributes | Score | Ring grades |
+|---|---|---|---|---|---|---|---|
+| Normal | 2 | 80 | 8 | 20 | 6 / 6 / 0 | 10 | D–B |
+| Elite | 3 | 80 | 8 | 20 | 3 / 6 / 3 | 25 | C–A |
+| Champion | 2 | 80 | 8 | 20 | 0 / 6 / 6 | 50 | B–S |
 
 Config: `CONFIG.enemies.tiers.<tier>.{count, hp, damage, defense, levels, score}`. The level counts must
-add up to 12 (the number of attributes). Base HP and damage are close on purpose: the tiers differ mostly
-by their attribute levels and defense. Each morning a new roster of 7 is generated for the *next* day's
-fight (the player picks one that evening). Names come from `CONFIG.enemies.names` (a duplicate within a
+add up to 12 (the number of attributes). **All three tiers share the same base HP, damage and defense**
+(user decision, commit 1e53a91: champions should not have higher HP, damage or defense than elites or
+normals, because win rates against them were too low; elites were 80 / 9 / 25 and champions 90 / 10 / 30).
+The tiers now differ only by their attribute levels, their score and their ring grades
+(`CONFIG.rings.gradeWeights`, section 13). Each morning a new roster of 7 is generated for the *next*
+day's fight (the player picks one that evening). Names come from `CONFIG.enemies.names` (a duplicate within a
 tier is re-rolled up to 10 times). Each enemy's ring reward is rolled when the roster is made.
 
 ### 12.2 Daily growth
@@ -1222,26 +1276,28 @@ defense  = tier defense (no growth)
 
 **Enemy numbers with the HP, Accurate and Evasion attributes at Normal:**
 
-| Day | HP/damage × | Ratings × | Normal HP / dmg | Elite HP / dmg | Champion HP / dmg | Accuracy & dodge |
-|---|---|---|---|---|---|---|
-| 2 | 1.03 | 1.01 | 82.4 / 8.24 | 82.4 / 9.27 | 92.7 / 10.3 | 101 |
-| 5 | 1.12 | 1.04 | 89.6 / 8.96 | 89.6 / 10.08 | 100.8 / 11.2 | 104 |
-| 10 | 1.27 | 1.09 | 101.6 / 10.16 | 101.6 / 11.43 | 114.3 / 12.7 | 109 |
-| 15 | 1.42 | 1.14 | 113.6 / 11.36 | 113.6 / 12.78 | 127.8 / 14.2 | 114 |
-| 20 | 1.57 | 1.19 | 125.6 / 12.56 | 125.6 / 14.13 | 141.3 / 15.7 | 119 |
-| 30 | 1.87 | 1.29 | 149.6 / 14.96 | 149.6 / 16.83 | 168.3 / 18.7 | 129 |
-| 40 | 2.17 | 1.39 | 173.6 / 17.36 | 173.6 / 19.53 | 195.3 / 21.7 | 139 |
-| 50 | 2.47 | 1.49 | 197.6 / 19.76 | 197.6 / 22.23 | 222.3 / 24.7 | 149 |
-| 60 | 2.77 | 1.59 | 221.6 / 22.16 | 221.6 / 24.93 | 249.3 / 27.7 | 159 |
-| 80 | 3.37 | 1.79 | 269.6 / 26.96 | 269.6 / 30.33 | 303.3 / 33.7 | 179 |
+| Day | HP/damage × | Ratings × | HP / damage (every tier) | Accuracy & dodge |
+|---|---|---|---|---|
+| 2 | 1.03 | 1.01 | 82.4 / 8.24 | 101 |
+| 5 | 1.12 | 1.04 | 89.6 / 8.96 | 104 |
+| 10 | 1.27 | 1.09 | 101.6 / 10.16 | 109 |
+| 15 | 1.42 | 1.14 | 113.6 / 11.36 | 114 |
+| 20 | 1.57 | 1.19 | 125.6 / 12.56 | 119 |
+| 30 | 1.87 | 1.29 | 149.6 / 14.96 | 129 |
+| 40 | 2.17 | 1.39 | 173.6 / 17.36 | 139 |
+| 50 | 2.47 | 1.49 | 197.6 / 19.76 | 149 |
+| 60 | 2.77 | 1.59 | 221.6 / 22.16 | 159 |
+| 80 | 3.37 | 1.79 | 269.6 / 26.96 | 179 |
 
 Growth is linear: HP and damage double by about day 35 and triple by day 68. Because both HP and damage
-grow, the enemy's "threat" (HP × damage) grows with the square: ×4 by day 35. A normal-tier enemy has 6
-Low attributes, so a typical normal is weaker than its row suggests (HP Low = 90%, Accurate Low = 80, ...).
+grow, the enemy's "threat" (HP × damage) grows with the square: ×4 by day 35. Since the base numbers are
+the same for every tier, the tiers differ only through their attributes: a normal has 6 Low attributes, so
+a typical normal is weaker than this row (HP Low = 90%, Accurate Low = 80, ...), and a champion has 6 High
+ones, so a typical champion is stronger (HP High = 110%, Accurate High = 120, ...).
 
 **Worked example.** Elite "Ogre" on day 6 with HP Normal, Accurate Normal, Evasion High:
-×1.15 / ×1.05 → HP 80 × 1.15 = **92**, damage 9 × 1.15 = **10.35**, accuracy 100 × 1.05 = **105**,
-dodge 120 × 1.05 = **126**, defense 25.
+×1.15 / ×1.05 → HP 80 × 1.15 = **92**, damage 8 × 1.15 = **9.2**, accuracy 100 × 1.05 = **105**,
+dodge 120 × 1.05 = **126**, defense 20.
 
 **Tuning notes.** `hpDamage` is the single most important difficulty number: it sets how many days each
 gear tier stays good (`--set enemies.growthPerDay.hpDamage=4` costs every tier 5–10 days of safety).
@@ -1270,8 +1326,11 @@ roster immediately. Once the fight starts, every attribute is known.
 **Worked example.** At the 10% base an enemy shows on average 1.2 of its 12 attributes; at 29% (2 intel
 points) 3.5; at 44% (4 points) 5.3.
 
-**Tuning notes.** Appendix B shows how much each attribute swings a fight. Magical, HP and Accurate are
-the biggest; Fast, Chilling and Evasion next; Stunning and Piercing are mild. The defensive attributes
+**Tuning notes.** Appendix B shows how much each attribute swings a fight. HP, Accurate and Magical are
+the biggest; Fast, Chilling and Evasion next; Stunning is mild. Piercing is lumpy: in Appendix B's setup
+its Low − High swing is 16.8 points on day 24 but between about 3 and 18 on days 20–26, because a few
+points of the adventurer's defense only matter when they change how many hits it survives. With equal
+base stats the attribute levels are now the only thing that separates the tiers. The defensive attributes
 only matter against the matching adventurer gem or ring. To make an attribute matter more, widen its
 Low/High spread.
 
@@ -1324,29 +1383,30 @@ Ten Health S rings: 7 × (1 + 0.5 + … ) = **13.99%** HP (the limit is 2 × the
 champion drops a specific ring type at S grade: 1/17 × 10% = 0.59%.
 
 **How strong is one ring right now?** Win-% change for a steel C full set against a typical elite on day
-20 (base 46.2%; power report, ±1–2 points of noise):
+24 (base 51.4%; power report, ±1–2 points of noise):
 
 | Ring | One B ring | One S ring |
 |---|---|---|
-| Health | +8.2 | +11.9 |
-| Magic damage | +5.8 | +9.3 |
-| Speed | +5.8 | +6.1 |
-| Dodge | +4.5 | +6.2 |
-| Slow resistance | +3.9 | +5.2 |
-| Accuracy | +2.8 | +2.9 |
-| Magic resistance | +1.5 | +2.2 |
-| Piercing | +0.6 | +1.0 |
-| Stun resistance | +0.3 | +1.1 |
-| Pierce resistance | +0.4 | +0.3 |
+| Health | +7.5 | +9.6 |
+| Speed | +5.3 | +6.1 |
+| Magic damage | +4.3 | +7.8 |
+| Dodge | +4.2 | +5.3 |
+| Slow resistance | +3.8 | +4.6 |
+| Accuracy | +2.2 | +2.6 |
+| Magic resistance | +1.6 | +2.7 |
+| Piercing | +1.3 | +1.4 |
+| Stun resistance | +0.9 | +1.6 |
+| Pierce resistance | +0.4 | +0.8 |
 
-All 10 adventurer ring types at grade B together: +31.4 points.
+All 10 adventurer ring types at grade B together: +27.3 points.
 
 **Tuning notes.** `duplicateFactor` decides whether stacking one type is worthwhile (0.5 = a second copy
 is worth half). Grade weights set how fast ring power grows with fight difficulty; champion fights are the
 only source of S rings. A level-10 skill equals a C-grade smith ring of the same kind (section 14), so
 B-to-S smith rings still beat a maxed skill; adventurer rings have no skill counterpart. In the bot runs
-removing rings clearly hurts (`--ablate rings`: median life 46 instead of 52, 28% alive at day 50 instead
-of 55%, mean score 535 instead of 777, and only 7.9 elite wins per run instead of 18.9).
+removing rings clearly hurts (`--ablate rings`: median life 45 instead of 53.5, 28% alive at day 50 instead
+of 65%, mean score 783 instead of 1,323, and only 4.8 champion wins per run instead of 16.5). Since the
+careful bot now fights champions on most mid-game days, their B–S rings are a large part of its power.
 Pierce resistance and Stun resistance are near-dead picks (see 10.4 and 10.6).
 
 ---
@@ -1411,19 +1471,20 @@ because searches get faster as the skill grows and XP = minutes). Refining 60 my
 gives 3,000 XP: Mythril bar grade and Mythril refining reach level 7 = +2.1% upgrade luck and −3.5 failure
 points.
 
-**What the bot reaches** by the end of a run (about day 50, mean levels): activity skills from 5 to almost
-10 (search speed and efficiency 9.7, cutting 8.1, refining 7.4, return travel 7.0, debris 5.0) and material
-skills from 1.8 (topaz) to 6.1 (ruby), with diamond and steel above 5. Its smith bonuses at the end (rings +
-skills):
-search efficiency +28.5%, search time −13.8%, refining −13.1%, cutting −13.5%, travel −8% (plus −4.2% on
-the way home), debris −25%.
+**What the bot reaches** by the end of a run (about day 53, mean levels): activity skills from 5 to almost
+10 (search speed and efficiency 9.4, cutting 8.2, refining 7.0, return travel 6.7, debris 4.7) and material
+skills from 2.1 (topaz) to 5.9 (ruby), with sapphire and steel at 5 or above. Its smith bonuses at the end
+(rings + skills):
+search efficiency +28.4%, search time −14.7%, refining −14.2%, cutting −14.9%, travel −8.5% (plus −4.0% on
+the way home), debris −23.5%.
 
 **Tuning notes.** `xpBase` scales every skill's pace; `xpPerItem` sets the material skills' pace (rarer
 materials give more XP per item because there are fewer of them). `perLevel` is set so that level 10 matches
 a C-grade ring (change the ring's C value and the skill together to keep that rule; the Help tab says
 "equals a C-grade ring" only while every matched skill is exact). In the bot runs removing skills costs
-about 2 days of median life (50 instead of 52), 10 points of survival at day 40 and 89 points of mean score
-(`--ablate skills`), a small effect about the size of the noise.
+7.5 days of median life (46 instead of 53.5), 20 points of survival at day 40 (58% instead of 78%) and 165
+points of mean score (`--ablate skills`), a clearer loss than in the previous round (2 days, about the
+size of the noise).
 
 ---
 
@@ -1456,7 +1517,7 @@ or 1 after the list runs out. Each track counts its own points.
 
 **Tuning notes.** `daysPerPoint` is the pace; the first few points are worth the most, which favors
 spreading points over tracks. The bot puts every point into enemy scouting, and `--ablate intel` is within
-noise (median life 51 instead of 52, mean score 715 instead of 777), because the win-chance estimate
+noise (median life 52.5 instead of 53.5, mean score 1,212 instead of 1,323), because the win-chance estimate
 already averages over the hidden attributes. Lower the scouting
 bases to make planning riskier; raise them to make the roster easier to read.
 
@@ -1473,10 +1534,15 @@ score is kept in the browser (localStorage) across new games.
 
 **Worked example.** 10 days of fights: 4 normal, 5 elite, 1 champion = 40 + 125 + 50 = **215**.
 
-**Tuning notes.** Champion = 5 normals. Champions are a real risk of game over at every stage: the bot's
-best estimate against a champion on its roster averages 55–77% between days 7 and 30 and rarely reaches
-its 90% line, so the careful bot takes only 0.3 champions per run and scores 777 on average. Raising the
-champion score pushes riskier play; `--minwin` and `--future` let the bot test that.
+**Tuning notes.** Champion = 5 normals. Since all tiers share the same base stats (session 4), a champion
+is a fair fight for good gear: the careful bot's best estimate against a champion on its roster is 93–98%
+on days 7–35 (it was 55–77% on days 7–30 with the old 90 / 10 / 30 champions), so it takes a champion on
+about 70% of days 11–30, wins 16.5 per run (was 0.3) and scores 1,323 on average (was 777). Champions are
+still a real risk early and late (the bot's best champion estimate is 34% on day 2, 74% on day 3, 81% on
+day 40 and 44% on day 50). If champions
+should be a rarer, riskier pick again without touching base stats, lower this score, lower their ring
+grades (`CONFIG.rings.gradeWeights.champion`) or widen the High attribute values (12.3). `--minwin` and
+`--future` let the bot test riskier or safer play.
 
 ---
 
@@ -1486,20 +1552,20 @@ Win % of a loadout against a typical enemy of each tier (all attributes hidden, 
 50 fights per cell; 200 guesses for the day-2 table). Generated with `node tools/balance.mjs --section power`
 (deterministic: the same config always prints the same numbers).
 
-**Day-2 fight with day-1 gear** (target: normal 85–95%, elite 40–65%, champion < 20%)
+**Day-2 fight with day-1 gear** (target: normal 85–98%, elite 50–75%, champion 15–40%)
 
 | Day-1 loadout | vs normal | vs elite | vs champion |
 |---|---|---|---|
-| Copper D sword | 65.5 | 9.6 | 0.0 |
-| Copper C sword | 80.1 | 18.5 | 0.1 |
-| Copper C sword + C boots | 91.0 | 33.1 | 0.4 |
-| Copper C sword + C chest | 85.6 | 23.4 | 0.2 |
-| **Copper C sword + C chest + C boots** (reference) | 92.8 | 37.4 | 0.6 |
-| Copper D sword + D helmet + D gloves | 75.6 | 15.4 | 0.1 |
-| Copper B sword + B chest + B boots | 98.0 | 50.2 | 1.6 |
-| Copper C sword + ruby C + C boots | 96.3 | 43.3 | 1.2 |
-| Copper C full set (lucky day 1) | 97.7 | 52.9 | 1.2 |
-| Iron C sword + copper C boots | 99.8 | 87.7 | 18.8 |
+| Copper D sword | 65.5 | 26.2 | 4.2 |
+| Copper C sword | 80.1 | 42.6 | 9.2 |
+| Copper C sword + C boots | 91.0 | 59.1 | 19.1 |
+| Copper C sword + C chest | 85.6 | 46.5 | 10.9 |
+| **Copper C sword + C chest + C boots** (reference) | 92.8 | 63.5 | 21.9 |
+| Copper D sword + D helmet + D gloves | 75.6 | 33.5 | 5.5 |
+| Copper B sword + B chest + B boots | 98.0 | 80.3 | 39.9 |
+| Copper C sword + ruby C + C boots | 96.3 | 74.1 | 33.4 |
+| Copper C full set (lucky day 1) | 97.7 | 78.1 | 37.1 |
+| Iron C sword + copper C boots | 99.8 | 96.7 | 80.8 |
 
 **vs Normal** (base HP 80, damage 8, defense 20%)
 
@@ -1519,89 +1585,96 @@ Win % of a loadout against a typical enemy of each tier (all attributes hidden, 
 | Mythril C + ruby B sword + 10 B rings | 100 | 100 | 100 | 100 | 100 | 100 | 99.3 | 92.6 | 62.8 | 8.1 |
 | Ceiling: Mythril S + ruby S + emerald S armor + 10 S rings | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 96.6 |
 
-**vs Elite** (base HP 80, damage 9, defense 25%)
+**vs Elite** (base HP 80, damage 8, defense 20%, as for normals; 3 Low / 6 Normal / 3 High attributes)
 
 | Loadout | d2 | d5 | d10 | d15 | d20 | d30 | d40 | d50 | d60 | d80 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Copper D sword only | 10.4 | 2.4 | 0.1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Copper D full | 33.0 | 13.3 | 1.0 | 0.1 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Copper B full | 68.4 | 41.1 | 7.5 | 0.7 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Iron C full | 98.4 | 90.7 | 55.7 | 19.0 | 5.5 | 0.1 | 0 | 0 | 0 | 0 |
-| Steel C full | 100 | 99.9 | 96.1 | 79.8 | 51.1 | 5.3 | 0.3 | 0 | 0 | 0 |
-| Mythril C full | 100 | 100 | 100 | 100 | 99.2 | 79.7 | 36.3 | 6.0 | 1.0 | 0 |
-| Mythril S full | 100 | 100 | 100 | 100 | 100 | 99.9 | 95.9 | 74.5 | 40.4 | 2.5 |
-| Iron C + ruby C sword | 99.2 | 95.3 | 70.5 | 31.4 | 9.2 | 0.3 | 0 | 0 | 0 | 0 |
-| Iron C + diamond C sword + emerald C armor | 99.8 | 97.8 | 82.2 | 49.1 | 20.0 | 1.1 | 0 | 0 | 0 | 0 |
-| Steel C + ruby C sword + 10 C rings | 100 | 100 | 99.7 | 96.8 | 84.1 | 25.3 | 3.4 | 0.1 | 0 | 0 |
-| Mythril C + ruby B sword + 10 B rings | 100 | 100 | 100 | 100 | 100 | 98.0 | 80.7 | 37.0 | 10.7 | 0.3 |
-| Ceiling | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 99.3 | 94.8 | 53.6 |
+| Copper D sword only | 27.3 | 9.0 | 0.6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Copper D full | 61.7 | 32.1 | 4.8 | 0.3 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Copper B full | 90.4 | 64.2 | 23.7 | 4.2 | 0.6 | 0 | 0 | 0 | 0 | 0 |
+| Iron C full | 99.9 | 98.2 | 83.4 | 46.8 | 17.1 | 0.3 | 0 | 0 | 0 | 0 |
+| Steel C full | 100 | 99.9 | 99.3 | 93.5 | 73.9 | 16.8 | 2.1 | 0.1 | 0 | 0 |
+| Mythril C full | 100 | 100 | 100 | 100 | 100 | 93.6 | 63.2 | 18.7 | 3.6 | 0 |
+| Mythril S full | 100 | 100 | 100 | 100 | 100 | 100 | 99.3 | 90.0 | 63.1 | 9.5 |
+| Iron C + ruby C sword | 100 | 99.3 | 88.6 | 59.4 | 28.3 | 0.9 | 0.1 | 0 | 0 | 0 |
+| Iron C + diamond C sword + emerald C armor | 100 | 99.6 | 92.8 | 69.4 | 39.4 | 3.7 | 0.2 | 0 | 0 | 0 |
+| Steel C + ruby C sword + 10 C rings | 100 | 100 | 100 | 99.3 | 95.5 | 50.0 | 12.2 | 0.7 | 0 | 0 |
+| Mythril C + ruby B sword + 10 B rings | 100 | 100 | 100 | 100 | 100 | 99.7 | 92.8 | 60.0 | 23.1 | 1.0 |
+| Ceiling | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 99.8 | 98.5 | 73.5 |
 
-**vs Champion** (base HP 90, damage 10, defense 30%)
+**vs Champion** (base HP 80, damage 8, defense 20%, as for normals; 6 Normal / 6 High attributes)
 
 | Loadout | d2 | d5 | d10 | d15 | d20 | d30 | d40 | d50 | d60 | d80 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Copper D full | 0.2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Copper B full | 3.5 | 0.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Iron C full | 47.9 | 20.4 | 2.6 | 0.2 | 0 | 0 | 0 | 0 | 0 | 0 |
-| Steel C full | 95.5 | 78.1 | 35.6 | 8.4 | 1.4 | 0.1 | 0 | 0 | 0 | 0 |
-| Mythril C full | 100 | 99.9 | 98.8 | 88.4 | 60.9 | 9.0 | 0.6 | 0 | 0 | 0 |
-| Mythril S full | 100 | 100 | 100 | 99.9 | 99.1 | 83.9 | 36.0 | 8.3 | 0.7 | 0 |
-| Iron C + ruby C sword | 58.1 | 31.2 | 5.1 | 0.5 | 0.1 | 0 | 0 | 0 | 0 | 0 |
-| Iron C + diamond C sword + emerald C armor | 74.8 | 48.5 | 13.2 | 2.1 | 0.3 | 0 | 0 | 0 | 0 | 0 |
-| Steel C + ruby C sword + 10 C rings | 99.6 | 96.6 | 76.2 | 38.0 | 14.2 | 0.6 | 0 | 0 | 0 | 0 |
-| Mythril C + ruby B sword + 10 B rings | 100 | 100 | 99.9 | 99.0 | 94.9 | 51.2 | 10.2 | 1.1 | 0 | 0 |
-| Ceiling | 100 | 100 | 100 | 100 | 100 | 99.8 | 95.6 | 74.8 | 40.0 | 4.0 |
+| Copper D sword only | 4.0 | 0.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Copper D full | 19.0 | 4.3 | 0.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Copper B full | 57.8 | 21.7 | 3.8 | 0.3 | 0 | 0 | 0 | 0 | 0 | 0 |
+| Iron C full | 96.8 | 86.2 | 47.9 | 11.6 | 2.3 | 0 | 0 | 0 | 0 | 0 |
+| Steel C full | 99.9 | 99.5 | 95.0 | 70.7 | 32.1 | 2.7 | 0.1 | 0 | 0 | 0 |
+| Mythril C full | 100 | 100 | 100 | 99.8 | 97.9 | 71.5 | 20.6 | 2.5 | 0.1 | 0 |
+| Mythril S full | 100 | 100 | 100 | 100 | 100 | 99.4 | 90.2 | 58.6 | 20.9 | 0.8 |
+| Iron C + ruby C sword | 98.7 | 89.7 | 57.2 | 19.9 | 5.2 | 0.1 | 0 | 0 | 0 | 0 |
+| Iron C + diamond C sword + emerald C armor | 99.1 | 94.4 | 68.0 | 29.2 | 8.9 | 0.4 | 0 | 0 | 0 | 0 |
+| Steel C + ruby C sword + 10 C rings | 100 | 100 | 99.2 | 93.6 | 70.1 | 13.9 | 1.3 | 0 | 0 | 0 |
+| Mythril C + ruby B sword + 10 B rings | 100 | 100 | 100 | 100 | 99.9 | 94.7 | 64.9 | 18.7 | 3.2 | 0.1 |
+| Ceiling | 100 | 100 | 100 | 100 | 100 | 100 | 100 | 98.4 | 87.2 | 34.1 |
 
 **Weakest plain full set (no gems, no rings) that keeps a target win rate**
 
 | Day | Normal ≥ 90% | Elite ≥ 70% | Champion ≥ 50% |
 |---|---|---|---|
-| 2 | copper D (91%) | iron D (94%) | iron B (62%) |
-| 3 | copper B (98%) | iron D (92%) | iron B (56%) |
-| 5 | copper B (93%) | iron D (79%) | iron A (55%) |
-| 7 | iron D (99%) | iron C (85%) | steel C (65%) |
-| 10 | iron D (94%) | iron B (73%) | steel B (59%) |
-| 12 | iron C (95%) | iron A (72%) | steel A (60%) |
-| 15 | iron B (93%) | steel C (81%) | mythril D (72%) |
-| 20 | steel C (95%) | steel A (79%) | mythril C (61%) |
-| 25 | steel B (90%) | mythril D (83%) | mythril B (50%) |
-| 30 | mythril D (98%) | mythril C (80%) | mythril S (83%) |
-| 40 | mythril C (93%) | mythril A (77%) | none (mythril S 36%) |
-| 50 | mythril A (93%) | mythril S (76%) | none (mythril S 8%) |
-| 60 | mythril S (94%) | none (mythril S 39%) | none (mythril S 1%) |
-| 70 | none (mythril S 73%) | none (mythril S 15%) | none (mythril S 0%) |
-| 80 | none (mythril S 43%) | none (mythril S 3%) | none (mythril S 0%) |
+| 2 | copper D (91%) | copper B (89%) | copper B (57%) |
+| 3 | copper B (98%) | copper B (86%) | iron D (87%) |
+| 5 | copper B (93%) | iron D (94%) | iron D (69%) |
+| 7 | iron D (99%) | iron D (89%) | iron D (57%) |
+| 10 | iron D (94%) | iron C (82%) | iron B (67%) |
+| 12 | iron C (95%) | iron B (83%) | iron A (66%) |
+| 15 | iron B (93%) | iron A (81%) | steel C (69%) |
+| 20 | steel C (95%) | steel B (83%) | steel A (71%) |
+| 25 | steel B (90%) | steel A (78%) | mythril D (73%) |
+| 30 | mythril D (98%) | mythril D (81%) | mythril C (71%) |
+| 40 | mythril C (93%) | mythril B (78%) | mythril A (61%) |
+| 50 | mythril A (93%) | mythril S (91%) | mythril S (58%) |
+| 60 | mythril S (94%) | none (mythril S 63%) | none (mythril S 23%) |
+| 70 | none (mythril S 73%) | none (mythril S 35%) | none (mythril S 6%) |
+| 80 | none (mythril S 43%) | none (mythril S 11%) | none (mythril S 0%) |
 
-Reading it: the elite column follows the progression target (iron from day 2–12, steel day 15–20,
-mythril day 25+). Gems (especially a ruby, diamond or sapphire sword) and rings add a lot on top
-(sections 7 and 13).
+Reading it: with the shared base stats the elite column now trails the progression target by about 5 days
+(copper B on days 2–3, iron day 5–15, steel day 20–25, mythril day 30+, against a target of iron day 5–8,
+steel day 12–18, mythril day 25+), so gear made on pace beats elites with room to spare. The champion
+column (a 50% target) asks for one grade or material step more than the elite column on the same day (for
+example steel C instead of iron A on day 15, mythril D instead of steel A on day 25). Gems (especially a
+ruby or sapphire sword) and rings add a lot on top (sections 7 and 13).
 
 ## Appendix B — How much each enemy attribute matters
 
-Steel C full set (no gems, no rings) vs an elite on day 20. All attributes Normal except the one listed
-(20,000 fights each). Baseline (all Normal): **45.3%** win.
+Steel C full set (no gems, no rings) vs an elite on day 24, the day the power report uses for its gem,
+ring and slot tables (it moved from day 20 when elites lost their extra damage and defense: on day 20 this
+set now wins 69% against an all-Normal elite, leaving little room above). All attributes Normal except the
+one listed (20,000 fights each, the same random numbers for every cell). Baseline (all Normal): **45.5%**
+win.
 
 | Attribute | Low | Normal | High | Low − High |
 |---|---|---|---|---|
-| Magical | 65.7% | 45.3% | 28.7% | 37.0 |
-| HP | 63.8% | 45.3% | 27.2% | 36.6 |
-| Accurate | 64.9% | 45.3% | 30.9% | 34.0 |
-| Fast | 52.6% | 45.3% | 32.7% | 20.0 |
-| Chilling | 52.6% | 45.3% | 35.6% | 17.0 |
-| Evasion | 52.6% | 45.3% | 36.2% | 16.4 |
-| Stunning | 48.4% | 45.3% | 41.9% | 6.5 |
-| Piercing | 47.0% | 45.3% | 44.8% | 2.2 |
-| Pierce res., Magic res., Stun res., Slow res. | 45.3% | 45.3% | 45.3% | 0 (no matching gear) |
+| HP | 61.2% | 45.5% | 27.1% | 34.1 |
+| Accurate | 64.3% | 45.5% | 32.2% | 32.1 |
+| Magical | 63.9% | 45.5% | 36.9% | 27.0 |
+| Fast | 54.0% | 45.5% | 33.6% | 20.4 |
+| Chilling | 53.6% | 45.5% | 35.3% | 18.3 |
+| Evasion | 54.2% | 45.5% | 36.0% | 18.2 |
+| Piercing | 57.0% | 45.5% | 40.2% | 16.8 (lumpy: about 3–18 on days 20–26) |
+| Stunning | 48.8% | 45.5% | 41.7% | 7.1 |
+| Pierce res., Magic res., Stun res., Slow res. | 45.5% | 45.5% | 45.5% | 0 (no matching gear) |
 
 Defensive attributes against a matching C sword gem (same set, same day):
 
 | Sword gem | vs attribute | Low | Normal | High |
 |---|---|---|---|---|
-| Diamond C | Pierce resistance | 60.6% | 53.2% | 47.8% |
-| Ruby C | Magic resistance | 62.6% | 57.6% | 51.2% |
-| Emerald C | Evasion | 58.0% | 51.5% | 45.2% |
-| Sapphire C | Slow resistance | 62.6% | 50.6% | 50.6% |
-| Topaz C | Stun resistance | 51.7% | 48.5% | 46.8% |
+| Diamond C | Pierce resistance | 49.2% | 47.0% | 45.9% |
+| Ruby C | Magic resistance | 57.3% | 51.8% | 47.9% |
+| Emerald C | Evasion | 59.7% | 52.7% | 45.6% |
+| Sapphire C | Slow resistance | 62.2% | 51.8% | 50.0% |
+| Topaz C | Stun resistance | 52.7% | 49.0% | 47.2% |
 
 ## Appendix C — Worked fight, start to finish
 
@@ -1609,20 +1682,20 @@ Adventurer: iron B sword + ruby C, iron C chest, copper B helmet, copper D glove
 (damage 18, accuracy 128, dodge 111, defense 18.9, speed 3.3%, magic 8%, HP 100).
 Enemy: elite Ogre, day 6; Piercing High, Pierce res Normal, Magical Normal, Magic res Low, Stunning Low,
 Stun res Normal, Accurate Normal, Evasion High, Chilling Low, Slow res Normal, Fast Normal, HP Normal
-(HP 92, damage 10.35, accuracy 105, dodge 126, defense 25).
+(HP 92, damage 9.2, accuracy 105, dodge 126, defense 20).
 
 | Step | Adventurer → Ogre | Ogre → Adventurer |
 |---|---|---|
 | Hit chance | 128² / (128² + 0.25 × 126²) = 80.5% | 105² / (105² + 0.25 × 111²) = 78.2% |
 | Piercing | none | 25 × (1 − 0) = 25% |
-| Effective defense | 25% | 18.9 × 0.75 = 14.175% |
-| Physical per hit | 18 × 0.75 = 13.5 | 10.35 × 0.858 = 8.88 |
-| Magic per hit | 18 × 8% × (1 − 0) = 1.44 | 10.35 × 20% × (1 − 0) = 2.07 |
-| Total per hit (before the 90–110% roll) | 14.94 | 10.95 |
+| Effective defense | 20% | 18.9 × 0.75 = 14.175% |
+| Physical per hit | 18 × 0.80 = 14.4 | 9.2 × 0.858 = 7.90 |
+| Magic per hit | 18 × 8% × (1 − 0) = 1.44 | 9.2 × 20% × (1 − 0) = 1.84 |
+| Total per hit (before the 90–110% roll) | 15.84 | 9.74 |
 | Attack every | 2 / 1.033 = 1.94 s | 2.0 s |
-| Expected damage per second | 0.805 × 14.94 / 1.94 = 6.21 | 0.782 × 10.95 / 2 = 4.28 |
-| Time to win | 92 / 6.21 ≈ 14.8 s | 100 / 4.28 ≈ 23.4 s |
+| Expected damage per second | 0.805 × 15.84 / 1.936 = 6.59 | 0.782 × 9.74 / 2 = 3.80 |
+| Time to win | 92 / 6.59 ≈ 14.0 s | 100 / 3.80 ≈ 26.3 s |
 | Side effects | none | 5% stun chance per hit (1.0 s); every hit slows the adventurer 10% for 2.0 s (≈ 0.18 s delay each) |
 
-Simulated with the attributes known: **92.7%** win (50,000 fights on each of three seeds: 92.5–92.9%),
-average fight about 17.7 s.
+Simulated with the attributes known: **99.0%** win (50,000 fights on each of three seeds: 98.9–99.0%),
+average fight about 15.9 s. (With the old elite base of damage 9 and defense 25 the same fight was 92.7%.)

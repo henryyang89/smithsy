@@ -820,7 +820,9 @@ const DAY1_LOADOUTS = [
   { name: 'Copper C full set (lucky day 1)', gear: () => setOf('copper', 'C') },
   { name: 'Iron C sword + copper C boots', gear: () => [mkItem('sword', 'iron', 'C'), mkItem('boots', 'copper', 'C')] },
 ];
-const DAY2_TARGET = { normal: [85, 95], elite: [40, 65], champion: [0, 20] };
+// Day-2 bands (user targets, session 4): champions ~30-40% and elites ~60-70% with on-pace gear;
+// day-1 gear is a bit behind pace, so the day-2 bands sit slightly lower.
+const DAY2_TARGET = { normal: [85, 98], elite: [50, 75], champion: [15, 40] };
 
 function powerSection(o, T) {
   const S = o.samples ?? (o.quick ? 20 : 100);
@@ -829,7 +831,7 @@ function powerSection(o, T) {
 
   // ---- 1. the first fight
   const S2 = o.quick ? 40 : 200;
-  h2(`1. Day-2 fight with day-1 gear (target: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion < ${DAY2_TARGET.champion[1]}%; ${S2} x ${E} fights)`);
+  h2(`1. Day-2 fight with day-1 gear (target: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion ${DAY2_TARGET.champion.join('-')}%; ${S2} x ${E} fights)`);
   const day2 = DAY1_LOADOUTS.map((l) => ({ ...l, w: Object.fromEntries(TIERS.map((t, ti) => [t, winPct(l.gear(), {}, t, 2, S2, E, mixSeed(222, ti))])) }));
   const mark = (t, v) => (v < DAY2_TARGET[t][0] - EPS ? ' (low)' : v > DAY2_TARGET[t][1] + EPS ? ' (high)' : '');
   printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => `${f1(l.w[t])}${mark(t, l.w[t])}`)]));
@@ -1564,7 +1566,7 @@ function botSection(o, T) {
   const day1 = recs.map((r) => r.craftLog.filter((c) => c.day === 1));
   const d1label = (c) => `${c.material[0].toUpperCase()}${c.grade} ${c.slot}`;
   note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean est. over the roster's enemies of the tier): ` +
-    TIERS.map((t) => `${t} ${f0(mean(d2picks.map((x) => x.meanP[t])))}%`).join(', ') + ` (target ${DAY2_TARGET.normal.join('-')} / ${DAY2_TARGET.elite.join('-')} / <${DAY2_TARGET.champion[1]}).`);
+    TIERS.map((t) => `${t} ${f0(mean(d2picks.map((x) => x.meanP[t])))}%`).join(', ') + ` (target ${DAY2_TARGET.normal.join('-')} / ${DAY2_TARGET.elite.join('-')} / ${DAY2_TARGET.champion.join('-')}).`);
   note(`Day-1 smithing: ${f1(mean(day1.map((c) => c.length)))} pieces/run; e.g. ${day1.slice(0, 6).map((cs) => cs.map(d1label).join(' + ') || 'nothing').join(' | ')}`);
 
   // ---- gear over time

@@ -112,8 +112,9 @@ randomness adds luck and variety. Starting numbers are round.
 ## Enemies
 - 7 per roster: 2 normal, 3 elite, 2 champion. HP and damage grow slowly each day (linear), accuracy
   and dodge grow more slowly.
-- Tiers have close base HP and damage; they differ mainly through their attribute levels and their
-  defense (normal < elite < champion).
+- **All tiers share the same base HP, damage and defense** (currently 80 / 8 / 20%; user decision:
+  champions must not have higher HP, damage or defense than elites or normals, because win rates were too
+  low). Tiers differ only through their attribute levels (below), their score and their ring grades.
 - 12 attributes, each Low / Normal / High, displayed in pairs (offense left, defense right):
   Piercing | Pierce resistance, Magical | Magic resistance, Stunning | Stun resistance,
   Accurate | Evasion, Chilling | Slow resistance, Fast | HP.
