@@ -40,36 +40,46 @@ as is. All paths in the game are relative, so it works from the `/smithsy/` sub-
 ## How to play
 
 **The day.** Each day runs from 8:00 to 18:00 (600 minutes). Only actions cost time: travelling,
-searching, clearing debris, refining, cutting, smithing and repairing. The top bar shows the day, the
-clock, where you are, your bag, your score, and the **End day** button. The day does **not** end by itself
-at 18:00: walk back to camp and press **End day** (it only works at camp).
+searching, clearing debris, refining, cutting, smithing and repairing by day (repairs at night are free of
+time). The top bar shows the day, the clock, where you are, your bag, your score, and the **End day**
+button. The day does **not** end by itself at 18:00: walk back to camp and press **End day** (it only
+works at camp).
 
 **Day loop**
 
 1. **Map tab: gather.** The 5x5 world map has your camp in the center and 20 fields around it (4 map
    cells are blocked). Farther fields are richer (more items, more coal and gems; mythril only in the
    farthest fields) but take longer to reach. Click a field to travel there. Inside a field (8x8 cells),
-   click a cell and press **Search area** to search the 3x3 area around it. Each search digs halfway into
-   every cell (shown as "% searched"), so two searches finish a cell; hidden ores and gems are found once
-   the search passes their depth. Clear debris first where it covers cells. Your bag holds 20 items; extra
-   finds stay on the ground for later. Field work can only start if you can still walk home by 18:00.
-   Walking back to camp unloads the bag into storage. Each night a few searched cells regrow (5% of them)
-   with fresh, hidden contents.
+   click a cell and press **Search area** to search the 3x3 area around it. Each search digs about a third
+   into every cell (35% ± 5, rolled separately for each cell, shown as "% searched"), so about three
+   searches finish a cell (sometimes four); hidden ores and gems are found once the search passes their
+   depth. Search efficiency rings and the skill raise the average; the map shows your current range. Clear
+   debris first where it covers cells. Your bag holds 20 items; extra finds stay on the ground for later.
+   Field work can only start if you can still walk home by 18:00. Walking back to camp unloads the bag
+   into storage. Fields do **not** regrow: a searched cell stays searched, so the map is the whole supply
+   for the run.
 2. **Workshop tab: refine, cut and smith.** At camp, refine ore into bars (copper, iron, steel = iron +
    coal, mythril) and cut gems. Each attempt rolls a grade (S, A, B, C, D) or fails (10%); the odds are
    shown before you click. Smith gear from bars of the same material and grade (sword 2, chest 3, helmet 2,
-   gloves 2, boots 2), optionally infusing a cut gem for a bonus. Repair worn gear here too (only gear
-   that is at home, not the gear the adventurer took today).
+   gloves 2, boots 2), optionally infusing a cut gem for a bonus. You can repair worn gear here by day
+   (it costs time, and only gear at home, not the gear the adventurer took today), but repairs at night
+   are free of time (steps 4 and 5).
 3. **Adventurer tab.** See today's fight, your gear and **tomorrow's roster** of 7 enemies (2 normal,
    3 elite, 2 champion). Most enemy attributes are hidden until you scout them with intel.
 4. **End day** (at camp). If the adventurer fought today you get the battle report: full combat log, gear
-   wear and the ring reward. A loss is game over.
+   wear, **Repair** buttons for the gear just used, and the ring reward. A loss is game over.
 5. **Plan tomorrow.** Pick one enemy, pack up to 2 items per gear slot (the adventurer uses the best one
    for each slot once the real enemy is known), choose up to 10 adventurer rings, check the **Matchup**
    table (hit chances, damage per hit, attack speed, damage per second, HP and a rough time to win or lose;
    hidden attributes show as ranges), and optionally run the win-chance simulation. Confirm to start the
-   next day. Packed gear is away all day and cannot be repaired; only the items actually used lose
-   durability.
+   next day. **Repair** any gear here before packing: at night (battle report and plan screen) repairs
+   cost materials but no time. Packed gear is away all day and cannot be repaired; only the items
+   actually used lose durability.
+
+**Repairs** always go back to 100% and cost 35% of the item's bars (and gem) for a full repair, scaled by
+the % repaired. If you do not have enough bars or gems of the item's own grade, the lowest higher grade you
+have enough of is used instead, with a warning; it gives no benefit (the item keeps its grade), and grades
+are never mixed within one repair.
 
 While the battle report, the plan screen or the game-over screen is open, the **Rings**, **Skills & Intel**,
 **Log** and **Help** tabs stay available so you can check numbers before deciding.
@@ -77,9 +87,10 @@ While the battle report, the plan screen or the game-over screen is open, the **
 **Other tabs.** **Rings**: wear up to 10 smith rings (they speed up and improve your own work and apply at
 once; swap them at the start of a day or while planning at night). Adventurer rings marked as worn there are only the default selection for tonight's plan; the plan
 screen decides what the adventurer actually wears, and changes never affect today's fight.
-**Skills & Intel**: skills level up automatically as you work; an intel point arrives every 5 days and
-improves enemy scouting, ring scouting or ore sight. **Log**: everything that happened. **Help**: rules plus
-a live reference of every number in the game.
+**Skills & Intel**: skills level up automatically as you work (a level-10 skill is as strong as a C-grade
+ring of the same kind; debris clearing and the failure skills have no ring); an intel point arrives every
+5 days and improves enemy scouting, ring scouting or ore sight. **Log**: everything that happened.
+**Help**: rules plus a live reference of every number in the game.
 
 **Score.** Each win scores points: normal 10, elite 25, champion 50. A draw (only possible at an internal
 safety time cap) scores nothing but the run goes on. The run is endless; your best score is remembered.
@@ -94,15 +105,16 @@ js/config.js          EVERY tunable number (the place to rebalance)
 js/main.js            UI shell: top bar, tabs, side log, phase screens, save/load
 js/core/              game logic, no DOM (runs in the browser and in Node)
   game.js             state, day flow, battle resolution, save format
-  map.js              world map, fields, travel, search, debris, regrowth, bag
+  map.js              world map, fields, travel, search, debris, regrowth (off), bag
   processing.js       refining and cutting, grade odds
-  gear.js             gear stats, smithing, repair
+  gear.js             gear stats, smithing, repair (night = free, higher-grade substitutes)
   combat.js           combat stats, hit chance, attack-bar fight simulation with log
   sim.js              best-gear choice and win-chance estimate
   enemies.js          rosters, attributes, enemy stats
   rings.js skills.js intel.js bonuses.js rng.js util.js
 js/ui/                one module per screen (mapview, workshop, adventurer, ringsview,
-                      skillsview, logview, help, endday) + dom.js helpers
+                      skillsview, logview, help, endday) + repairui.js (repair widgets shared
+                      by the workshop and the night screens) + dom.js helpers
 tests/                unit tests for the core (node:test)
 tools/balance.mjs     balance report (economy, power curve, bot playthrough, what-ifs)
 docs/SPEC.md          requirements and design decisions
@@ -138,17 +150,19 @@ There are no dependencies to install; `package.json` only holds these script sho
 `tools/balance.mjs` runs the real core engine in Node and prints a balance report. It never edits
 `js/config.js`.
 
-- **economy**: what a field holds, items per search, minutes per item, refining odds, and the time needed
-  to mine, refine and smith a full set of each material (about 10 s).
+- **economy**: what a field holds and how big the finite map is, items per search, minutes per item,
+  refining odds, and the time needed to mine, refine and smith a full set of each material (about 15 s).
 - **power**: win chances of different gear against each enemy tier from day 2 to day 80, the weakest set
   that stays safe on each day, and how much each gem, ring and gear slot is worth (about 5 s).
-- **bot**: a scripted careful player runs whole games through the real game API; shows survival, score,
-  material progression, the daily time split, rings, skills and intel (about 80 s for 24 runs).
+- **bot**: a scripted careful player runs whole games through the real game API (it repairs at night, for
+  free); shows survival, score, material progression, the daily time split, repairs, how fast it uses up
+  the map's finite supply ("Map supply"), rings, skills and intel (about 3 minutes for 40 runs).
 
 ```sh
 node tools/balance.mjs                                  # all sections (or: npm run balance)
 node tools/balance.mjs --section power                  # one section: economy | power | bot | all
-node tools/balance.mjs --section bot --seeds 24         # 24 bot runs (default 20)
+node tools/balance.mjs --section bot --seeds 40         # 40 bot runs (default 20)
+node tools/balance.mjs --section bot --immortal         # bot can't lose: how long the finite map lasts
 node tools/balance.mjs --quick                          # small samples, smoke test in a few seconds
 node tools/balance.mjs --help                           # full option list
 ```
@@ -162,6 +176,7 @@ node tools/balance.mjs --help                           # full option list
 | `--minwin P` | bot: lowest estimated win % it accepts for a fight (default 90) |
 | `--future F` | bot: points one survival is worth when choosing fights (default 1000; lower = greedier) |
 | `--ablate x,y` | bot: play without systems: `gems`, `rings`, `skills`, `intel`, `repair` |
+| `--immortal` | bot: enemies deal no damage and the bot fights an elite every day, so no run ends early; shows how fast a surviving careful player uses up the map ("Map supply" table) |
 | `--set path=value` | what-if: override a `CONFIG` value in memory for this run (repeatable) |
 | `--quick` | small sample sizes |
 
@@ -172,7 +187,8 @@ is parsed as JSON; a path that does not exist in `CONFIG` is rejected):
 node tools/balance.mjs --section power --set enemies.growthPerDay.hpDamage=4
 node tools/balance.mjs --section bot --set 'field.oreWeights.*.mythril=2'
 node tools/balance.mjs --section bot --set 'gear.durabilityLoss={"min":2,"max":4}'
-node tools/balance.mjs --section bot --seeds 24 --ablate rings,skills
+node tools/balance.mjs --section bot --seeds 40 --ablate rings,skills
+node tools/balance.mjs --section bot --seeds 40 --set field.regrowPctPerDay=5   # turn regrowth back on
 ```
 
 Each section ends with a one-line `ECONOMY SUMMARY`, `POWER SUMMARY` or `BOT SUMMARY`; run the baseline and

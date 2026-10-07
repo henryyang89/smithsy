@@ -12,10 +12,11 @@ happens if you change it.
 - **Where the example numbers come from.** Worked examples were computed by calling the real core modules
   (`js/core/*.js`) with the current config. Win-rate tables come from `node tools/balance.mjs`
   (`--section power` for Appendix A and the gem/ring/slot value tables, `--section economy` for the
-  supply numbers, `--section bot --seeds 24` for the bot results). Appendix B and C come from direct
+  supply numbers, `--section bot --seeds 40` for the bot results). Appendix B and C come from direct
   `fight()` simulations (20,000–50,000 fights each). Rerun the tool after any change; see
   [Balance targets and current results](#balance-targets-and-current-results). All numbers here match the
-  config as of commit 22b062f (debris skill 0.5 per level).
+  config as of commit 5bcae94 (search 35% ± 5 per cell, no field regrowth, level-10 skills = C-grade
+  rings, free night repairs with higher-grade substitutes, richer cells).
 
 ---
 
@@ -32,11 +33,11 @@ These are the knobs with the biggest effect on difficulty and pacing, roughly in
 | Material power | `CONFIG.gear.materialMult` | copper 1, iron 1.5, steel 2, mythril 3 | Bigger jump per material tier | Flatter curve, grades matter more |
 | Grade power | `CONFIG.gear.gradeMult` | D 1.0 … S 1.5 | Lucky refines matter more | Material matters more than luck |
 | Refining luck | `CONFIG.refine.<bar>.dist` | F 10, D 30–45 | More weight on D/F: slower gear progress | More weight on S/A/B: faster gear progress |
-| Mythril supply | `CONFIG.field.oreWeights` (mythril column) | 0 / 0 / 0 / 5 by distance (only distance 4+) | Mythril gear arrives earlier | Mythril stays rare |
-| Coal supply (steel) | `CONFIG.field.oreWeights` (coal column) | 0 / 5 / 15 / 20 | Steel arrives earlier | Steel later |
-| Field richness | `CONFIG.field.lootChance` | 40% +5/step, max 70% | More ore per search | Scarcer, more travel |
-| Field regrowth | `CONFIG.field.regrowPctPerDay` | 5 (%/night per searched cell) | Near fields refill faster, less travel | Map runs dry, forces far trips |
-| Search speed | `CONFIG.field.searchEfficiency`, `CONFIG.field.searchMin` | 50% per search (2 searches per cell), 30 min | Faster gathering | Slower gathering |
+| Mythril supply | `CONFIG.field.oreWeights` (mythril column) | 0 / 0 / 0 / 5 by distance (only distance 4+; about 13 per map) | Mythril gear arrives earlier and the finite map holds more | Mythril stays rare |
+| Coal supply (steel) | `CONFIG.field.oreWeights` (coal column) | 0 / 5 / 15 / 20 (about 122 per map) | Steel arrives earlier and lasts longer | Steel later |
+| Field richness | `CONFIG.field.lootChance`, `CONFIG.field.itemCountWeights` | 50% +5/step, max 80%; 1/2/3 items weighted 30/40/30 (avg 2.0) | More ore per search and a bigger map (about 1,560 items now) | Scarcer, more travel, the map runs out sooner |
+| Field regrowth | `CONFIG.field.regrowPctPerDay` | 0 (off: fields do not regrow) | Searched cells refill (5 = about 78 items a night on a fully searched map), so the map no longer caps a run | Already off: the map is a finite supply |
+| Search speed | `CONFIG.field.searchEfficiency`, `CONFIG.field.searchRandomness`, `CONFIG.field.searchMin` | 35% ± 5 per cell per search (about 3 searches per cell), 30 min | Faster gathering, efficiency bonuses matter less | Slower gathering |
 | Processing times | `CONFIG.refine.<bar>.minutes`, `CONFIG.cut.<gem>.minutes` | 15 / 20 / 25 / 30, gems 20 | Less of the day left for mining | More gear per day |
 | Travel cost | `CONFIG.map.travelMinPerStep` | 20 min/step | Far (rich) fields cost more of the day | Far fields become the default |
 | Bag size | `CONFIG.bag.slots` | 20 | Fewer trips home | More trips home, far fields less attractive |
@@ -48,7 +49,7 @@ These are the knobs with the biggest effect on difficulty and pacing, roughly in
 | Intel pace | `CONFIG.intel.daysPerPoint` | 5 days per point | Slower intel, more hidden attributes, more risk | Faster intel, fewer surprises |
 | Starting scouting | `CONFIG.intel.tracks.enemySight.base` | 10% | Fewer surprises in fights | More hidden attributes, more risk |
 | Day length | `CONFIG.time.dayStartMin / dayEndMin` | 8:00–18:00 (600 min) | Longer day: more work per fight, easier | Shorter day: harder |
-| Skill strength | `CONFIG.skills.activity.<key>.perLevel`, `CONFIG.skills.perMaterial.<key>.perLevel` | 0.4 / 0.8 / 0.5 per level (time / search efficiency / debris); grade 0.15, fail 0.3 | Skills feel rewarding | Skills stay a small extra (now: no measurable effect on the bot) |
+| Skill strength | `CONFIG.skills.activity.<key>.perLevel`, `CONFIG.skills.perMaterial.<key>.perLevel` | 0.6 / 1.2 / 5 per level (time / search efficiency / debris); grade 0.3, fail 0.5 (level 10 = a C-grade ring) | Skills outgrow rings | Skills become a small extra |
 | Champion reward | `CONFIG.enemies.tiers.champion.score` | 50 (normal 10, elite 25) | Risky picks pay more | Safe play dominates |
 
 **What the current numbers produce (details in the next section and Appendix A):** a copper C sword +
@@ -56,7 +57,11 @@ chest + boots made on day 1 wins about 93% of day-2 normal fights and 37% of eli
 set stays at 90%+ against normals until about day 10; steel C until day 20, mythril C until day 40,
 mythril S until day 60. Against elites the 70% line falls about 5–10 days earlier per tier. Enemy growth
 is linear and never stops while gear tops out at mythril S, so every run ends eventually. That is
-intended (endless, score-chasing). The scripted "careful" bot lives a median of 50.5 days.
+intended (endless, score-chasing). The scripted "careful" bot lives a median of 52 days. Fields do not
+regrow, so the map (about 1,560 items, only about 13 of them mythril) is the whole supply of a run: the bot
+has found 72% of it by day 40 (almost all the mythril) and 87% by day 50. Coal and mythril run low around
+day 50–55, after which even a perfect player cannot improve gear and hits the enemy-growth wall around
+day 55–70 (see "Map supply" below).
 
 ---
 
@@ -68,19 +73,35 @@ The targets are written into `tools/balance.mjs` and the tool flags results outs
 
 | Target | Where the tool checks it | Aim | Now |
 |---|---|---|---|
-| Day-2 fight with sensible day-1 gear (a few copper pieces) | `power` section 1 (`DAY2_TARGET`), bot "d2 typical est" | normal 85–95%, elite 40–65%, champion < 20% | reference set 93 / 37 / 1; bot's own day-1 gear 93 / 43 / 4 (on target, elite at the low edge) |
-| Material progression (first pieces / 3 of 5 slots) | bot "Progression milestones" (`PROGRESS_TARGET`) | iron day 5–8, steel day 12–18, mythril day 25+ | iron 4 / 6, steel 8 / 11, mythril 19 / 30 (first pieces 1–6 days before the window; 3 of 5 slots inside it or 1 day early) |
+| Day-2 fight with sensible day-1 gear (a few copper pieces) | `power` section 1 (`DAY2_TARGET`), bot "d2 typical est" | normal 85–95%, elite 40–65%, champion < 20% | reference set 93 / 37 / 1; bot's own day-1 gear 93 / 44 / 2 (on target, elite at the low edge) |
+| Material progression (first pieces / 3 of 5 slots) | bot "Progression milestones" (`PROGRESS_TARGET`) | iron day 5–8, steel day 12–18, mythril day 25+ | iron 3 / 6, steel 8 / 11, mythril 16 / 25 (first pieces 2–9 days before the window; 3 of 5 slots inside it or 1 day early) |
 | Weakest plain set that holds a safe win rate | `power` section 3 | the elite ≥ 70% column should follow the progression above | iron day 2–12, steel day 15–20, mythril day 25+ (on target) |
-| Run length for a careful player | bot "median life" | around 50 days, with most deaths from day 40 on (the endless ramp, not early bad luck) | median 50.5; 19 of 24 deaths on day 42 or later (on target) |
-| Every system worth using | `--ablate` runs | removing a system should cost survival or score | only rings pass clearly; gems, repair, intel and skills are within noise (see ablations below) |
+| Run length for a careful player | bot "median life" | around 50 days, with most deaths from day 40 on (the endless ramp, not early bad luck) | median 52; 35 of 40 deaths on day 41 or later (on target) |
+| Every system worth using | `--ablate` runs | removing a system should cost survival or score | rings and gems clearly; repair and skills a small loss about the size of the noise; intel within noise (see ablations below) |
+
+There is no target yet for how long the finite map lasts (fields do not regrow); see "Map supply" below.
 
 The tiers are deliberately close in base HP and damage (80/80/90 HP, 8/9/10 damage). Difficulty comes
 mostly from the attribute mix (normal: 6 Low + 6 Normal; champion: 6 Normal + 6 High) and from defense
 (20/25/30%).
 
-### Current results (current `js/config.js`)
+### Current results (current `js/config.js`, commit 5bcae94)
 
-**Power curve** (`node tools/balance.mjs --section power`, about 5 s):
+**Economy** (`node tools/balance.mjs --section economy`, about 15 s):
+
+```
+ECONOMY SUMMARY | items/search by dist d1:1.78 d2:1.88 d3:2.13 d4:2.30 d5+:2.45 | one trip d1/d3: 255/307 min
+for 20.0/20.0 items | field min per unit: copper 25, iron 58, steel pair 142, mythril 520, any gem 49 |
+full set >=D work days: copper 1.2, iron 2.0, steel 4.0, mythril 12.5 | map items/run 1557 (mythril 12.0, coal 120) |
+regrow off
+```
+
+Items per search stay close to what 50% searching gave on the old, poorer cells (1.79 / 1.95 / 2.26 /
+2.47 / 2.71 by distance), so the pacing is kept; searches to finish a cell are in section 3.3. The map is
+the whole supply of a run: 1,557 items on these 100 maps.
+
+**Power curve** (`node tools/balance.mjs --section power`, about 5 s; no combat number changed in this
+round, so it prints the same numbers as before):
 
 ```
 POWER SUMMARY | day-2 ref (Copper C sword + C chest + C boots) n/e/c 93/37/1% | Cu D sword n/e/c 66/10/0% |
@@ -89,103 +110,150 @@ last day >=90% vs normal: Copper B d5, Iron C d10, Steel C d20, Mythril C d40, M
 ```
 
 The day-2 reference set sits at 37% vs elites, just under the 40–65% band. The bot's own day-1 gear
-(usually a gem in the sword) reaches 43%.
+(usually a gem in the sword) reaches 44%.
 
-**Careful bot** (`node tools/balance.mjs --section bot --seeds 24`, about 80 s). The bot gathers, refines,
-cuts, smiths, repairs, wears rings, spends intel and picks the fight with the best
-`win% × (points + 1000)` among enemies estimated at 90%+ win (so it almost never risks a champion):
+**Careful bot** (`node tools/balance.mjs --section bot --seeds 40`, about 3 minutes). The bot gathers,
+refines, cuts, smiths, repairs at night (free of time), wears rings, spends intel and picks the fight with
+the best `win% × (points + 1000)` among enemies estimated at 90%+ win (so it almost never risks a champion):
 
 ```
-BOT SUMMARY | alive d10:88% d20:79% d30:79% d40:79% d50:50% d60:8% d80:0% | median life 50.5 | score 640 |
-d2 typical est n/e/c 93/43/4 | first iron/steel/myth piece d4/8/19 | 3-slot iron/steel/myth d6/11/30 |
-d11-30 fights n/e/c 31/69/0% | mining 68% trips/day 1.3 idle 9m | repair 0.4% bars 0.1% time
+BOT SUMMARY | alive d10:98% d20:95% d30:90% d40:88% d50:55% d60:20% d80:0% | median life 52.0 | score 777 |
+d2 typical est n/e/c 93/44/2 | first iron/steel/myth piece d3/8/16 | 3-slot iron/steel/myth d6/11/25 |
+d11-30 fights n/e/c 24/74/2% | mining 66% trips/day 1.4 idle 18m | repair 1.3% bars 0.0% time, 4.8 night/run
+(1.1 subst.) | map found d40:72% d60:91% d80:-%
 ```
 
 | Survival (end of day) | 2 | 5 | 10 | 15 | 20 | 30 | 40 | 50 | 60 | 70 | 80 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| % of runs alive | 92 | 92 | 88 | 83 | 79 | 79 | 79 | 50 | 8 | 0 | 0 |
+| % of runs alive | 98 | 98 | 98 | 98 | 95 | 90 | 88 | 55 | 20 | 0 | 0 |
 
-Death days (24 runs): 2, 2, 6, 11, 19, 42, 45, 46, 48, 50, 50, 50, 51, 52, 52, 56, 56, 57, 57, 57, 58, 58, 62, 65.
-Score: mean 640, median 788, max 1,000. Wins per run: 27.1 normal, 14.7 elite, 0.0 champion.
+Death days (40 runs): 2, 16, 22, 30, 36, 41, 42, 42, 44, 45, 47, 48, 49, 50, 50, 50, 50, 50, 51, 52, 52, 54,
+54, 55, 55, 56, 56, 56, 56, 57, 57, 57, 61, 61, 61, 62, 64, 67, 69, 70.
+Score: mean 777, median 823, max 1,190. Wins per run: 28.6 normal, 18.9 elite, 0.3 champion.
 
 | Progression (median day) | first piece | sword | 3 of 5 slots | all 5 slots | target |
 |---|---|---|---|---|---|
-| iron or better | 4 | 4 | 6 | 9 | 5–8 |
-| steel or better | 8 | 8 | 11 | 20 | 12–18 |
-| mythril | 19 | 22 | 30 (17/24 runs) | 37 (8/24 runs) | 25+ |
+| iron or better | 3 | 4 | 6 | 9 | 5–8 |
+| steel or better | 8 | 8 | 11 | 16 | 12–18 |
+| mythril | 16 (38/40 runs) | 16 (35/40 runs) | 25 (27/40 runs) | 32 (8/40 runs) | 25+ |
 
 | Days | Fights: normal / elite / champion % | Mean est. win % | Actual win % | Losses per fight % | "No safe option" fights |
 |---|---|---|---|---|---|
-| 2–5 | 91 / 9 / 0 | 98.1 | 97.8 | 2.2 | 7 of 90 |
-| 6–10 | 44 / 55 / 1 | 99.6 | 99.1 | 0.9 | 0 |
-| 11–20 | 22 / 78 / 0 | 99.7 | 99.0 | 1.0 | 0 |
-| 21–30 | 41 / 59 / 0 | 99.6 | 100.0 | 0.0 | 0 |
-| 31–40 | 90 / 10 / 0 | 99.4 | 100.0 | 0.0 | 2 of 190 |
-| 41–50 | 100 / 0 / 0 | 97.1 | 95.9 | 4.1 | 12 of 171 |
-| 51–60 | 100 / 0 / 0 | 89.5 | 86.5 | 13.5 | 32 of 74 |
-| 61–80 | 100 / 0 / 0 | 78.7 | 71.4 | 28.6 | 5 of 7 |
+| 2–5 | 87 / 13 / 0 | 98.2 | 99.4 | 0.6 | 9 of 157 |
+| 6–10 | 46 / 54 / 0 | 99.7 | 100.0 | 0.0 | 0 |
+| 11–20 | 21 / 76 / 3 | 99.7 | 99.7 | 0.3 | 0 |
+| 21–30 | 27 / 72 / 1 | 99.7 | 99.5 | 0.5 | 0 |
+| 31–40 | 80 / 20 / 0 | 99.5 | 99.7 | 0.3 | 1 of 356 |
+| 41–50 | 100 / 0 / 0 | 96.8 | 95.8 | 4.2 | 18 of 308 |
+| 51–60 | 100 / 0 / 0 | 84.6 | 90.5 | 9.5 | 79 of 148 |
+| 61–80 | 100 / 0 / 0 | 62.7 | 77.1 | 22.9 | 32 of 35 |
 
 "No safe option" = even the best enemy on the roster was estimated below the bot's 90% line, so it took
 the best one anyway.
 
 | Daily time (minutes) | travel | search | clear | refine | cut | smith | repair | idle | mining share of used time |
 |---|---|---|---|---|---|---|---|---|---|
-| day 1 | 44 | 210 | 1 | 181 | 50 | 105 | 0 | 10 | 43% |
-| days 2–5 | 52 | 178 | 9 | 168 | 82 | 100 | 0 | 10 | 41% |
-| days 6–10 | 107 | 185 | 5 | 154 | 73 | 66 | 0 | 9 | 50% |
-| days 11–20 | 151 | 198 | 13 | 124 | 64 | 40 | 0 | 11 | 61% |
-| days 21–30 | 167 | 219 | 40 | 73 | 72 | 20 | 0 | 9 | 72% |
-| days 31–40 | 165 | 231 | 62 | 35 | 83 | 13 | 1 | 9 | 78% |
-| days 41–60 | 161 | 263 | 45 | 27 | 84 | 10 | 1 | 9 | 79% |
+| day 1 | 44 | 209 | 7 | 169 | 53 | 107 | 0 | 10 | 44% |
+| days 2–5 | 52 | 168 | 13 | 171 | 84 | 103 | 0 | 10 | 39% |
+| days 6–10 | 103 | 185 | 13 | 143 | 77 | 70 | 0 | 10 | 51% |
+| days 11–20 | 157 | 193 | 18 | 116 | 66 | 41 | 0 | 10 | 62% |
+| days 21–30 | 171 | 228 | 44 | 65 | 67 | 15 | 0 | 9 | 75% |
+| days 31–40 | 158 | 261 | 59 | 22 | 85 | 7 | 0 | 9 | 81% |
+| days 41–60 | 126 | 213 | 56 | 12 | 167 | 6 | 0 | 21 | 68% |
+| days 61+ (few runs) | 50 | 57 | 12 | 2 | 149 | 4 | 0 | 327 | 43% |
 
-("Mining" = travel + search + clear. The summary line's 68% is the average over all days from day 2.)
+("Mining" = travel + search + clear. The summary line's 66% is the average over all days from day 2.
+Repairs show 0 minutes because the bot only repairs at night, when they cost no time.)
 
-Other bot facts: about 42 rings per run (16.7 smith, 25.1 adventurer); 1.5 repairs per run costing 0.4%
-of the bars made; 1.5 items per run destroyed by wear (2% of bars made); 31% of the map searched by the
-end of a run; all intel goes to enemy scouting (8.3 points). Five of 24 runs die before day 20, including
-two day-2 losses where even the best roster enemy was estimated at only 86–90% with the day-1 gear. After
-day 40 deaths are a mix of unlucky losses at 90–99% estimates and "no safe option" days; from day 51 on,
-43% of the bot's fights have no safe option.
+**Map supply** (fields do not regrow, so the map is the whole supply; the bot's 40 maps start with 1,568
+hidden items: copper 570, iron 389, coal 126, mythril 14, gems 469). "Found/day" and "mining min per item"
+cover the 10 days up to that day:
 
-**System ablations** (same 24 seeds, `--ablate <system>`). With 24 runs, survival numbers move by about
-±10 points from noise alone, so only large differences mean something:
+| Day | Runs alive | Found so far | % of map | Coal left | Mythril left | Found/day | Mining min per found item | Idle min/day |
+|---|---|---|---|---|---|---|---|---|
+| 10 | 39 | 213 | 14 | 118 | 14 | 21.3 | 12.6 | 10 |
+| 20 | 38 | 491 | 31 | 84 | 8 | 27.7 | 13.3 | 10 |
+| 30 | 37 | 807 | 51 | 55 | 4 | 31.6 | 14.1 | 9 |
+| 40 | 35 | 1,124 | 72 | 32 | 1 | 31.9 | 15.0 | 9 |
+| 50 | 27 | 1,383 | 87 | 15 | 1 | 27.5 | 16.5 | 9 |
+| 60 | 8 | 1,463 | 91 | 11 | 1 | 12.8 | 21.3 | 61 |
+
+The same bot with `--immortal` (enemies deal no damage, so all 40 runs reach day 80 and show how long the
+map lasts for a careful player who never dies):
+
+| Day | Found so far | % of map | Coal left | Mythril left | Found/day | Mining min per found item | Idle min/day |
+|---|---|---|---|---|---|---|---|
+| 40 | 1,132 | 72 | 29 | 1 | 33.4 | 14.5 | 9 |
+| 50 | 1,399 | 89 | 12 | 0 | 26.8 | 16.7 | 8 |
+| 60 | 1,452 | 93 | 8 | 0 | 5.3 | 24.8 | 154 |
+| 70 | 1,462 | 93 | 7 | 0 | 1.0 | 25.3 | 541 |
+| 80 | 1,469 | 94 | 7 | 0 | 0.7 | 43.5 | 568 |
+
+**Finding: with no regrowth the map caps a run.** The bot finds about 30 items a day until day 40, by when
+72% of the map and nearly all of its mythril (13 of 14) are gone; coal follows (about 15 left by day 50).
+Coal and mythril run low around day 50–55: the immortal bot's finds fall from about 27 a day (days 41–50)
+to 5 (days 51–60) and 1 after that, its idle time jumps to 150–570 minutes a day, and its gear stops
+improving around day 40–50 (best sword mythril B or C, about 3.4 of 5 slots mythril). A map holds about 13
+mythril while a set of matched mythril C-or-better pieces needs about 26 on average (economy section 5),
+so even a perfect player hits a wall around day 55–70: the best plain set, mythril S, holds 90% against
+normals only until day 60, and only the ceiling loadout (S gems, ten S rings) still wins 97% at day 80
+(Appendix A), which needs far more S-grade material than one map holds. The careful bot itself dies first
+(median day 52), so for it the map is not yet the main limit, but it soon would be. Regrowth can be
+re-enabled via `CONFIG.field.regrowPctPerDay`: with `--set field.regrowPctPerDay=5` the bot keeps finding
+26–28 items a day after day 50, has all 5 slots in mythril by day 60 and survives a little longer (median
+53; alive at day 50 / 60: 65% / 30% instead of 55% / 20%; mean score 709, lower only because of four day-2
+losses, which are noise: regrowth cannot change day-1 gear).
+
+Other bot facts: about 48 rings per run (19.5 smith, 28.4 adventurer); 4.8 repairs per run, all at night,
+costing 1.3% of the bars made (1.1 of them with a higher-grade substitute); 2.0 items per run destroyed by
+wear (2.6% of bars made, mostly mythril that could not be repaired once the map's mythril was gone); 82% of
+the map searched by the end of a run; all intel goes to enemy scouting (9.4 points). Five of 40 runs die
+before day 40, one of them on day 2. After day 40 deaths are a mix of unlucky losses at 90–99% estimates
+and "no safe option" days; from day 51 on, 61% of the bot's fights have no safe option.
+
+**System ablations** (same 40 seeds, `--ablate <system>`). Survival numbers still move by several points
+from noise alone (the tool's help gives ±10 for 20 runs), so only large differences mean something:
 
 | Run | Median life | Alive d40 / d50 / d60 | Mean score | Note |
 |---|---|---|---|---|
-| full game | 50.5 | 79% / 50% / 8% | 640 | |
-| `--ablate rings` | 44.5 | 79% / 21% / 8% | 513 | clear loss: rings are the main late-game power source (fewer elite wins: 7.5 vs 14.7 per run) |
-| `--ablate gems` | 51.5 | 71% / 58% / 8% | 643 | no net loss: without cutting and infusing the bot reaches mythril much sooner (3 slots by day 19 instead of 30) but then sits idle about 90 min a day (157 min after day 40) |
-| `--ablate repair` | 54.5 | 79% / 63% / 25% | 714 | within noise (repairs are rare anyway, see section 8) |
-| `--ablate intel` | 54.5 | 88% / 63% / 25% | 721 | within noise |
-| `--ablate skills` | 54.5 | 88% / 58% / 25% | 743 | within noise (no measurable benefit from skills) |
+| full game | 52.0 | 88% / 55% / 20% | 777 | |
+| `--ablate rings` | 46.0 | 70% / 28% / 3% | 535 | clear loss: rings are the main late-game power source (fewer elite wins: 7.9 vs 18.9 per run) |
+| `--ablate gems` | 42.0 | 68% / 20% / 0% | 637 | clear loss: without cutting and infusing the bot has 3 mythril slots by day 15 (instead of 25), then has little worth doing: trips fall to 0.1–0.3 a day and it idles 440–540 min a day after day 20 (only 45% of the map found by day 40) |
+| `--ablate repair` | 48.5 | 80% / 43% / 5% | 738 | small loss (free night repairs keep the best gear alive), about the size of the noise |
+| `--ablate skills` | 50.0 | 78% / 50% / 5% | 688 | small loss, about the size of the noise |
+| `--ablate intel` | 51.0 | 83% / 53% / 0% | 715 | within noise |
 
-Three ablations came out slightly *better* than the full game. That is the noise level of 24 chaotic runs
-(any change reshuffles every later random roll), not a real gain; it does show that repair, intel and
-skills currently add nothing measurable for this bot, and that gems only pay for their own time.
+No ablation beats the full game this time. Compared with the previous round (24 seeds, old config), gems
+moved from "no net loss" to a clear loss, and repair and skills from "nothing measurable" to a small loss,
+in line with the free night repairs and the stronger skills.
 
 ### Running what-if experiments
 
 ```sh
 node tools/balance.mjs --section power                       # power curve only (~5 s)
-node tools/balance.mjs --section economy                     # mining / refining economy (~10 s)
-node tools/balance.mjs --section bot --seeds 24              # bot playthroughs (~80 s)
+node tools/balance.mjs --section economy                     # mining / refining economy, map size (~15 s)
+node tools/balance.mjs --section bot --seeds 40              # bot playthroughs (~3 min)
+node tools/balance.mjs --section bot --seeds 40 --immortal   # bot can't lose: how fast the finite map runs out
 node tools/balance.mjs --quick                               # smoke test of all sections
 
 # Override any CONFIG value in memory for one run (js/config.js is never changed):
 node tools/balance.mjs --section power --set enemies.growthPerDay.hpDamage=4
+node tools/balance.mjs --section bot --set field.regrowPctPerDay=5               # turn field regrowth back on
 node tools/balance.mjs --section bot --set field.oreWeights.3.mythril=10       # array index (row for distance 4+)
 node tools/balance.mjs --section bot --set 'field.oreWeights.*.mythril=2'      # '*' = every row
 node tools/balance.mjs --section bot --set 'gear.durabilityLoss={"min":2,"max":4}'
 
 # Play the bot without a system: gems, rings, skills, intel, repair (comma separated)
-node tools/balance.mjs --section bot --seeds 24 --ablate rings
-node tools/balance.mjs --section bot --seeds 24 --ablate gems,repair
+node tools/balance.mjs --section bot --seeds 40 --ablate rings
+node tools/balance.mjs --section bot --seeds 40 --ablate gems,repair
 ```
 
 Other flags: `--seeds N` (economy: maps, default 100; bot: runs, default 20), `--days N` (bot day limit,
 default 80), `--samples N` (power: attribute guesses per cell, default 100), `--minwin P` (bot: lowest
 estimated win % it accepts, default 90), `--future F` (bot: how much one survival is worth when picking
-fights, default 1000; lower = greedier). `--help` prints the full option list.
+fights, default 1000; lower = greedier), `--immortal` (bot: enemies deal no damage and the bot fights an
+elite every day without estimating, so no run ends early; survival and fight numbers are meaningless then,
+the "Map supply" table is the point). `--help` prints the full option list.
 
 How to compare: each section ends with a one-line `ECONOMY SUMMARY`, `POWER SUMMARY` or `BOT SUMMARY`.
 Run the baseline and the what-if with the same flags and compare those lines. The run prints the
@@ -217,7 +285,7 @@ Mythril C d20, Mythril S d40 | ceiling vs normal d60/d80 99/63%`, i.e. every tie
 | Refine one bar | 15 / 20 / 25 / 30 min (copper / iron / steel / mythril) | Refining ring + Refining speed skill |
 | Cut one gem | 20 min | Refining ring + Cutting speed skill |
 | Smith gear | 15 min per bar (+10 min with a gem) | nothing |
-| Repair | 50% of smithing time × fraction repaired | nothing |
+| Repair | by day: 50% of smithing time × fraction repaired; at night: no time | nothing (night repairs are free) |
 
 Every reduction is applied as `time = base × (1 − min(totalReduction%, 75) / 100)` and rounded to 0.1 min.
 
@@ -226,7 +294,9 @@ Every reduction is applied as `time = base × (1 − min(totalReduction%, 75) / 
   `now + action minutes + walk home minutes ≤ 18:00`. The walk home is computed with the bag as it is
   *before* the action, so items found during a search can push the walk home a little past 18:00.
 - The walk home to camp is always allowed, even if it ends after 18:00.
-- Camp work (refine, cut, smith, repair) must finish by 18:00 (no overtime).
+- Camp work (refine, cut, smith, daytime repair) must finish by 18:00 (no overtime).
+- Repairs at night (the battle report and plan screens, `isNight` in `gear.js`) cost no time, so they
+  have no clock check and need no camp visit.
 - Picking up and dropping items is free and has no time check.
 - **The day never ends by itself.** At 18:00 the clock shows "day over" and only the walk home and free
   pick-up/drop remain possible. The player ends the day with the "End day" button, which works only at
@@ -238,7 +308,8 @@ At 16:30 the same search would end at 17:00 and the walk home at 18:04.8, so it 
 
 **Tuning notes.** Day length scales everything that is "per day" (gathering, refining, smithing) against
 everything that is "per fight" (wear, enemy growth). Longer days = easier game. The 75% cap only matters
-once many rings and skills are stacked (the bot ends runs at about 10% total on each time bonus).
+once many rings and skills are stacked (the bot ends runs at about 8–14% total on each time bonus and 25%
+on debris clearing).
 
 ---
 
@@ -278,28 +349,30 @@ Travel between two fields is allowed and uses the path distance between them.
 | 4 | 80 | 88 | 96 |
 | 5 | 100 | 110 | 120 |
 
-**Worked example.** 3 steps with 10 items, Travel ring S (10%) worn, Return travel skill level 10 (4%):
-going out = 60 × 1.10 × (1 − 0.10) = **59.4 min**; coming home = 60 × 1.10 × (1 − 0.14) = 56.76 → **56.8 min**.
+**Worked example.** 3 steps with 10 items, Travel ring S (10%) worn, Return travel skill level 10 (6%):
+going out = 60 × 1.10 × (1 − 0.10) = **59.4 min**; coming home = 60 × 1.10 × (1 − 0.16) = 55.44 → **55.4 min**.
+The Return travel skill matches a C-grade Travel ring in size (6%) but only counts on trips that end at
+camp, so it is worth about half a ring.
 
 **Tuning notes.** `travelMinPerStep` sets how much of the day a rich far field costs: at 20 min/step a
 distance-4 round trip takes 160+ of the 600 minutes. Raising it pushes players to near fields (more copper,
 fewer gems, no coal or mythril); lowering it makes far fields the obvious choice. `loadPenaltyPerItem` is a
 small tax that interacts with bag size (a full 20-item bag = +20% on the way home). The bot spends about
-150–170 min a day travelling from day 11 on.
+155–170 min a day travelling on days 11–40, less after that as the reachable fields run dry.
 
 ---
 
-## 3. Fields, searching, regrowth, debris and ore sight
+## 3. Fields, searching, regrowth (off), debris and ore sight
 
 ### 3.1 What a field holds
 
 | Number | Config path | Value |
 |---|---|---|
 | Field size | `CONFIG.field.size` | 8 (8x8 = 64 cells) |
-| Loot chance per cell | `CONFIG.field.lootChance` | `{ base: 40, perDistance: 5, max: 70 }` |
+| Loot chance per cell | `CONFIG.field.lootChance` | `{ base: 50, perDistance: 5, max: 80 }` |
 | Debris chance per cell | `CONFIG.field.debrisChance` | 15 (%) |
 | Extra loot chance under debris | `CONFIG.field.debrisLootBonus` | 20 (points) |
-| Items in a loot cell (weights) | `CONFIG.field.itemCountWeights` | 1: 50, 2: 35, 3: 15 (average 1.65) |
+| Items in a loot cell (weights) | `CONFIG.field.itemCountWeights` | 1: 30, 2: 40, 3: 30 (average 2.0) |
 | Share of items that are ore | `CONFIG.field.oreShare` | 70 (%), the rest are gems |
 | Ore weights by distance | `CONFIG.field.oreWeights` | rows for distance 1, 2, 3, 4+ |
 | Gem weights by distance | `CONFIG.field.gemWeights` | rows for distance 1, 2, 3, 4+ |
@@ -308,23 +381,23 @@ small tax that interacts with bag size (a full 20-item bag = +20% on the way hom
 
 ```
 lootChance = min(max, base + perDistance × (distance − 1))   + (debris ? debrisLootBonus : 0)
-items      = 1, 2 or 3 (weighted 50/35/15)                   if the loot roll succeeds
+items      = 1, 2 or 3 (weighted 30/40/30)                   if the loot roll succeeds
 each item  = ore (70%) using oreWeights row, else gem using gemWeights row
 each item gets a hidden depth d, uniform 0–100
 ```
 
-Note: the `max` cap applies before the debris bonus, so a debris cell can exceed 70%.
+Note: the `max` cap applies before the debris bonus, so a debris cell can exceed 80% (100% from distance 7).
 Rows: distance 1 uses row 1, … distance 4 and farther use row 4.
 
 | Distance | Loot chance (normal / debris) | Expected items per field | Ores | Gems |
 |---|---|---|---|---|
-| 1 | 40% / 60% | 45.4 | 31.8 | 13.6 |
-| 2 | 45% / 65% | 50.7 | 35.5 | 15.2 |
-| 3 | 50% / 70% | 56.0 | 39.2 | 16.8 |
-| 4 | 55% / 75% | 61.2 | 42.9 | 18.4 |
-| 5 | 60% / 80% | 66.5 | 46.6 | 20.0 |
+| 1 | 50% / 70% | 67.8 | 47.5 | 20.4 |
+| 2 | 55% / 75% | 74.2 | 52.0 | 22.3 |
+| 3 | 60% / 80% | 80.6 | 56.4 | 24.2 |
+| 4 | 65% / 85% | 87.0 | 60.9 | 26.1 |
+| 5 | 70% / 90% | 93.4 | 65.4 | 28.0 |
 
-Expected items per field = 64 × (0.85 × loot + 0.15 × (loot + 20)) / 100 × 1.65.
+Expected items per field = 64 × (0.85 × loot + 0.15 × (loot + 20)) / 100 × 2.0.
 
 | Distance | Copper | Iron | Coal | Mythril | Ruby | Topaz | Sapphire | Emerald | Diamond |
 |---|---|---|---|---|---|---|---|---|---|
@@ -332,30 +405,39 @@ Expected items per field = 64 × (0.85 × loot + 0.15 × (loot + 20)) / 100 × 1
 | weights 2 | 60 | 35 | 5 | 0 | 30 | 25 | 20 | 15 | 10 |
 | weights 3 | 45 | 40 | 15 | 0 | 25 | 25 | 20 | 15 | 15 |
 | weights 4+ | 35 | 40 | 20 | 5 | 20 | 20 | 20 | 20 | 20 |
-| expected per d1 field | 25.4 | 6.4 | 0 | 0 | 4.8 | 4.1 | 2.7 | 1.4 | 0.7 |
-| expected per d2 field | 21.3 | 12.4 | 1.8 | 0 | 4.6 | 3.8 | 3.0 | 2.3 | 1.5 |
-| expected per d3 field | 17.6 | 15.7 | 5.9 | 0 | 4.2 | 4.2 | 3.4 | 2.5 | 2.5 |
-| expected per d4 field | 15.0 | 17.1 | 8.6 | 2.1 | 3.7 | 3.7 | 3.7 | 3.7 | 3.7 |
+| expected per d1 field | 38.0 | 9.5 | 0 | 0 | 7.1 | 6.1 | 4.1 | 2.0 | 1.0 |
+| expected per d2 field | 31.2 | 18.2 | 2.6 | 0 | 6.7 | 5.6 | 4.5 | 3.3 | 2.2 |
+| expected per d3 field | 25.4 | 22.6 | 8.5 | 0 | 6.0 | 6.0 | 4.8 | 3.6 | 3.6 |
+| expected per d4 field | 21.3 | 24.4 | 12.2 | 3.0 | 5.2 | 5.2 | 5.2 | 5.2 | 5.2 |
 
 So: no coal next to camp, and mythril only in the farthest fields (distance 4+).
 
-**Whole-map totals (average over 1,000 generated maps).** About **1,081 items** on a fresh map: copper 391,
-iron 271, coal 86, mythril 10, ruby 86, topaz 79, sapphire 65, emerald 50, diamond 44. Regrowth (3.2) adds
-more over time, so this is not a hard cap. Coal limits steel (one coal per steel bar) and mythril is the
-scarcest input by far: about 10 ore on a fresh map, plus about 2 mythril per distance-4 field refill.
+**Whole-map totals (average over 1,000 generated maps).** About **1,560 items** on a fresh map (1,565;
+the economy report's 100 maps give 1,557): copper 569, iron 390, coal 122, mythril 13, ruby 125, topaz 115,
+sapphire 94, emerald 72, diamond 63. Fields do not regrow (3.2), so **this is the whole supply of a run**.
+Coal limits steel (one coal per steel bar, so at most about 122 steel bars) and mythril is the scarcest
+input by far: about 13 ore per map, while a mythril set with every piece C or better needs about 26 ore on
+average (section 5).
 
-**Tuning notes.** `lootChance` and `itemCountWeights` set total supply. The mythril column of `oreWeights`
-is the main gate on late-game power, and the coal column gates steel. `oreShare` trades bars against gems.
-Debris adds richness but costs clearing time.
+**Tuning notes.** `lootChance` and `itemCountWeights` set total supply (with regrowth off, literally the
+total for a run). They were raised from 40/5/70 and 50/35/15 when search efficiency fell from 50% to 35%,
+to keep the pacing: items per search stay within about 10% of before (economy report: 1.78 / 1.88 / 2.13 /
+2.30 / 2.45 by distance 1 / 2 / 3 / 4 / 5+, was 1.79 / 1.95 / 2.26 / 2.47 / 2.71), a trip near camp fills
+the bag a little sooner, and the map grows from about 1,080 to about 1,560 items. The mythril column of
+`oreWeights` is the main gate on late-game power, and the coal column gates steel. `oreShare` trades bars
+against gems. Debris adds richness but costs clearing time.
 
-### 3.2 Regrowth
+### 3.2 Regrowth (off)
 
 | Number | Config path | Value |
 |---|---|---|
-| Regrowth chance | `CONFIG.field.regrowPctPerDay` | 5 (% per searched cell per night) |
+| Regrowth chance | `CONFIG.field.regrowPctPerDay` | 0 (off: fields do not regrow) |
+
+**Off for now** (the user's call: the game is a first draft). The mechanism is kept: any value above 0
+turns it back on with no other change.
 
 **Formula** (`regrowFields` in `js/core/map.js`, run when the night's plan is confirmed and the next day
-starts). For every cell of every field with `searched > 0` (partly or fully searched):
+starts; it does nothing at 0). For every cell of every field with `searched > 0` (partly or fully searched):
 
 ```
 with regrowPctPerDay % chance: replace the cell by a freshly rolled cell (rollCell for the field's distance:
@@ -364,55 +446,80 @@ new debris roll, new hidden items and depths, searched 0, not revealed). Items l
 
 Never-searched cells (including cleared but unsearched debris cells) do not change.
 
-**Worked example.** A fully searched distance-3 field: each night about 64 × 5% = 3.2 cells regrow, each
-holding (0.85 × 50% + 0.15 × 70%) × 1.65 = 0.87 items, so about 2.8 new items per night. After 10 nights
-1 − 0.95¹⁰ = 40% of its cells (about 26) are fresh again, holding about 22 items. A searched cell has a
-50% chance to have regrown after 14 nights. On a completely searched map, about 64 cells (≈ 54 items)
-regrow per night across all 20 fields, which is the long-run supply once the map is spent.
+**Worked example (if it were set to 5).** A fully searched distance-3 field: each night about 64 × 5% =
+3.2 cells regrow, each holding (0.85 × 60% + 0.15 × 80%) × 2.0 = 1.26 items, so about 4.0 new items per
+night. After 10 nights 1 − 0.95¹⁰ = 40% of its cells (about 26) are fresh again, holding about 32 items. A
+searched cell has a 50% chance to have regrown after 14 nights. On a completely searched map, about 64
+cells (≈ 78 items) regrow per night across all 20 fields, which would be the long-run supply once the map
+is spent.
 
-**Tuning notes.** Regrowth keeps the endless game supplied, mostly near camp, where the player searches
-most. The bot only searches about 31% of the map before it dies, so it rarely depends on regrowth.
-Raising it makes near fields self-sufficient (less reason to travel); setting it to 0 turns fields into a
-finite resource.
+**Tuning notes.** With regrowth off the map is a finite resource that caps the length of a run: the bot
+has found 72% of the map by day 40 and 87% by day 50; mythril is nearly gone by day 40 and coal runs low
+by day 50–55 (about 15 of 126 left at day 50; see "Map supply" in the results). Turning it back on (try
+`--set field.regrowPctPerDay=5` in the balance tool) keeps the endless game supplied, mostly near camp,
+where the player searches most; high values make near fields self-sufficient (less reason to travel).
 
 ### 3.3 Searching
 
 | Number | Config path | Value |
 |---|---|---|
 | Search time | `CONFIG.field.searchMin` | 30 min per 3x3 search |
-| Search efficiency | `CONFIG.field.searchEfficiency` | 50 (% of each cell searched per search) |
+| Search efficiency | `CONFIG.field.searchEfficiency` | 35 (average % of each cell searched per search, before bonuses) |
+| Search randomness | `CONFIG.field.searchRandomness` | 5 (each cell rolls efficiency ± 5 points per search: 30–40% at base) |
 
-**Formula** (`search` in `js/core/map.js`):
+**Formula** (`search`, `searchEfficiency`, `searchEfficiencyRange` in `js/core/map.js`):
 
 ```
-efficiency = searchEfficiency × (1 + (searchEffRing% + searchEffSkill%) / 100)
+efficiency = searchEfficiency × (1 + (searchEffRing% + searchEffSkill%) / 100)        (the average)
+range      = [clamp(efficiency − searchRandomness, 0, 100), clamp(efficiency + searchRandomness, 0, 100)]
 minutes    = round1( searchMin × (1 − min(searchTimeRing% + searchTimeSkill%, 75) / 100) )
 for each cell in the 3x3 area (clipped at the field edge) that has no debris and is not fully searched:
-    searched = min(100, searched + efficiency)
+    cellEff  = clamp(efficiency + uniform(−searchRandomness, +searchRandomness), 0, 100)   (new roll per cell, per search)
+    searched = min(100, searched + cellEff)
     every hidden item with depth < searched is found (all items once searched reaches 100)
 ```
 
 Found items go into the bag; if the bag is full they land on the ground of that cell. A search costs the
 full time even if some cells in the area are skipped (debris, already done, or off the field edge). It is
-refused only when no cell in the area can be searched.
+refused only when no cell in the area can be searched. The map shows the current range (for example
+"30–40%").
 
-After `ceil(100 / efficiency)` searches a cell is fully searched: **2 searches at 50%**. Bonuses do not
-change that count, because finishing in 1 search would need efficiency 100 (+100% bonus) and the best
-possible stack is below +48% (Thorough search rings add at most 2 × 20 with the duplicate penalty, the skill
-8). Instead they move items into the first search: at 62% the first search finds 62% of a cell's items
-and the second the remaining 38%.
+**Searches to finish a cell.** Bonuses multiply the average; the ± 5 spread stays the same. At base, one
+search adds 30–40%, so 3 searches finish 83% of cells and 17% need a 4th (the chance that three rolls add
+up to less than 100 is exactly 1/6). From a +9.6% bonus (average 38.3%, lowest roll 33.3%) every cell is
+done in 3, and from about +28.6% (average 45%) the best rolls finish a cell in 2. Economy report,
+section 1a:
+
+| Search efficiency bonus | Per search (per cell) | Searches to finish a cell |
+|---|---|---|
+| +0% | 30–40% | 3.17 on average (3: 83%, 4: 17%) |
+| +12% (skill level 10, or a C-grade Thorough search ring) | 34.2–44.2% | 3 |
+| +20% (S ring) | 37–47% | 3 |
+| +32% (S ring + skill level 10) | 41.2–51.2% | 2.97 (2: 3%, 3: 97%) |
+
+The largest possible bonus is just under +52% (ten S Thorough search rings add 39.96 with the duplicate
+penalty, the skill 12): 48.2–58.2% per search, so about 93% of cells finish in 2.
+
+Within a cell, the first search finds on average 35% of its items (the efficiency, since depths are
+uniform), the second another 35%, the third almost all of the rest. Bonuses move items into the earlier
+searches and remove the 4th (and, with big stacks, the 3rd).
 
 **Worked example.** A fresh, debris-free 3x3 area in a distance-2 field holds on average
-9 × 0.45 × 1.65 = 6.7 items. The first 30-minute search finds about half (3.3), the second the rest.
-With a Thorough search ring S (20%) and Search efficiency skill level 5 (4%), efficiency is
-50 × 1.24 = 62% per search: about 4.1 items in the first search and 2.5 in the second.
+9 × 0.55 × 2.0 = 9.9 items. At base efficiency the first 30-minute search finds about 3.5, the second about
+3.5 and the third the remaining 2.9 (a tiny rest is left for a 4th search on 1 cell in 6). With a Thorough
+search ring S (20%) and Search efficiency skill level 5 (6%), efficiency is 35 × 1.26 = 44.1% (39.1–49.1%
+per cell): about 4.4 items in the first search, 4.4 in the second and 1.2 in the third, and no cell needs a
+4th.
 
-Covering a whole 8x8 field takes at least 9 areas × 2 searches = 18 searches (9 hours); greedy area picks
-in the economy report use about 20.4 searches per field because areas overlap at the edges.
+Covering a whole 8x8 field takes at least 9 areas × 3 searches = 27 searches (13.5 hours); greedy area
+picks in the economy report use about 31 searches per field because areas overlap at the edges and some
+cells need a 4th search.
 
-**Tuning notes.** The efficiency bonus pays off for "skimming": searching fresh areas once and moving on
-(the first pass then yields 24% more at 62%). It does nothing for a player who always finishes cells.
-Breakpoints of the base value: 50–99 = 2 searches per cell, 34–49 = 3, 25–33 = 4. `searchMin` and
+**Tuning notes.** At 35% the efficiency bonus pays off twice: it moves items into the first searches
+(better "skimming" of fresh areas) and it removes the 4th search (from +9.6%) and, with big stacks, the
+3rd. `searchRandomness` makes cells finish unevenly; at 0 every cell would take exactly
+`ceil(100 / efficiency)` searches (3 at 35%). Breakpoints of the average with ± 5: every cell in 3 from
+38.3%, some cells in 2 from 45%, every cell in 2 from 55% (out of reach). `searchMin` and
 `searchEfficiency` together set items per minute; the bag size (20) caps how much one trip can carry.
 
 ### 3.4 Debris
@@ -425,19 +532,19 @@ Breakpoints of the base value: 50–99 = 2 searches per cell, 34–49 = 3, 25–
 
 **Formula.** "Clear debris" clears **every** debris cell in the 3x3 area at once:
 `minutes = round1( count × round1(debrisClearMin × (1 − min(debrisSkill%, 75)/100)) )`.
-Debris cells cannot be searched until cleared. A field has about 9.6 debris cells (≈ 192 per map), and a
-regrown cell rolls debris again.
+Debris cells cannot be searched until cleared. A field has about 9.6 debris cells (≈ 192 per map); a
+regrown cell (only when regrowth is on) rolls debris again.
 
-**Worked example.** An area with 3 debris cells and Debris clearing skill level 5 (5 × 0.5 = 2.5%):
-per cell = round1(15 × 0.975) = 14.6 min, total 3 × 14.6 = **43.8 min**. At skill level 10 (5%) a cell takes
-14.3 min.
+**Worked example.** An area with 3 debris cells and Debris clearing skill level 5 (5 × 5 = 25%):
+per cell = round1(15 × 0.75) = 11.3 min (11.25 rounded), total 3 × 11.3 = **33.9 min**. At skill level 10
+(50%) a cell takes 7.5 min.
 
-**Tuning notes.** A debris cell has +20 points loot chance (60% instead of 40% at distance 1), so it holds
-about 0.99 expected items instead of 0.66; clearing it costs 15 min on top of searching. In the economy
-report the minutes per extra item found under debris (11–19) are close to plain searching (11–17), so
-clearing is roughly break-even. Raising `debrisChance` hides more of each field behind a time cost. The
-Debris clearing skill is deliberately small (0.5% per level, 5% at level 10) and has no ring counterpart;
-the bot ends runs at about level 4 (2% faster).
+**Tuning notes.** A debris cell has +20 points loot chance (70% instead of 50% at distance 1), so it holds
+about 1.4 expected items instead of 1.0; clearing it costs 15 min on top of searching. In the economy
+report the minutes per extra item found under debris (9–15) are a little lower than plain searching
+(12–17), so clearing is a slightly good deal. Raising `debrisChance` hides more of each field behind a time
+cost. The Debris clearing skill has no ring counterpart and is strong (5% per level, −50% at level 10);
+the bot ends runs at about level 5 (−25%).
 
 ### 3.5 Ore sight
 
@@ -447,17 +554,17 @@ the bot ends runs at about level 4 (2% faster).
 | Ore sight ring | `CONFIG.rings.types.reveal.values` | 3 / 4 / 5 / 6 / 7 points (D…S) |
 
 **Formula.** `revealChance = intelChance('oreSight') + oreSightRingTotal` (points). After every search,
-each searched cell that is not yet revealed and still has something hidden (the search did not just finish
-it) rolls this chance once. A revealed cell shows every item still
-hidden in it (you still have to search to collect them). There is no cap: 100% or more always reveals.
-A regrown cell starts unrevealed again.
+each searched cell that is not yet revealed and that the search did not finish (still below 100%) rolls
+this chance once. A revealed cell shows every item still hidden in it, or that it is empty (you still have
+to search to collect them). There is no cap: 100% or more always reveals. A regrown cell (only when
+regrowth is on) starts unrevealed again.
 
 **Worked example.** Base 10% plus 2 intel points (+10, +9) plus an Ore sight ring B (5): 34% per cell, so a
 9-cell search reveals about 3 cells on average.
 
 **Tuning notes.** Ore sight is information, not loot: it tells the player when to stop digging an empty
-cell. With only 2 searches per cell it saves at most one search on a cell, so it is weak; the bot never
-spends intel on it.
+cell. With about 3 searches per cell it can save up to two searches on a cell (one revealed after the
+first search), so it is worth more than it used to be; the bot still never spends intel on it.
 
 ---
 
@@ -474,13 +581,13 @@ last timed field action (`pickUpLimit` in map.js). Arriving at camp unloads the 
 bag into unlimited camp storage. Each item in the bag adds `loadPenaltyPerItem` (1%) to travel time.
 
 **Worked example** (economy report, section 3a). One trip from 8:00 to a distance-2 field: 88 min of
-travel (40 out, 48 back with a full bag) and about 200 min of searching fill the bag (20 items) in about
-290 minutes. A second trip the same afternoon brings the day to about 34 items. At distance 4 the travel
-eats more of the day: about 29 items/day.
+travel (40 out, 48 back with a full bag) and about 185 min of searching (plus a few minutes of clearing)
+fill the bag (20 items) in about 275 minutes. A second trip the same afternoon brings the day to about
+38 items. At distance 4 the travel eats more of the day: about 30 items/day.
 
 **Tuning notes.** Bag size is a soft cap on items per trip and pushes players toward near fields or mid-day
-trips home. Raising it mostly helps far-field play. The bot makes 1.3 trips a day on average and its
-trips carry 9.7 items; only 13% of its trips fill the bag (it heads home when the rest of the day is better
+trips home. Raising it mostly helps far-field play. The bot makes 1.4 trips a day on average and its
+trips carry 9.7 items; only 15% of its trips fill the bag (it heads home when the rest of the day is better
 spent refining).
 
 ---
@@ -522,13 +629,13 @@ C' = C·(1−u) + D·u  D' = D·(1−u)           F' = F         (u as a fractio
 Time: `minutes = round1(base × (1 − min(processTimeRing% + refineTime/cutTime skill%, 75) / 100))`.
 The Refining ring applies to both refining and cutting; the skills are separate.
 
-**Worked example.** Copper with Copper refining skill level 10 (3 points), Bar luck ring S (6) and Copper
-bar grade skill level 10 (1.5), so u = 7.5%:
-step 1: F 10 → 7, D 30 → 33.
-step 2: S = 5 + 10×0.075 = **5.75**, A = 10×0.925 + 20×0.075 = **10.75**, B = 20×0.925 + 25×0.075 = **20.375**,
-C = 25×0.925 + 33×0.075 = **25.6**, D = 33×0.925 = **30.525**, F = **7**.
+**Worked example.** Copper with Copper refining skill level 10 (5 points), Bar luck ring S (6) and Copper
+bar grade skill level 10 (3), so u = 9%:
+step 1: F 10 → 5, D 30 → 35.
+step 2: S = 5 + 10×0.09 = **5.9**, A = 10×0.91 + 20×0.09 = **10.9**, B = 20×0.91 + 25×0.09 = **20.45**,
+C = 25×0.91 + 35×0.09 = **25.9**, D = 35×0.91 = **31.85**, F = **5**.
 
-The same bonuses on mythril: S 2.3, A 4.75, B 14.825, C 26.725, D 44.4, F 7.
+The same bonuses on mythril: S 2.36, A 4.9, B 14.99, C 27.25, D 45.5, F 5.
 
 **Why grades are hard.** Gear needs *all* bars of the same material **and** grade (2 or 3 bars). With the
 mythril table only 2 in 90 successes are S, so matching grades is the real bottleneck, and lower grades are
@@ -542,8 +649,9 @@ minutes per C-or-better bar; gems 33 minutes per C-or-better cut gem.
 grade makes matching sets of that grade more common. F is a flat material tax. Upgrade luck is weak per
 point (each point moves 1% of each grade up one step), which is why rings give only 2–6. Processing times
 (15 → 30 min) were raised so that refining and cutting take a real share of the day (the bot spends about
-290–350 min a day at camp refining, cutting and smithing in the first 10 days, falling to about 120–130 min
-after day 30 as it mines more).
+290–360 min a day at camp refining, cutting and smithing in the first 10 days, falling to about 115 min on
+days 31–40 as it mines more; after day 40, with the map running low, it spends about 170 min a day cutting
+stockpiled gems).
 
 ---
 
@@ -676,26 +784,46 @@ Piercing (5–25% of your defense) and Stunning (5–15% chance of a 1 s stun) a
 |---|---|---|
 | Wear per fight | `CONFIG.gear.durabilityLoss` | `{ min: 3, max: 7 }` (whole %, uniform) |
 | Repair material cost | `CONFIG.gear.repair.materialFraction` | 35 (% of the original bars and gem for a 0→100% repair) |
-| Repair time | `CONFIG.gear.repair.timeFraction` | 50 (% of the original smithing time for a 0→100% repair) |
+| Repair time | `CONFIG.gear.repair.timeFraction` | 50 (% of the original smithing time for a 0→100% repair; by day only) |
 
-**Formula** (`resolveBattle` in `game.js`, `repairInfo` in `gear.js`):
+**Formula** (`resolveBattle` in `game.js`; `repairInfo`, `repairPlan`, `repair` in `gear.js`):
 
 ```
 after each fight (win, draw or loss), every item the adventurer actually USED loses randInt(3, 7) durability
 durability 0 → item destroyed (packed-but-unused items lose nothing)
 
 missing     = 100 − durability
-repair bars = ceil to 0.01 of ( slot bars × 35/100 × missing/100 )     same material and grade as the item
-repair gem  = ceil to 0.01 of ( 1 × 35/100 × missing/100 )             only if the item has a gem
-repair time = round1( craftMinutes × 50/100 × missing/100 )
+repair bars = ceil to 0.01 of ( slot bars × 35/100 × missing/100 )     item's material, its grade or higher (see below)
+repair gem  = ceil to 0.01 of ( 1 × 35/100 × missing/100 )             only if the item has a gem; its grade or higher
+repair time = by day:   round1( craftMinutes × 50/100 × missing/100 )  at camp, must end by 18:00
+              at night: 0                                              battle report or plan screen
 ```
 
-Repairs always go back to 100%. Durability does not lower an item's stats. Packed items are away with the
-adventurer and cannot be repaired (or scrapped) that day. Scrapping an item gives nothing back.
+**When and where.** By day a repair is camp work: the smith must be at camp and the repair must end by
+18:00. At night (the `report` and `plan` phases, `isNight`) a repair costs no time and has no camp or clock
+check. All gear is home at night (the packed gear comes back when the day ends, and tomorrow's gear is
+only packed when the plan is confirmed), so every item can be repaired then, including the pieces used in
+today's fight. During the next day the packed items are away and cannot be repaired (or scrapped). The
+game-over screen is not night. Repairs always go back to 100%. Durability does not lower an item's stats.
+Scrapping an item gives nothing back.
 
-**Worked examples** (iron C items):
+**Higher grade as a substitute** (`repairPlan`, `substituteWarning`). A repair uses the item's own grade if
+storage has enough of it for the whole amount; otherwise the lowest higher grade that has enough on its
+own. Bars and gem are chosen separately. Grades are never combined: with 0.30 C and 0.30 B iron bars a
+repair that needs 0.42 bars is refused, although there are 0.60 in total. The higher grade gives no
+benefit (the item keeps its grade). The game warns: the repair line shows "Warning: Uses 0.42 B iron bars
+instead of C — no extra benefit", "Repair all" asks for confirmation when any of its repairs would use a
+substitute, and the result message repeats the warning.
 
-| Item | Durability | Bars | Gem | Time |
+**Worked example (substitute).** An iron C sword with a ruby B gem at 40% needs 0.42 iron C bars and
+0.21 cut ruby B (12 min by day, no time at night). Storage: 0.10 iron C, 0.50 iron B, 2 iron A, no ruby B,
+1 ruby S. The repair takes 0.42 iron **B** (the lowest higher grade with enough; the A bars and the 0.10 C
+are untouched) and 0.21 ruby **S**, and reports "Uses higher grade: 0.42 B iron bars instead of C; 0.21 S
+cut ruby instead of B (no extra benefit)."
+
+**Worked examples** (iron C items, exact grade in stock):
+
+| Item | Durability | Bars | Gem | Time by day (at night: 0) |
 |---|---|---|---|---|
 | Chest | 95% | 0.06 iron C (3 × 0.35 × 0.05 = 0.0525, rounded up) | none | 1.1 min |
 | Chest | 50% | 0.53 iron C | none | 11.3 min |
@@ -707,17 +835,25 @@ adventurer and cannot be repaired (or scrapped) that day. Scrapping an item give
 34 at best). Repairing after every fight would cost about 1.75% of the item's bars per fight (plus
 rounding), so roughly 57 fights of repairs cost as much as a new item.
 
-**The packing rule.** Wear lands at the end of the fight day, and the next plan is made right away. An
-item that is packed every night is therefore never at home during a work day and can never be repaired.
-To repair it, leave it home for a day (pack a backup in that slot instead). In the bot runs this makes
-repairs rare: 1.5 repairs per run costing 0.4% of the bars made, 1.5 items per run destroyed by wear
-(2% of the bars made), and `--ablate repair` shows no measurable difference. Gear is usually replaced by
-better gear before it wears out.
+**Night repairs and the packing rule.** Wear lands at the end of the fight day, and the next plan is made
+right away. An item that is packed every night is never at home during a work day, so by day it could
+never be repaired; the free night repair fixes that: the battle report offers Repair buttons for the gear
+just used, and the plan screen for every item, before anything is packed. In the bot runs (the bot
+repairs its two best items of each slot at night once they fall below 50%, or below 30% when only a higher
+grade is in stock, and never repairs by day): 4.8 repairs per run, all at night, costing 1.3% of the bars
+made; 1.1 of them use a higher-grade substitute (0.57 better bars per run). 2.0 items per run are still
+destroyed by wear (2.6% of the bars made, two thirds of it mythril): on about 21 nights per run a worn
+top item has no bars of its material at its grade or higher, and once the finite map's mythril is gone,
+mythril gear cannot be repaired at all.
+`--ablate repair` costs the bot 3.5 days of median life (48.5 instead of 52) and 15 points of survival at
+day 60, a small effect about the size of the noise.
 
-**Tuning notes.** Wear and repair cost were meant to be the main sinks for bars after the first sets are
-made. Under the packing rule they hardly bite. Raising `durabilityLoss` (for example to 8–12) makes items
-wear out within the life of a material tier and forces backup items and rest days; raising
-`materialFraction` makes new gear relatively cheaper than repairs.
+**Tuning notes.** Wear and repair cost are the sinks for bars after the first sets are made. With free
+night repairs only the materials count (35% of the bars for a full repair), and the real limit is having
+bars of the item's grade or higher: late in a run the map's mythril is gone, so mythril gear can no longer
+be repaired and wears out. Raising `durabilityLoss` (for example to 8–12) makes repairs a real drain on
+bars; raising `materialFraction` makes new gear relatively cheaper than repairs. `timeFraction` only
+matters for daytime repairs now.
 
 ---
 
@@ -1017,14 +1153,15 @@ fights, about 0.1 s in Node with 32 loadouts; in the browser it runs in steps wi
 
 **Worked example.** At a true 50% the sampling error of 1,200 fights is about ±1.4 points (one standard
 deviation), a bit more in practice because the 40 guesses are shared. In the bot runs the mean estimate
-matched the actual win rate within about 1 point up to day 40 (Balance targets section).
+matched the actual win rate within about 1 point up to day 50, and was pessimistic after that (84.6%
+estimated vs 90.5% won on days 51–60; Balance targets section).
 
 **Tuning notes.** More `samples` = better coverage of hidden attributes (with enemy scouting at its 10%
 base, about 11 of 12 attributes are guesses). More `fightsPerLoadout` = the simulated gear choice matches
 the real one (which uses 200) more often. With only 30 fights per loadout the estimate is slightly
 pessimistic when many loadouts are packed. These numbers only affect UI speed and accuracy, not
-difficulty. The balance tool's bot estimates all 7 roster enemies every day, which is why a 24-seed bot
-run takes about 80 s.
+difficulty. The balance tool's bot estimates all 7 roster enemies every day, which is why a 40-seed bot
+run takes about 3 minutes.
 
 **Matchup table (plan screen, no simulation).** Under the adventurer preview the plan screen shows quick
 numbers for the selected enemy, computed with the same formulas as the fight (`hitChance`, `hitDamage`,
@@ -1158,7 +1295,7 @@ adventurer ring on the Rings tab only changes the default selection for tonight'
 |---|---|---|---|
 | Travel | smith | 5 / 6 / 7 / 8 / 10 | % less travel time (all trips) |
 | Quick search | smith | 5 / 6 / 7 / 8 / 10 | % less search time |
-| Thorough search | smith | 10 / 12 / 14 / 16 / 20 | % more searched per search (multiplies the 50%) |
+| Thorough search | smith | 10 / 12 / 14 / 16 / 20 | % more searched per search (multiplies the 35% average; the ± 5 spread stays) |
 | Ore sight | smith | 3 / 4 / 5 / 6 / 7 | points added to the ore sight chance |
 | Refining | smith | 5 / 6 / 7 / 8 / 10 | % less refining **and** cutting time |
 | Bar luck | smith | 2 / 3 / 4 / 5 / 6 | % upgrade luck on bars |
@@ -1206,9 +1343,10 @@ All 10 adventurer ring types at grade B together: +31.4 points.
 
 **Tuning notes.** `duplicateFactor` decides whether stacking one type is worthwhile (0.5 = a second copy
 is worth half). Grade weights set how fast ring power grows with fight difficulty; champion fights are the
-only source of S rings. Ring values are deliberately bigger than skill bonuses. In the bot runs rings are
-the only system whose removal clearly hurts (`--ablate rings`: median life 44.5 instead of 50.5, 21% alive
-at day 50 instead of 50%, mean score 513 instead of 640).
+only source of S rings. A level-10 skill equals a C-grade smith ring of the same kind (section 14), so
+B-to-S smith rings still beat a maxed skill; adventurer rings have no skill counterpart. In the bot runs
+removing rings clearly hurts (`--ablate rings`: median life 46 instead of 52, 28% alive at day 50 instead
+of 55%, mean score 535 instead of 777, and only 7.9 elite wins per run instead of 18.9).
 Pierce resistance and Stun resistance are near-dead picks (see 10.4 and 10.6).
 
 ---
@@ -1221,7 +1359,7 @@ Pierce resistance and Stun resistance are near-dead picks (see 10.4 and 10.6).
 | XP curve base | `CONFIG.skills.xpBase` | 100 |
 | XP per item (material skills) | `CONFIG.skills.xpPerItem` | copper 25, iron 25, steel 30, mythril 50; ruby 25, topaz 25, sapphire 30, emerald 40, diamond 50 |
 | Activity skills | `CONFIG.skills.activity.<key>.perLevel` | see table |
-| Material skills | `CONFIG.skills.perMaterial.<key>.perLevel` | grade 0.15, failure 0.3 |
+| Material skills | `CONFIG.skills.perMaterial.<key>.perLevel` | grade 0.3, failure 0.5 |
 
 **Formula** (`xpToNext`, `addXp`, `skillBonus`, `itemXp` in `js/core/skills.js`):
 
@@ -1249,37 +1387,43 @@ at level 10.
 
 | Skill | Per level | At level 10 | XP from | Applies to |
 |---|---|---|---|---|
-| Return travel | 0.4 | 4% | minutes travelling to camp | travel time on trips ending at camp (adds to the Travel ring) |
-| Search speed | 0.4 | 4% | minutes searching | search time (adds to Quick search ring) |
-| Search efficiency | 0.8 | 8% | minutes searching | efficiency multiplier (adds to Thorough search ring) |
-| Debris clearing | 0.5 | 5% | minutes clearing | debris time (no ring counterpart) |
-| Refining speed | 0.4 | 4% | minutes refining | refining time (adds to Refining ring) |
-| Cutting speed | 0.4 | 4% | minutes cutting | cutting time (adds to Refining ring) |
-| Copper / Iron / Steel / Mythril bar grade (4 skills) | 0.15 | 1.5% | XP per bar of that type | upgrade luck for that bar (adds to Bar luck ring) |
-| Copper / Iron / Steel / Mythril refining (4 skills) | 0.3 | 3 points | XP per bar of that type | failure → D for that bar |
-| Ruby / Topaz / Sapphire / Emerald / Diamond grade (5 skills) | 0.15 | 1.5% | XP per gem of that type | upgrade luck for that gem (adds to Gem luck ring) |
-| Ruby / … / Diamond cutting (5 skills) | 0.3 | 3 points | XP per gem of that type | failure → D for that gem |
+| Return travel | 0.6 | 6% | minutes travelling to camp | travel time on trips ending at camp (adds to the Travel ring) |
+| Search speed | 0.6 | 6% | minutes searching | search time (adds to Quick search ring) |
+| Search efficiency | 1.2 | 12% | minutes searching | efficiency multiplier (adds to Thorough search ring) |
+| Debris clearing | 5 | 50% | minutes clearing | debris time (no ring counterpart) |
+| Refining speed | 0.6 | 6% | minutes refining | refining time (adds to Refining ring) |
+| Cutting speed | 0.6 | 6% | minutes cutting | cutting time (adds to Refining ring) |
+| Copper / Iron / Steel / Mythril bar grade (4 skills) | 0.3 | 3% | XP per bar of that type | upgrade luck for that bar (adds to Bar luck ring) |
+| Copper / Iron / Steel / Mythril refining (4 skills) | 0.5 | 5 points | XP per bar of that type | failure → D for that bar |
+| Ruby / Topaz / Sapphire / Emerald / Diamond grade (5 skills) | 0.3 | 3% | XP per gem of that type | upgrade luck for that gem (adds to Gem luck ring) |
+| Ruby / … / Diamond cutting (5 skills) | 0.5 | 5 points | XP per gem of that type | failure → D for that gem |
 
-A level-10 skill is a bit weaker than a D-grade ring of the same kind (Travel D 5%, Quick search D 5%,
-Thorough search D 10%, Refining D 5%, Bar/Gem luck D 2%). Debris clearing and the failure skills have no
-ring counterpart.
+**A level-10 skill equals a C-grade ring of the same kind** (Travel C 6%, Quick search C 6%, Thorough
+search C 12%, Refining C 6%, Bar/Gem luck C 3%; the Help and Skills tabs show this per skill). Two caveats:
+Return travel only counts on trips that end at camp, so it is worth about half a Travel ring; and one
+Refining ring covers both refining and cutting, which take two skills. Skills with no ring: Debris clearing
+(5% per level, −50% time at level 10) and the refining/cutting failure skills (0.5 points per level, −5
+points at level 10, i.e. half of the 10% failure chance moves to D).
 
 **Worked examples.** One 30-minute search gives 30 XP to both Search speed and Search efficiency; level 10
-needs 188 searches (5,504 minutes ≈ 9.2 full days of nothing but searching; a few more than 5,500 / 30
+needs 191 searches (5,524 minutes ≈ 9.2 full days of nothing but searching; a few more than 5,500 / 30
 because searches get faster as the skill grows and XP = minutes). Refining 60 mythril ore (failures count)
-gives 3,000 XP: Mythril bar grade and Mythril refining reach level 7 = +1.05% upgrade luck and −2.1 failure
+gives 3,000 XP: Mythril bar grade and Mythril refining reach level 7 = +2.1% upgrade luck and −3.5 failure
 points.
 
-**What the bot reaches** by the end of a run (about day 50, mean levels): activity skills 4–9 (search 8.8,
-return travel 6.5, refining 7.3, cutting 6.7, debris 4.1) and material skills from 0.6 (topaz) to 5.3
-(diamond), with steel, ruby and copper around 4.5.
+**What the bot reaches** by the end of a run (about day 50, mean levels): activity skills from 5 to almost
+10 (search speed and efficiency 9.7, cutting 8.1, refining 7.4, return travel 7.0, debris 5.0) and material
+skills from 1.8 (topaz) to 6.1 (ruby), with diamond and steel above 5. Its smith bonuses at the end (rings +
+skills):
+search efficiency +28.5%, search time −13.8%, refining −13.1%, cutting −13.5%, travel −8% (plus −4.2% on
+the way home), debris −25%.
 
 **Tuning notes.** `xpBase` scales every skill's pace; `xpPerItem` sets the material skills' pace (rarer
-materials give more XP per item because there are fewer of them). Per-level values are intentionally small.
-In the bot runs skills make no measurable difference (`--ablate skills` is within noise of the full game).
-If skills should feel rewarding, raise `perLevel`: making a level-10 skill equal to a B-grade ring needs
-about 1.75× the current values for the time and search skills (Travel B 7% vs 4%, Thorough search B 14% vs
-8%) and about 2.7× for the grade skills (Bar luck B 4% vs 1.5%).
+materials give more XP per item because there are fewer of them). `perLevel` is set so that level 10 matches
+a C-grade ring (change the ring's C value and the skill together to keep that rule; the Help tab says
+"equals a C-grade ring" only while every matched skill is exact). In the bot runs removing skills costs
+about 2 days of median life (50 instead of 52), 10 points of survival at day 40 and 89 points of mean score
+(`--ablate skills`), a small effect about the size of the noise.
 
 ---
 
@@ -1312,7 +1456,8 @@ or 1 after the list runs out. Each track counts its own points.
 
 **Tuning notes.** `daysPerPoint` is the pace; the first few points are worth the most, which favors
 spreading points over tracks. The bot puts every point into enemy scouting, and `--ablate intel` is within
-noise, because the win-chance estimate already averages over the hidden attributes. Lower the scouting
+noise (median life 51 instead of 52, mean score 715 instead of 777), because the win-chance estimate
+already averages over the hidden attributes. Lower the scouting
 bases to make planning riskier; raise them to make the roster easier to read.
 
 ---
@@ -1329,9 +1474,9 @@ score is kept in the browser (localStorage) across new games.
 **Worked example.** 10 days of fights: 4 normal, 5 elite, 1 champion = 40 + 125 + 50 = **215**.
 
 **Tuning notes.** Champion = 5 normals. Champions are a real risk of game over at every stage: the bot's
-best estimate against a champion on its roster averages 55–71% between days 7 and 30 and never gets near
-its 90% line, so the careful bot (almost) never takes one and scores 640 on average. Raising the champion
-score pushes riskier play; `--minwin` and `--future` let the bot test that.
+best estimate against a champion on its roster averages 55–77% between days 7 and 30 and rarely reaches
+its 90% line, so the careful bot takes only 0.3 champions per run and scores 777 on average. Raising the
+champion score pushes riskier play; `--minwin` and `--future` let the bot test that.
 
 ---
 
