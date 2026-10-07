@@ -19,6 +19,78 @@
     <aside id="sidelog"></aside>
   </div>
   <div id="toast"></div>
+  <!-- Start-up diagnostics (plain ES5, not a module, so it runs even where the game's modules fail).
+       It records script errors; if the top bar is still empty a few seconds after load, the game did
+       not start, and it shows a box with the errors and the browser to send to the developer. -->
+  <script>
+  (function () {
+    var errors = [];
+    var shown = false;
+    function add(msg) {
+      try {
+        errors.push(String(msg));
+        if (errors.length > 20) errors.shift();
+      } catch (e) { /* ignore */ }
+    }
+    window.addEventListener('error', function (e) {
+      var t = e && e.target;
+      if (t && t !== window && t.tagName) {
+        add('Could not load ' + t.tagName.toLowerCase() + ' (or a file it imports): ' + (t.src || t.href || '(unknown file)'));
+        return;
+      }
+      var m = (e && e.message) || 'Unknown script error';
+      if (e && e.filename) m += ' (' + e.filename + (e.lineno ? ':' + e.lineno + (e.colno ? ':' + e.colno : '') : '') + ')';
+      if (e && e.error && e.error.stack) m += '\n' + e.error.stack;
+      add(m);
+    }, true);
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e && e.reason;
+      var m = r && r.message ? r.message + (r.stack ? '\n' + r.stack : '') : String(r);
+      add('Unhandled promise rejection: ' + m);
+    });
+    function started() {
+      var top = document.getElementById('topbar');
+      return !!(top && top.children && top.children.length > 0);
+    }
+    function report() {
+      if (shown || started()) return;
+      shown = true;
+      var text = 'Smithsy failed to start in this browser.\n\n' +
+        'Errors:\n' + (errors.length ? errors.join('\n\n') : '(no error message was captured)') + '\n\n' +
+        'Browser: ' + navigator.userAgent + '\n' +
+        'Page: ' + location.href + '\n' +
+        'Time: ' + new Date().toString();
+      var box = document.createElement('div');
+      box.id = 'startup-error';
+      box.setAttribute('role', 'alert');
+      box.style.cssText = 'position:fixed;left:12px;right:12px;top:12px;z-index:9999;max-width:760px;margin:0 auto;' +
+        'background:#fff;color:#222;border:2px solid #c62828;border-radius:8px;padding:12px 14px;' +
+        'font:14px/1.4 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3);max-height:90vh;overflow:auto;';
+      var h = document.createElement('h2');
+      h.style.cssText = 'margin:0 0 6px;font-size:18px;color:#c62828;';
+      h.textContent = 'Smithsy failed to start in this browser';
+      var p = document.createElement('p');
+      p.style.cssText = 'margin:0 0 8px;';
+      p.textContent = 'Sorry! Please send this to the developer (copy the text below), together with what you did just before:';
+      var ta = document.createElement('textarea');
+      ta.readOnly = true;
+      ta.value = text;
+      ta.style.cssText = 'width:100%;box-sizing:border-box;height:220px;font:12px/1.35 ui-monospace,Menlo,Consolas,monospace;' +
+        'color:#222;background:#f6f4ef;border:1px solid #ccc;border-radius:6px;padding:6px;';
+      ta.onfocus = function () { try { ta.select(); } catch (e) { /* ignore */ } };
+      var tip = document.createElement('p');
+      tip.style.cssText = 'margin:8px 0 0;font-size:12px;color:#666;';
+      tip.textContent = 'Tip: reloading the page, or trying another browser, may help.';
+      box.appendChild(h);
+      box.appendChild(p);
+      box.appendChild(ta);
+      box.appendChild(tip);
+      (document.body || document.documentElement).appendChild(box);
+    }
+    window.addEventListener('load', function () { setTimeout(report, 4000); });
+    setTimeout(report, 15000); // in case the load event never fires
+  })();
+  </script>
   <script type="module" src="js/main.js"></script>
   <noscript>Smithsy needs JavaScript.</noscript>
 </body>

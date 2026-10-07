@@ -71,6 +71,21 @@
 .mv-root .mv-sw .cell.debris {
   background: repeating-linear-gradient(135deg, #8d6e63 0 5px, #6d4c41 5px 10px); color: #fff;
 }
+/* debris: remaining thickness as a number on the stripes (search progress uses the rising fill instead) */
+.mv-debris-n {
+  font-size: 12px; font-weight: 800; line-height: 1; padding: 1px 3px; border-radius: 3px;
+  background: rgba(40, 24, 16, 0.55); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
+}
+.mv-sw .mv-debris-n { font-size: 10px; }
+/* boulder: dark cell with a grey rock; never searchable */
+.mv-root .grid .cell.mv-boulder { background: #26231f; border-color: transparent; }
+.mv-root .mv-field .cell.mv-boulder.sel { border-color: var(--accent); }
+.mv-rockshape {
+  position: absolute; inset: 16% 12% 14% 12%; z-index: 1; pointer-events: none;
+  border-radius: 48% 52% 44% 56% / 58% 50% 50% 42%;
+  background: radial-gradient(circle at 34% 30%, #b9b4ab 0, #8a857c 28%, #5b5750 62%, #3e3b36 100%);
+  box-shadow: inset -2px -3px 4px rgba(0, 0, 0, 0.45), 0 2px 2px rgba(0, 0, 0, 0.5);
+}
 .mv-cc { display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 1px; padding: 1px; }
 .mv-pct { font-weight: 600; }
 .mv-done-l { font-weight: 700; letter-spacing: 0.02em; }
@@ -101,9 +116,45 @@
 /* --------------------------------------------------------------- bag ---- */
 .mv-bag .slot.mv-slot { font-weight: 700; font-size: 12px; border-color: transparent; }
 .mv-bag .slot.mv-gem { border-radius: 50%; }
-.mv-bag .slot.mv-slot:hover { outline: 2px solid var(--err); outline-offset: 1px; }
-.mv-root .mv-bag .slot.mv-new { box-shadow: 0 0 0 2px var(--mv-new), inset 0 0 0 1px var(--mv-ring, transparent); }
+.mv-bag .slot.mv-slot:hover { outline: 2px solid var(--accent-2); outline-offset: 1px; }
 .mv-counts { margin-top: 8px; }
+
+/* -------------------------------------------------------- field pile ---- */
+.mv-pile { gap: 6px; }
+.mv-pchip { font: inherit; font-size: 12px; padding: 2px 8px; }
+.mv-root .chip.clickable.mv-pchip:hover:not(:disabled) { border-color: var(--accent-2); }
+.mv-root .mv-pchip.mv-new { box-shadow: 0 0 0 2px var(--mv-new); }
+.mv-newn { color: var(--warn); font-weight: 600; }
+
+/* ------------------------------------------------ carry step (modal) ---- */
+.mv-modal {
+  position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.5);
+  display: flex; align-items: flex-start; justify-content: center; padding: 12px; overflow-y: auto;
+}
+.mv-dialog {
+  width: 100%; max-width: 640px; margin: auto 0; max-height: calc(100vh - 24px); overflow-y: auto;
+  overscroll-behavior: contain; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.mv-dialog h4 { margin: 10px 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.mv-carry-quick { margin: 8px 0; }
+.mv-carry-sum {
+  font-size: 13px; padding: 6px 8px; border-radius: 6px; background: var(--cell);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.mv-carry-chosen { margin-top: 2px; }
+.mv-ck-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 0; border-bottom: 1px dotted var(--border); }
+.mv-ck-head { display: flex; align-items: center; gap: 2px; min-width: 150px; font-size: 13px; }
+.mv-ck-count { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; margin-left: 4px; }
+.mv-ck-items { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 200px; min-width: 0; }
+.mv-ck {
+  display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 2px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 6px; opacity: 0.6;
+}
+.mv-ck input { margin: 0 2px; cursor: pointer; }
+.mv-ck.on { opacity: 1; border-color: var(--accent-2); background: rgba(47, 111, 159, 0.1); }
+.mv-ck.off { opacity: 0.35; cursor: not-allowed; }
+.mv-ck.off input { cursor: not-allowed; }
+.mv-carry-foot { justify-content: flex-end; margin-top: 10px; position: sticky; bottom: -10px; background: var(--panel); padding: 8px 0 4px; }
 
 /* ----------------------------------------------------------- actions ---- */
 .mv-time { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }

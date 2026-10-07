@@ -4,7 +4,7 @@ import { CONFIG, ORES, GEMS } from '../js/config.js';
 import { seededRng, makeRng } from '../js/core/rng.js';
 import {
   generateMap, generateField, pathSteps, mapCell, key, travelMinutes, returnMinutes, travel, atCamp, timeLeft,
-  rollCell, regrowFields,
+  rollCell, regrowFields, boulderCell, fieldProgress,
 } from '../js/core/map.js';
 import { game, cfgWith, customMap, addRing, setSkillLevel, DAY_END, DAY_START, fieldAt } from './helpers.mjs';
 
@@ -57,6 +57,8 @@ test('generateMap: camp in the center, exact blocked count, every field reachabl
       assert.ok(map.fields[key(f.x, f.y)], 'field contents missing');
       assert.equal(map.fields[key(f.x, f.y)].dist, f.dist);
       assert.equal(map.fields[key(f.x, f.y)].cells.length, CONFIG.field.size ** 2);
+      assert.equal(map.fields[key(f.x, f.y)].cells.filter((c) => c.boulder).length, CONFIG.field.boulders, 'boulders per field');
+      assert.deepEqual(map.fields[key(f.x, f.y)].pile, [], 'every field starts with an empty pile');
     }
     assert.equal(Object.keys(map.fields).length, fields.length, 'only fields have contents');
     // cells are stored row-major and know their coordinates
@@ -99,10 +101,13 @@ test('generateField: valid items, depth 0..100, item count from itemCountWeights
     assert.equal(f.cells.length, CONFIG.field.size ** 2);
     const oreW = weightRow(CONFIG.field.oreWeights, dist);
     const gemW = weightRow(CONFIG.field.gemWeights, dist);
+    assert.deepEqual(f.pile, []);
     for (const c of f.cells) {
       assert.equal(c.searched, 0);
       assert.equal(c.revealed, false);
-      assert.deepEqual(c.ground, []);
+      assert.equal('ground' in c, false, 'no per-cell ground items any more');
+      assert.equal(typeof c.debris, 'number');
+      assert.equal(typeof c.boulder, 'boolean');
       assert.ok(c.items.length <= maxItems);
       for (const it of c.items) {
         const [kind, type] = it.t.split(':');
@@ -129,7 +134,8 @@ test('generateField: farther fields and debris cells hold more items on average'
     let cells = 0; let loot = 0; let dCells = 0; let dLoot = 0;
     for (let i = 0; i < 300; i++) {
       for (const c of generateField(rng, dist).cells) {
-        if (c.debris) { dCells++; if (c.items.length) dLoot++; } else { cells++; if (c.items.length) loot++; }
+        if (c.boulder) continue;
+        if (c.debris > 0) { dCells++; if (c.items.length) dLoot++; } else { cells++; if (c.items.length) loot++; }
       }
     }
     return { clear: loot / cells, debris: dLoot / dCells, debrisShare: dCells / (cells + dCells) };
@@ -143,6 +149,93 @@ test('generateField: farther fields and debris cells hold more items on average'
   // the rule itself: farther fields and debris cells are at least as rich
   assert.ok(lootPct(4, false) >= lootPct(1, false));
   assert.ok(lootPct(1, true) >= lootPct(1, false));
+});
+
+test('debris: a debris cell gets a whole-number thickness within debrisAmount; clear cells have 0', () => {
+  const { min, max } = CONFIG.field.debrisAmount;
+  assert.ok(min > 0 && max >= min);
+  const rng = seededRng(14);
+  const seen = new Set();
+  let debris = 0;
+  let total = 0;
+  for (let i = 0; i < 200; i++) {
+    for (const c of generateField(rng, 1 + (i % 4)).cells) {
+      if (c.boulder) continue;
+      total++;
+      if (c.debris === 0) continue;
+      debris++;
+      assert.ok(Number.isInteger(c.debris), `${c.debris}`);
+      assert.ok(c.debris >= min && c.debris <= max, `${c.debris} outside [${min}, ${max}]`);
+      seen.add(c.debris);
+    }
+  }
+  assert.ok(Math.abs(debris / total - CONFIG.field.debrisChance / 100) < 0.01, `debris share ${debris / total}`);
+  assert.ok(seen.has(min) && seen.has(max), 'both ends of the range occur');
+  // pinned range: every thickness lands in it
+  const cfg = cfgWith({ field: { debrisChance: 100, debrisAmount: { min: 7, max: 9 } } });
+  const cells = generateField(seededRng(3), 2, cfg).cells.filter((c) => !c.boulder);
+  assert.deepEqual([...new Set(cells.map((c) => c.debris))].sort(), [7, 8, 9]);
+  assert.ok(generateField(seededRng(3), 2, cfgWith({ field: { debrisChance: 0 } })).cells.every((c) => c.debris === 0));
+});
+
+test('boulders: exactly CONFIG.field.boulders per field, at random spots, with no items and no debris', () => {
+  const rng = seededRng(15);
+  const spots = new Set();
+  for (let i = 0; i < 100; i++) {
+    const f = generateField(rng, 1 + (i % 4));
+    const b = f.cells.map((c, k) => (c.boulder ? k : -1)).filter((k) => k >= 0);
+    assert.equal(b.length, CONFIG.field.boulders);
+    for (const k of b) {
+      spots.add(k);
+      assert.deepEqual(f.cells[k], boulderCell());
+      assert.deepEqual(f.cells[k].items, []);
+      assert.equal(f.cells[k].debris, 0);
+      assert.equal(f.cells[k].searched, 0);
+    }
+    for (const c of f.cells) if (!c.boulder) assert.equal(c.boulder, false);
+  }
+  if (CONFIG.field.boulders > 0) assert.ok(spots.size > 20, 'boulders are placed randomly');
+  // the count is a config number (capped at the field size)
+  for (const n of [0, 3]) {
+    const f = generateField(seededRng(2), 2, cfgWith({ field: { boulders: n } }));
+    assert.equal(f.cells.filter((c) => c.boulder).length, n);
+  }
+  const size = CONFIG.field.size ** 2;
+  assert.equal(generateField(seededRng(2), 2, cfgWith({ field: { boulders: size + 5 } })).cells.filter((c) => c.boulder).length, size);
+  assert.ok(Number.isInteger(CONFIG.field.boulders) && CONFIG.field.boulders >= 1, 'spec: every field has a boulder');
+});
+
+test('boulders are excluded from fieldProgress', () => {
+  const f = generateField(seededRng(16), 1, cfgWith({ field: { boulders: 2 } }));
+  for (const c of f.cells) if (!c.boulder) c.searched = 50;
+  assert.equal(fieldProgress(f), 50);
+  for (const c of f.cells) if (!c.boulder) c.searched = 100;
+  assert.equal(fieldProgress(f), 100);
+});
+
+test('every gem type is equally likely at every distance', () => {
+  for (const row of CONFIG.field.gemWeights) {
+    assert.deepEqual(Object.keys(row).sort(), [...GEMS].sort());
+    const w = Object.values(row);
+    assert.ok(w[0] > 0);
+    assert.ok(w.every((x) => x === w[0]), JSON.stringify(row));
+  }
+  // in generated fields, at several distances
+  const cfg = cfgWith({ field: { oreShare: 0, lootChance: { base: 100, perDistance: 0, max: 100 } } });
+  const rng = seededRng(17);
+  for (const dist of [1, 2, 4, 6]) {
+    const counts = Object.fromEntries(GEMS.map((g) => [g, 0]));
+    let n = 0;
+    for (let i = 0; i < 40; i++) {
+      for (const c of generateField(rng, dist, cfg).cells) {
+        for (const it of c.items) {
+          counts[it.t.split(':')[1]]++;
+          n++;
+        }
+      }
+    }
+    for (const g of GEMS) assert.ok(Math.abs(counts[g] / n - 1 / GEMS.length) < 0.02, `${g} at distance ${dist}: ${counts[g] / n}`);
+  }
 });
 
 // ---------------------------------------------------------------- pathSteps --
@@ -335,16 +428,17 @@ test('travel works on a generated map: every field can be reached on day 1 from 
 });
 
 // ----------------------------------------------------------------- regrowth --
-// A game whose fields have a mix of searched / unsearched cells, with ground items on some.
+// A game whose fields have a mix of searched / unsearched cells (boulders untouched), with a pile in each.
 function regrowState(seed = 3) {
   const s = game(seed);
   const rng = seededRng(seed + 100);
   for (const f of Object.values(s.map.fields)) {
     f.cells.forEach((c, i) => {
-      if (i % 3 === 0) { c.searched = 100; c.items = []; c.revealed = rng.chance(50); }
-      else if (i % 3 === 1) { c.searched = rng.float(1, 99); }
-      if (i % 5 === 0) c.ground = [`ore:copper`, `gem:ruby`];
+      if (c.boulder) return;
+      if (i % 3 === 0) { c.searched = 100; c.items = []; c.revealed = rng.chance(50); c.debris = 0; }
+      else if (i % 3 === 1) { c.searched = rng.float(1, 99); c.debris = 0; }
     });
+    f.pile = ['ore:copper', 'gem:ruby'];
   }
   return s;
 }
@@ -359,7 +453,7 @@ test('regrowFields at 0% does nothing (and uses no randomness)', () => {
   assert.equal(holder.s, 42);
 });
 
-test('regrowFields at 100% resets every searched cell, keeps ground items, leaves unsearched cells alone', () => {
+test('regrowFields at 100% resets every searched cell, keeps the pile and boulders, leaves unsearched cells alone', () => {
   const s = regrowState();
   const before = structuredClone(s.map.fields);
   const n0 = searchedCount(s);
@@ -369,10 +463,12 @@ test('regrowFields at 100% resets every searched cell, keeps ground items, leave
   assert.equal(searchedCount(s), 0, 'every searched cell is fresh');
   for (const [k, f] of Object.entries(s.map.fields)) {
     assert.equal(f.dist, before[k].dist);
+    assert.deepEqual(f.pile, before[k].pile, 'the pile stays');
     f.cells.forEach((c, i) => {
       const old = before[k].cells[i];
-      assert.deepEqual(c.ground, old.ground, 'ground items stay');
+      if (old.boulder) assert.deepEqual(c, old, 'boulders never regrow');
       if (old.searched > 0) {
+        assert.equal(c.boulder, false);
         assert.equal(c.searched, 0);
         assert.equal(c.revealed, false);
         assert.ok(Array.isArray(c.items));
@@ -395,9 +491,7 @@ test('regrowFields: a regrown cell is a fresh roll for its field\'s distance', (
     f.cells.forEach((old, i) => {
       if (old.searched <= 0) return;
       replay.next(); // the regrowth chance roll
-      const expected = rollCell(replay, f.dist, cfg);
-      expected.ground = old.ground;
-      assert.deepEqual(s.map.fields[k].cells[i], expected);
+      assert.deepEqual(s.map.fields[k].cells[i], rollCell(replay, f.dist, cfg));
     });
   }
   // semantic check: with distance-specific ore tables, regrown cells follow their field's distance
@@ -412,6 +506,27 @@ test('regrowFields: a regrown cell is a fresh roll for its field\'s distance', (
       assert.ok(c.items.length > 0, 'loot chance 100%');
       for (const it of c.items) assert.equal(it.t, f.dist === 1 ? 'ore:copper' : 'ore:mythril');
     });
+  }
+});
+
+test('regrowFields skips boulders, even one marked as searched (hand-edited save)', () => {
+  const s = regrowState(4);
+  const spots = [];
+  for (const [k, f] of Object.entries(s.map.fields)) {
+    f.cells.forEach((c, i) => {
+      if (c.boulder) {
+        c.searched = 100;
+        spots.push([k, i]);
+      }
+    });
+  }
+  assert.equal(spots.length, Object.keys(s.map.fields).length * CONFIG.field.boulders);
+  const n0 = searchedCount(s);
+  const n = regrowFields(s, seededRng(5), cfgWith({ field: { regrowPctPerDay: 100 } }));
+  assert.equal(n, n0 - spots.length, 'boulders are not counted as regrown');
+  for (const [k, i] of spots) {
+    assert.equal(s.map.fields[k].cells[i].boulder, true);
+    assert.equal(s.map.fields[k].cells[i].searched, 100);
   }
 });
 

@@ -17,14 +17,17 @@ randomness adds luck and variety. Starting numbers are round.
 - Fights cannot be skipped: every day from day 2 the adventurer fights one enemy.
 
 ## Time
-- Day runs 8:00 → 18:00 (600 minutes). Only activities cost time: travel, searching, clearing
-  debris, refining, cutting, smithing, repairing by day. Picking up and dropping items is free, and so is
-  the time for repairs made at night (see Gear).
-- Field actions (travel out, search, clear) are only allowed if there is still time to walk
-  back to camp by 18:00 with the current bag. The trip back is always allowed (it may end past 18:00).
+- Day runs 8:00 → 18:00 (600 minutes). Only activities cost time: travel, searching (which also
+  clears debris), refining, cutting, smithing, repairing by day. Choosing what to carry and moving items
+  between the bag and a field's pile is free, and so is the time for repairs made at night (see Gear).
+- Field actions are only allowed if there is still time to walk back to camp by 18:00 **with a full
+  load**: a search needs time for the walk home carrying the bag plus this field's pile, up to the bag size
+  (20). Leaving items behind does not buy extra time. Travelling out to a field (from camp or from another
+  field) needs time for the trip there and back to camp with the load you carry. The trip back to camp is
+  always allowed (it may end past 18:00).
 - Camp work (refine, cut, smith, daytime repair) must finish by 18:00.
 - **The day does not end by itself at 18:00.** The player presses "End day", which only works at
-  camp. Past 18:00 only the walk home (and free pick-up/drop) is possible.
+  camp. Past 18:00 only the walk home (and free moves between the bag and the field's pile) is possible.
 
 ## Day flow
 - Day 1: the adventurer rests (no fight).
@@ -51,10 +54,12 @@ randomness adds luck and variety. Starting numbers are round.
 - 5x5 map, camp in the center. 4 random map cells are blocked (impassable); every field stays
   reachable. The other 20 cells are fields.
 - Travel time depends on path distance (steps around blocked cells). Travel between fields is allowed.
-- Items in the bag slightly increase travel time (+1% per item).
-- Farther fields are richer: more items per cell and rarer ores/gems. No coal next to camp;
-  mythril only in the farthest fields (distance 4+).
-- The map shows how much of each field has been searched. Fields persist for the whole run.
+- Items carried slightly increase travel time (+1% per item).
+- Farther fields are richer: more items per cell and rarer ores. No coal next to camp;
+  mythril only in the farthest fields (distance 4+). **Every gem type is equally likely, at every
+  distance** (user decision, v1.1).
+- The map shows how much of each field has been searched and how many items wait in its pile. Fields
+  persist for the whole run.
 
 ## Fields (8x8)
 - Each cell may hold ores (copper, iron, coal, mythril — increasing rarity) and gems (ruby, topaz,
@@ -67,24 +72,43 @@ randomness adds luck and variety. Starting numbers are round.
   about +10% every cell finishes in 3 searches, and big stacks (about +29% and up) finish some cells in 2.
   The map shows the current range.
 - Ore sight: each searched cell that the search did not finish (still below 100%) and that is not yet
-  revealed has a chance to reveal everything still in it.
-- Debris covers some cells; it blocks searching until cleared (costs time). Debris cells are a bit richer.
+  revealed has a chance to reveal everything still in it. (A debris cell only rolls once some of the
+  search's effort reached the cell itself.)
+- **Debris is cleared by searching (user decision, v1.1).** About 15% of cells are covered by debris with
+  a random thickness of 20–60 (in search effort; a search gives each cell about 35). The thickness left is
+  shown on the cell. There is no separate clear action: a search spends each debris cell's effort roll,
+  multiplied by the debris clearing power (1 + Debris clearing skill %), on the debris first; any effort
+  left over searches that cell in the same search. A cell under debris cannot be searched until its
+  debris is gone. Debris cells are a bit richer.
+- **Boulders (user decision, v1.1):** every field has 1 boulder cell, clearly visible (a dark rock), that
+  can never be cleared or searched and holds nothing. Boulders do not count toward a field's searched %.
 - **No regrowth (user decision, first draft):** fields do not regrow; a searched cell stays searched
-  for the rest of the run, so the map (about 1,560 items) is the whole supply of a run. The mechanism
+  for the rest of the run, so the map (about 1,540 items) is the whole supply of a run. The mechanism
   is kept but off (`CONFIG.field.regrowPctPerDay` = 0). When it is above 0, each night every searched
   cell (partly or fully) has that % chance to become a fresh, unsearched cell with new hidden contents
-  (and a new debris roll); items lying on the ground stay and never-searched cells do not change.
-- Bag: 20 slots, 1 raw item per slot. If full, found items stay on the ground (visible, can pick up later).
-  Items can be dropped, and picked up one by one or all at once (free). A free pick-up may not make the
-  walk home end after 18:00, except to refill the bag to the size it had after the last timed field action
-  (so "drop everything, search, pick it all back up" doesn't beat the time rule, but late swaps work).
-  Arriving at camp unloads the bag into unlimited storage.
+  (and a new debris roll); boulders, never-searched cells and the field's pile do not change.
+- **Field pile and choosing what to carry (user decision, v1.1):** everything a search finds goes to
+  that field's pile (no limit; it stays for the rest of the run). In the field, single items can be moved
+  between the bag and the pile for free. When the player leaves a field whose pile has items, a "Choose
+  what to carry" step lists the bag and the pile with a checkbox per item: up to 20 items (1 raw ore or
+  gem per slot) can be carried, and the rest stays in the pile. The default is "Rarest first": keep the
+  bag, then fill the free slots from the pile in the order mythril, diamond, emerald, sapphire, topaz,
+  ruby, coal, iron, copper. "Keep current bag" and "Clear" (carry nothing) are one-click alternatives;
+  the step shows the travel time for the chosen load and refuses a load that could not get back to camp
+  by 18:00 (for a field-to-field trip). Arriving at camp unloads everything carried into unlimited storage.
 
 ## Processing
 - Refine ores into bars: copper, iron, steel (iron + coal), mythril. Cut gems. Better ores take a bit
   longer (copper 15, iron 20, steel 25, mythril 30 minutes; gems 20).
-- Outcome grades S, A, B, C, D or failure (10%). Each bar type has its own distribution, more skewed
-  toward D for better ores. The UI shows the (bonus-adjusted) distribution before each action.
+- Outcomes are failure or a grade D, C, B, A, S. **Grades are always shown from lowest to highest, left to
+  right (Fail, D, C, B, A, S)** (user decision, v1.1). Each bar type has its own distribution with 10%
+  failure, more skewed toward D for better ores. The UI shows the (bonus-adjusted) distribution before
+  each action.
+- **Gem cutting goes from novice to master (user decision, v1.1).** Every gem starts on the novice table
+  (Fail 15, D 45, C 25, B 10, A 4, S 1). The gem's grade skill blends it toward the master table (Fail 10,
+  D 20, C 25, B 22, A 15, S 8): 10% of the way per level, the master table at level 10. Failure is the
+  novice 15% minus the gem's cutting skill (0.5 points per level); D to S follow the blend and fill the
+  rest. Gem luck rings then upgrade successes on top. The Workshop shows the novice and master tables.
 
 ## Gear
 - Sword (2 bars), chest (3), helmet (2), gloves (2), boots (2). All bars must be the same material
@@ -158,20 +182,36 @@ randomness adds luck and variety. Starting numbers are round.
 
 ## Skills (automatic XP)
 - Level 0–10, XP from doing the activity. **A level-10 skill equals a C-grade ring of the same kind**
-  (time skills 0.6% per level = 6%, search efficiency 1.2% per level = 12%, grade luck 0.3% per level
-  = 3%). Skills with no ring: debris clearing 5% per level (−50% time at level 10), refining/cutting
-  failure 0.5 points per level (−5 points at level 10). Return travel only counts on trips to camp.
-- Return travel time, search time, search efficiency, debris clearing (no ring counterpart), refining
-  time, cutting time, bar grade (per bar type), gem grade (per gem), refining failure (per bar type),
-  cutting failure (per gem).
+  (time skills 0.6% per level = 6%, search efficiency 1.2% per level = 12%, bar grade luck 0.3% per level
+  = 3%). Skills with no ring: debris clearing +10% debris cleared per search per level (+100%, twice as
+  much, at level 10; XP = 1 per point of debris cleared), refining/cutting failure 0.5 points per level
+  (−5 points at level 10), gem grade 10% of the way from the novice to the master cutting table per level
+  (the master table at level 10). Return travel only counts on trips to camp.
+- Return travel time, search time, search efficiency, debris clearing, refining time, cutting time, bar
+  grade (per bar type), gem grade (per gem), refining failure (per bar type), cutting failure (per gem).
 
 ## Intel
 - 1 intel point every 5 days. Spend on: ore sight chance, enemy attribute sight, ring type sight,
   ring grade sight. Diminishing returns (+10, +9, +8, ... points). Spending reveals more of the
   current roster immediately.
 
+## Versions and releases (user decisions, v1.1)
+- The live game (GitHub Pages, deployed from `main`) is version 1.0; this release is 1.1. The version is
+  in `js/version.js` and shows in the top bar and in Help.
+- Version numbers: the tenths place goes up for small changes (1.1, 1.2, …), the ones place for big ones
+  (2.0).
+- A release is merged into `main` (automatically, via pull request) when it is easy to roll back. Every
+  release is kept as a branch `release/vX.Y` (git tags can't be pushed from the build environment), and
+  `CHANGELOG.md` lists the changes per version and the rollback steps.
+
 ## Tech
 - Static site (plain HTML + ES modules, no build) for GitHub Pages (`.nojekyll` in the root).
-  Saves in localStorage.
+  Saves in localStorage under `smithsy-save-v2`; a v1.0 save (`smithsy-save-v1`) is converted on first
+  load (ground items → field pile, debris → thickness 40, no boulders on the old map), and a save that
+  can't be loaded is kept as a backup while a new game starts.
+- `index.html` has a plain (non-module) start-up diagnostics script: if the game has not started a few
+  seconds after load, it shows a box with the captured errors and the browser version to send to the
+  developer. The code avoids the `||=` shorthand so older browsers (Firefox before 79) can read it; it
+  still uses `?.` and `??` (Firefox 74+).
 - `js/core/*` is DOM-free game logic (usable from Node for tests/balance tools).
 - `js/ui/*` renders screens; `js/main.js` is the shell.

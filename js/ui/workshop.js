@@ -3,14 +3,16 @@
 import { h, section, bar, num } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
+import { skillBonus } from '../core/skills.js';
 import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, scrap, STAT_LABELS, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, EPS } from '../core/util.js';
 import { qty, repairLine } from './repairui.js';
 
-const OUTCOMES = GRADE_ORDER; // S A B C D F
-const GRADES_HI = GRADE_ORDER.filter((g) => g !== 'F'); // S A B C D (best first)
+const OUTCOMES = GRADE_ORDER; // F D C B A S: lowest on the left, highest on the right
+const GRADE_LIST = GRADE_ORDER.filter((g) => g !== 'F'); // D C B A S (lowest first, for display)
+const BEST_FIRST = [...GRADE_LIST].reverse(); // S A B C D (for picking the best grade in stock)
 const BASE_STATS = ['damage', 'accuracy', 'defense', 'dodge', 'speed'];
 
 // ------------------------------------------------------------------ helpers ----
@@ -44,7 +46,7 @@ function blockReason(state) {
 }
 
 function bestGrade(stock, prefix, need) {
-  return GRADES_HI.find((g) => enough(stock[`${prefix}:${g}`], need)) || null;
+  return BEST_FIRST.find((g) => enough(stock[`${prefix}:${g}`], need)) || null;
 }
 
 // Best grade with enough stock; else the grade with the most stock; else `current`.
@@ -52,7 +54,7 @@ function pickGrade(stock, prefix, need, current) {
   const best = bestGrade(stock, prefix, need);
   if (best) return best;
   let most = null;
-  for (const g of GRADES_HI) if ((stock[`${prefix}:${g}`] || 0) > EPS && (!most || stock[`${prefix}:${g}`] > stock[`${prefix}:${most}`])) most = g;
+  for (const g of BEST_FIRST) if ((stock[`${prefix}:${g}`] || 0) > EPS && (!most || stock[`${prefix}:${g}`] > stock[`${prefix}:${most}`])) most = g;
   return most || current;
 }
 
@@ -92,9 +94,9 @@ function statusBar(ctx, blocked) {
 // ------------------------------------------------------------------ storage ----
 function storagePanel(ctx) {
   const st = ctx.state.storage;
-  const gradeHead = (first) => [first, ...GRADES_HI.map((g) => ({ v: g, cls: `num grade-${g}` })), { v: 'Total', cls: 'num' }];
+  const gradeHead = (first) => [first, ...GRADE_LIST.map((g) => ({ v: g, cls: `num grade-${g}` })), { v: 'Total', cls: 'num' }];
   const gradeRow = (store, k) => {
-    const vals = GRADES_HI.map((g) => store[`${k}:${g}`] || 0);
+    const vals = GRADE_LIST.map((g) => store[`${k}:${g}`] || 0);
     return [cap(k), ...vals.map(countCell), { ...countCell(vals.reduce((a, b) => a + b, 0)), cls: 'num ws-total' }];
   };
   return section('Storage',
@@ -106,18 +108,31 @@ function storagePanel(ctx) {
 }
 
 // ------------------------------------------------------- refine / cut panels ----
-function distHeader() {
-  return h('div', { class: 'ws-dist' },
-    h('div', {}, 'Outcome chance %'),
-    h('div', { class: 'ws-dist-nums' }, OUTCOMES.map((g) => h('span', { class: `grade-${g}` }, outcomeLabel(g)))));
+// Outcome header. labelled = true adds the label column used by the gem rows (Now / Novice / Master).
+function distHeader(labelled = false) {
+  const nums = h('div', { class: 'ws-dist-nums' }, OUTCOMES.map((g) => h('span', { class: `grade-${g}` }, outcomeLabel(g))));
+  if (!labelled) return h('div', { class: 'ws-dist' }, h('div', {}, 'Outcome chance %'), nums);
+  return h('div', { class: 'ws-dist ws-dist-l' }, h('div', {}, 'Outcome chance %'),
+    h('div', { class: 'ws-dist-row' }, h('span', { class: 'ws-dist-lab' }), nums));
+}
+
+const distNums = (dist, muted) => h('div', { class: 'ws-dist-nums' },
+  OUTCOMES.map((g) => h('span', { class: !(dist[g] > EPS) ? 'ws-zero' : muted ? '' : `grade-${g}` }, num(dist[g] || 0))));
+const distSegs = (dist) => h('div', { class: 'ws-dist-bar' }, OUTCOMES.map((g) => (dist[g] > EPS
+  ? h('span', { class: `ws-seg ws-seg-${g}`, style: { width: `${dist[g]}%` }, title: `${outcomeLabel(g)}: ${num(dist[g])}%` })
+  : null)));
+const distText = (dist) => OUTCOMES.map((g) => `${outcomeLabel(g)} ${num(dist[g] || 0)}%`).join(', ');
+
+// Gem rows: the current table (bar + numbers) and the novice / master tables from config below it.
+function distRefView(rows, title) {
+  return h('div', { class: 'ws-dist ws-dist-l', title },
+    h('div', { class: 'ws-dist-row' }, h('span', { class: 'ws-dist-lab' }), distSegs(rows[0].dist)),
+    rows.map((r) => h('div', { class: `ws-dist-row${r.muted ? ' ws-dist-ref' : ''}`, title: r.title },
+      h('span', { class: 'ws-dist-lab' }, r.label), distNums(r.dist, r.muted))));
 }
 
 function distView(dist, title) {
-  return h('div', { class: 'ws-dist', title },
-    h('div', { class: 'ws-dist-bar' }, OUTCOMES.map((g) => (dist[g] > EPS
-      ? h('span', { class: `ws-seg ws-seg-${g}`, style: { width: `${dist[g]}%` }, title: `${outcomeLabel(g)}: ${num(dist[g])}%` })
-      : null))),
-    h('div', { class: 'ws-dist-nums' }, OUTCOMES.map((g) => h('span', { class: dist[g] > EPS ? `grade-${g}` : 'ws-zero' }, num(dist[g])))));
+  return h('div', { class: 'ws-dist', title }, distSegs(dist), distNums(dist, false));
 }
 
 function processPanel(ctx, kind, blocked) {
@@ -127,6 +142,12 @@ function processPanel(ctx, kind, blocked) {
   const b = smithBonuses(s, cfg);
   const left = timeLeft(s, cfg);
   const verb = isRefine ? 'Refine' : 'Cut';
+  const sk = cfg.skills;
+  const gemGradeDef = sk.perMaterial.gemGrade;
+  const gemFailDef = sk.perMaterial.gemFail;
+  // Level at which the gem grade skill reaches the master table (100% of the way).
+  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(gemGradeDef.perLevel, EPS) - 1e-9));
+  const levelOf = (key) => (s.skills[key] && s.skills[key].level) || 0;
 
   const rows = (isRefine ? BARS : GEMS).map((k) => {
     const def = isRefine ? cfg.refine[k] : cfg.cut[k];
@@ -135,7 +156,7 @@ function processPanel(ctx, kind, blocked) {
       : [{ label: `1 raw ${k}`, need: 1, have: s.storage.gem[k] || 0 }];
     const minutes = isRefine ? refineMinutes(s, k, cfg) : cutMinutes(s, k, cfg);
     const dist = isRefine ? refineDistribution(s, k, cfg) : cutDistribution(s, k, cfg);
-    const upPct = isRefine ? b.oreUpgrade(k) : b.gemUpgrade(k);
+    const upPct = isRefine ? b.oreUpgrade(k) : b.gemUpgrade(k); // gems: Gem luck rings only
     const failRed = isRefine ? b.oreFailRed(k) : b.gemFailRed(k);
     const timePct = Math.min(isRefine ? b.refineTimePct : b.cutTimePct, cfg.processing.maxTimeReduction);
     const byMat = Math.min(...inputs.map((i) => Math.floor((i.have + EPS) / i.need)));
@@ -151,11 +172,31 @@ function processPanel(ctx, kind, blocked) {
       return res;
     }, { toast: true });
 
+    const tiered = !isRefine && !!def.novice; // gem table blends novice -> master
     const bonusBits = [];
-    if (upPct > EPS) bonusBits.push(`+${num(upPct)}% upgrade luck`);
-    if (failRed > EPS) bonusBits.push(`−${num(failRed)} fail`);
+    if (upPct > EPS) bonusBits.push(`+${num(upPct)}% upgrade luck${tiered ? ' (Gem luck rings)' : ''}`);
+    if (failRed > EPS && !tiered) bonusBits.push(`−${num(failRed)} fail`);
     if (timePct > EPS) bonusBits.push(`−${num(timePct)}% time`);
-    const baseDist = OUTCOMES.map((g) => `${outcomeLabel(g)} ${def.dist[g]}%`).join(', ');
+
+    let nameCell;
+    let distCell;
+    if (tiered) {
+      const gLv = levelOf(`gemGrade_${k}`);
+      const fLv = levelOf(`gemFail_${k}`);
+      const blend = Math.min(100, skillBonus(s, `gemGrade_${k}`, cfg));
+      nameCell = h('div', {}, h('b', {}, cap(k)),
+        h('div', { class: 'ws-sub', title: `${cap(k)} grade skill level ${gLv} of ${sk.maxLevel}: your table is ${num(blend)}% of the way from novice to master` }, `Grade skill lv ${gLv} · ${num(blend)}% to master`),
+        h('div', { class: 'ws-sub', title: `${cap(k)} cutting skill level ${fLv} of ${sk.maxLevel}: failure ${num(failRed)} points lower` }, `Cutting skill lv ${fLv} · fail ${num(dist.F)}%`),
+        bonusBits.length ? h('div', { class: 'ws-sub ok' }, bonusBits.join(' · ')) : null);
+      distCell = distRefView([
+        { label: 'Now', dist, title: `Your chances now: ${distText(dist)}` },
+        { label: 'Novice', dist: def.novice, muted: true, title: `Novice table (grade skill level 0): ${distText(def.novice)}` },
+        { label: 'Master', dist: def.master, muted: true, title: `Master table (grade skill level ${masterLv}; its failure chance needs the cutting skill too): ${distText(def.master)}` },
+      ], `Now: ${distText(dist)}. Novice (level 0): ${distText(def.novice)}. Master (grade skill level ${masterLv}; failure from the cutting skill): ${distText(def.master)}.${upPct > EPS ? ` Gem luck rings: +${num(upPct)}% upgrade chance on top.` : ''}`);
+    } else {
+      nameCell = h('div', {}, h('b', {}, cap(k), isRefine ? ' bar' : ''), bonusBits.length ? h('div', { class: 'ws-sub ok' }, bonusBits.join(' · ')) : null);
+      distCell = distView(dist, `Base chances: ${distText(def.dist)}.${bonusBits.length ? ` Your bonuses: ${bonusBits.join(', ')}.` : ''}`);
+    }
 
     let makeSub;
     if (byMat === 0) makeSub = h('div', { class: 'ws-sub' }, isRefine ? 'not enough ore' : 'no raw gems');
@@ -173,23 +214,27 @@ function processPanel(ctx, kind, blocked) {
     }, label);
 
     return [
-      h('div', {}, h('b', {}, cap(k), isRefine ? ' bar' : ''), bonusBits.length ? h('div', { class: 'ws-sub ok' }, bonusBits.join(' · ')) : null),
+      nameCell,
       h('div', {}, inputs.map((i) => h('div', {}, i.label, ' ',
         h('span', { class: enough(i.have, i.need) ? 'ok' : 'err' }, `(have ${qty(i.have)})`)))),
       { v: `${num(minutes)}m`, cls: 'num', title: `Base ${def.minutes}m${timePct > EPS ? `, −${num(timePct)}% from rings/skills` : ''}` },
-      distView(dist, `Base chances: ${baseDist}.${bonusBits.length ? ` Your bonuses: ${bonusBits.join(', ')}.` : ''}`),
+      distCell,
       h('div', {}, h('b', { class: 'ws-big' }, String(n)), makeSub),
       h('div', { class: 'ws-btns' }, btn(`${verb} 1`, 1, 1), btn(`${verb} 5`, 5, 5), btn(`${verb} all${n > 0 ? ` (${n})` : ''}`, 1, Infinity)),
     ];
   });
 
   const last = ctx.ui.ws_last && ctx.ui.ws_last.area === kind ? ctx.ui.ws_last : null;
+  const tieredAll = !isRefine && GEMS.every((g) => cfg.cut[g].novice);
+  const gemLuck = b.gemUpgrade();
   return section(isRefine ? 'Refine ore into bars' : 'Cut gems',
     h('p', { class: 'ws-sub ws-intro' }, isRefine
-      ? 'Each bar rolls a grade (S best, D worst). Fail = the ore is lost. Chances already include your rings and skills.'
-      : 'Each cut gem rolls a grade (S best, D worst). Fail = the gem is lost. Chances already include your rings and skills.'),
+      ? 'Each bar rolls a grade (D lowest, S highest). Fail = the ore is lost. Chances already include your rings and skills.'
+      : tieredAll
+        ? `Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. "Now" is your table: each gem's grade skill blends D to S from the novice table (level 0) to the master table (level ${masterLv}), +${num(gemGradeDef.perLevel)}% of the way per level; failure starts at the novice value and its cutting skill lowers it by ${num(gemFailDef.perLevel)} points per level. Gem luck rings (+${num(gemLuck)}% now) then give each successful cut that chance to go up one grade, on top. "Now" includes all of this.`
+        : 'Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. Chances already include your rings and skills.'),
     h('div', { class: 'ws-scroll' },
-      tbl([isRefine ? 'Bar' : 'Gem', 'Needs (you have)', { v: 'Time each', cls: 'num' }, distHeader(), 'You can make', ''], rows, 'ws-process')),
+      tbl([isRefine ? 'Bar' : 'Gem', 'Needs (you have)', { v: 'Time each', cls: 'num' }, distHeader(tieredAll), 'You can make', ''], rows, `ws-process${tieredAll ? ' ws-process-gems' : ''}`)),
     last ? h('p', { class: `ws-last ${last.ok ? '' : 'err'}` }, h('span', { class: 'muted' }, 'Last: '), last.msg) : null);
 }
 
@@ -203,13 +248,13 @@ function initSmith(ctx) {
     ui.ws_mat = [...BARS].reverse().find((m) => bestGrade(st.bars, m, need)) || BARS[0];
     ui.ws_grade = null;
   }
-  if (!GRADES_HI.includes(ui.ws_grade)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, need, 'D');
+  if (!GRADE_LIST.includes(ui.ws_grade)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, need, 'D');
   if (ui.ws_gem !== '' && !GEMS.includes(ui.ws_gem)) ui.ws_gem = '';
-  if (!GRADES_HI.includes(ui.ws_gemGrade)) ui.ws_gemGrade = ui.ws_gem ? pickGrade(st.cut, ui.ws_gem, 1, 'D') : 'D';
+  if (!GRADE_LIST.includes(ui.ws_gemGrade)) ui.ws_gemGrade = ui.ws_gem ? pickGrade(st.cut, ui.ws_gem, 1, 'D') : 'D';
 }
 
 function gradeButtons(selected, counts, need, onPick, unit) {
-  return h('div', { class: 'ws-gbtns' }, GRADES_HI.map((g) => {
+  return h('div', { class: 'ws-gbtns' }, GRADE_LIST.map((g) => {
     const have = counts[g] || 0;
     const short = !enough(have, need);
     return h('button', {
@@ -240,8 +285,8 @@ function smithPanel(ctx, blocked) {
     fn();
     ctx.rerender();
   };
-  const matTotal = (m) => GRADES_HI.reduce((a, g) => a + (st.bars[`${m}:${g}`] || 0), 0);
-  const gemTotal = (t) => GRADES_HI.reduce((a, g) => a + (st.cut[`${t}:${g}`] || 0), 0);
+  const matTotal = (m) => GRADE_LIST.reduce((a, g) => a + (st.bars[`${m}:${g}`] || 0), 0);
+  const gemTotal = (t) => GRADE_LIST.reduce((a, g) => a + (st.cut[`${t}:${g}`] || 0), 0);
 
   // ---- form
   const form = h('div', { class: 'ws-form' },
@@ -266,10 +311,10 @@ function smithPanel(ctx, blocked) {
 
     h('span', {}, 'Bar grade'),
     h('div', {},
-      gradeButtons(grade, Object.fromEntries(GRADES_HI.map((g) => [g, st.bars[`${mat}:${g}`]])), need,
+      gradeButtons(grade, Object.fromEntries(GRADE_LIST.map((g) => [g, st.bars[`${mat}:${g}`]])), need,
         (g) => pick(() => (ui.ws_grade = g)), (g) => `${mat} ${g} bars`),
       h('div', { class: 'ws-sub' }, `Needs ${need} ${mat} bars of one grade. Grade multiplies stats: `,
-        GRADES_HI.slice().reverse().map((g) => `${g} ×${cfg.gear.gradeMult[g]}`).join(', '), '.')),
+        GRADE_LIST.map((g) => `${g} ×${cfg.gear.gradeMult[g]}`).join(', '), '.')),
 
     h('label', { for: 'ws-gem' }, 'Gem'),
     h('select', {
@@ -285,9 +330,9 @@ function smithPanel(ctx, blocked) {
     h('span', {}, gem ? 'Gem grade' : 'Gem grade (reference)'),
     h('div', {},
       gem
-        ? gradeButtons(ui.ws_gemGrade, Object.fromEntries(GRADES_HI.map((g) => [g, st.cut[`${gem.type}:${g}`]])), 1,
+        ? gradeButtons(ui.ws_gemGrade, Object.fromEntries(GRADE_LIST.map((g) => [g, st.cut[`${gem.type}:${g}`]])), 1,
           (g) => pick(() => (ui.ws_gemGrade = g)), (g) => `cut ${gem.type} ${g}`)
-        : h('div', { class: 'ws-gbtns' }, GRADES_HI.map((g) => h('button', {
+        : h('div', { class: 'ws-gbtns' }, GRADE_LIST.map((g) => h('button', {
           class: `ws-gbtn${g === ui.ws_gemGrade ? ' sel' : ''}`,
           title: 'Grade used for the gem effect reference',
           onclick: () => pick(() => (ui.ws_gemGrade = g)),

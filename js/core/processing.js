@@ -4,7 +4,8 @@ import { smithBonuses } from './bonuses.js';
 import { addXp, itemXp } from './skills.js';
 import { rngFor } from './rng.js';
 
-const ORDER = ['S', 'A', 'B', 'C', 'D', 'F'];
+// Outcomes from lowest to highest (UI shows them left to right).
+const ORDER = ['F', 'D', 'C', 'B', 'A', 'S'];
 
 // Apply failure reduction (moved into D) and upgrade luck (each success has u% to go up one grade).
 export function adjustDistribution(base, failRed, upgradePct) {
@@ -28,9 +29,29 @@ export function refineDistribution(state, bar, cfg = CONFIG) {
   return adjustDistribution(cfg.refine[bar].dist, b.oreFailRed(bar), b.oreUpgrade(bar));
 }
 
+// Gem table for a skill blend t (0 = novice, 1 = master) and failure reduction (points):
+// F = novice F - failRed; D..S blend linearly and are scaled to fill the remaining 100 - F.
+export function blendCutTable(c, t, failRed) {
+  if (!c.novice) return { ...c.dist };
+  const tt = clamp(t, 0, 1);
+  const F = clamp(c.novice.F - failRed, 0, 100);
+  const raw = {};
+  let sum = 0;
+  for (const g of ['D', 'C', 'B', 'A', 'S']) {
+    raw[g] = c.novice[g] + (c.master[g] - c.novice[g]) * tt;
+    sum += raw[g];
+  }
+  const out = { F };
+  for (const g of ['D', 'C', 'B', 'A', 'S']) out[g] = sum > 0 ? (raw[g] / sum) * (100 - F) : 0;
+  return out;
+}
+
 export function cutDistribution(state, gem, cfg = CONFIG) {
   const b = smithBonuses(state, cfg);
-  return adjustDistribution(cfg.cut[gem].dist, b.gemFailRed(gem), b.gemUpgrade(gem));
+  const c = cfg.cut[gem];
+  if (!c.novice) return adjustDistribution(c.dist, b.gemFailRed(gem), b.gemUpgrade(gem));
+  const base = blendCutTable(c, b.gemBlend(gem) / 100, b.gemFailRed(gem));
+  return adjustDistribution(base, 0, b.gemUpgrade(gem));
 }
 
 export function refineMinutes(state, bar, cfg = CONFIG) {

@@ -13,10 +13,11 @@ const GROUPS = [
 ];
 
 // ------------------------------------------------- skills vs smith rings ----
-// The smith ring each skill matches (skills without a ring: debris clearing, refining / cutting failure).
+// The smith ring each skill matches. Skills without a ring: debris clearing, refining / cutting failure,
+// and gem grade (it blends the cutting table from novice to master; Gem luck rings upgrade on top).
 const SKILL_RING = {
   returnTravel: 'travelTime', searchTime: 'searchTime', searchEff: 'searchEff',
-  refineTime: 'processTime', cutTime: 'processTime', oreGrade: 'oreGrade', gemGrade: 'gemGrade',
+  refineTime: 'processTime', cutTime: 'processTime', oreGrade: 'oreGrade',
 };
 
 // Which ring grade a max-level skill equals: { ring, grade, value, top, exact } or null (no ring of that kind).
@@ -56,16 +57,21 @@ export function skillVsRingText(cfg) {
   const parts = [grade
     ? `A level-${max} skill equals a ${grade}-grade smith ring of the same kind.`
     : `At level ${max}, skills compare with smith rings as shown in the table.`];
+  // "debris clearing +100% more debris cleared per search", "gem grade 100% of the way from ...".
+  const atMax = (d) => {
+    const { unit, text } = splitUnit(d.desc);
+    const v = num(d.perLevel * max, 2);
+    if (unit === ' pts') return `−${v} points ${text.replace(/^less /, '')}`;
+    if (unit === '%' && text.startsWith('more ')) return `+${v}% ${text.slice(5)}`;
+    if (unit === '%' && text.startsWith('less ')) return `−${v}% ${text.slice(5)}`;
+    if (unit === '%') return `${v}% ${text}`;
+    return `${v} ${text}`;
+  };
   const noRing = [];
-  for (const [k, d] of Object.entries(cfg.skills.activity)) {
-    if (!SKILL_RING[k]) noRing.push(`${d.name.toLowerCase()} ${d.desc.startsWith('%') ? `−${num(d.perLevel * max, 2)}% time` : `${num(d.perLevel * max, 2)} ${d.desc}`}`);
-  }
-  const fails = Object.entries(cfg.skills.perMaterial).filter(([k]) => !SKILL_RING[k]);
-  if (fails.length) {
-    const vals = [...new Set(fails.map(([, d]) => num(d.perLevel * max, 2)))];
-    noRing.push(`${fails.map(([, d]) => d.name).join(' / ')} failure −${vals.join(' / ')} points`);
-  }
-  if (noRing.length) parts.push(`Skills with no ring: ${noRing.join(', ')} at level ${max}.`);
+  for (const [k, d] of Object.entries(cfg.skills.activity)) if (!SKILL_RING[k]) noRing.push(`${d.name.toLowerCase()} ${atMax(d)}`);
+  const perMat = Object.entries(cfg.skills.perMaterial).filter(([k]) => !SKILL_RING[k]);
+  for (const [k, d] of perMat) noRing.push(`${k.startsWith('ore') ? 'bar' : 'gem'} ${d.name} ${atMax(d)}`);
+  if (noRing.length) parts.push(`Skills with no ring, at level ${max}: ${noRing.join('; ')}.`);
   return parts.join(' ');
 }
 
@@ -124,9 +130,17 @@ function skillsPanel(ctx) {
     if (g.id !== 'activity') list = list.slice().sort((a, b) => materialSortKey(a) - materialSortKey(b));
     const mats = g.id === 'ore' ? BARS : GEMS;
     const xpList = mats.map((m) => `${m} ${num(itemXp(m, cfg))}`).join(', ');
-    const note = g.id === 'activity'
-      ? 'XP = minutes spent on the activity.'
-      : `XP per ${g.id === 'ore' ? 'bar refined' : 'gem cut'} of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" raises the chance to upgrade the result one grade; "${g.id === 'ore' ? 'refining' : 'cutting'}" moves failure chance into grade D.`;
+    const pm = cfg.skills.perMaterial;
+    const debris = cfg.skills.activity.debris;
+    const masterLv = Math.min(max, Math.ceil(100 / Math.max(pm.gemGrade.perLevel, 1e-9) - 1e-9));
+    let note;
+    if (g.id === 'activity') {
+      note = `XP = minutes spent on the activity${debris ? `, except ${debris.name}: ${debris.xpFrom}. ${debris.name} adds ${num(debris.perLevel, 2)}% debris cleared per search per level (+${num(debris.perLevel * max, 2)}% at level ${max}); debris is cleared by searching` : ''}.`;
+    } else if (g.id === 'ore') {
+      note = `XP per bar refined of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" raises the chance to upgrade the bar one grade (${num(pm.oreGrade.perLevel, 2)}% per level); "refining" moves failure chance into grade D (${num(pm.oreFail.perLevel, 2)} points per level).`;
+    } else {
+      note = `XP per gem cut of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" blends that gem's cutting table from the novice table to the master table: ${num(pm.gemGrade.perLevel, 2)}% of the way per level, master at level ${masterLv} (the Workshop shows all three tables). "Cutting" lowers failure by ${num(pm.gemFail.perLevel, 2)} points per level. Gem luck rings add upgrade chances on top.`;
+    }
     return h('div', { class: 'mi-group' },
       h('h4', {}, g.title),
       h('p', { class: 'mi-note mi-intro' }, note),

@@ -2,8 +2,9 @@
 // Screen modules export render functions with the signature (root, ctx) — see ctx below.
 import { CONFIG } from './config.js';
 import * as Game from './core/game.js';
-import { atCamp, timeLeft, currentField, returnMinutes } from './core/map.js';
+import { atCamp, timeLeft, currentField, returnMinutes, projectedLoad } from './core/map.js';
 import { formatClock, formatDuration, EPS } from './core/util.js';
+import { VERSION } from './version.js';
 import { h, clear } from './ui/dom.js';
 import { renderMap } from './ui/mapview.js';
 import { renderWorkshop } from './ui/workshop.js';
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'help', label: 'Help', render: renderHelp },
 ];
 
+let startupNote = null;
 let state = load() || Game.newGame();
 
 // Per-session UI state (not saved). Screen modules may store their own keys here.
@@ -66,14 +68,34 @@ const ctx = {
   },
 };
 
+// Load the current save, else migrate a legacy one. A save that can't be read is kept under a backup
+// key (never deleted) and a new game starts, so a bad save can't leave the page blank.
 function load() {
-  try {
-    const text = localStorage.getItem(Game.SAVE_KEY);
-    return text ? Game.deserialize(text) : null;
-  } catch (e) {
-    console.warn('Save could not be loaded', e);
-    return null;
+  for (const key of [Game.SAVE_KEY, ...Game.LEGACY_SAVE_KEYS]) {
+    let text = null;
+    try {
+      text = localStorage.getItem(key);
+    } catch (e) {
+      return null; // storage blocked: play without saving
+    }
+    if (!text) continue;
+    try {
+      const s = Game.deserialize(text);
+      if (!s || !s.map || !s.storage) throw new Error('Save is missing data');
+      if (key !== Game.SAVE_KEY) startupNote = 'Your v1.0 save was converted to v1.1.';
+      return s;
+    } catch (e) {
+      console.warn('Save could not be loaded', e);
+      try {
+        localStorage.setItem(`smithsy-save-backup-${Date.now()}`, text);
+      } catch (e2) {
+        /* ignore */
+      }
+      startupNote = 'Your save could not be loaded, so a new game started (the old save was kept as a backup in browser storage).';
+      return null;
+    }
   }
+  return null;
 }
 
 function save() {
@@ -114,14 +136,17 @@ function renderTopbar() {
   const left = timeLeft(state);
   const working = state.phase === 'work';
   const canEnd = working && atCamp(state);
+  const field = currentField(state);
+  const load = projectedLoad(state);
   const away = state.plan ? `Adventurer is fighting ${state.plan.enemy.name} today` : state.day === 1 ? 'Adventurer rests today' : '';
   const parts = [
-    h('div', { class: 'brand' }, 'Smithsy'),
+    h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version', title: `Smithsy version ${VERSION} (see Help and CHANGELOG.md)` }, `v${VERSION}`)),
     h('div', { class: 'stat' }, h('b', {}, `Day ${state.day}`)),
     h('div', { class: 'stat' }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > EPS ? `${formatDuration(left)} left` : 'day over')),
     h('div', { class: 'stat' }, locationText()),
-    h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`),
-    !atCamp(state) && working ? h('div', { class: 'stat muted' }, `Return: ${formatDuration(returnMinutes(state))}`) : null,
+    h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`,
+      field && field.pile && field.pile.length ? h('span', { class: 'muted', title: 'Items waiting in this field\'s pile' }, ` · pile ${field.pile.length}`) : null),
+    !atCamp(state) && working ? h('div', { class: 'stat muted', title: `Walk home with a full load (${load} items: bag + this field's pile, up to ${CONFIG.bag.slots})` }, `Return: ${formatDuration(returnMinutes(state, state.location, load))}`) : null,
     h('div', { class: 'stat' }, `Score ${state.stats.score}`, h('span', { class: 'muted' }, ` (best ${Math.max(bestScore(), state.stats.score)})`)),
     state.intel.points > 0 ? h('div', { class: 'stat hl' }, `${state.intel.points} intel pt`) : null,
     away ? h('div', { class: 'stat muted' }, away) : null,
@@ -190,21 +215,28 @@ function renderSideLog() {
 }
 
 function render() {
-  renderTopbar();
-  renderTabs();
-  renderSideLog();
   const main = clear(document.getElementById('main'));
   try {
+    renderTopbar();
+    renderTabs();
+    renderSideLog();
     if (state.phase !== 'work') {
       const tabs = phaseTabs();
       (tabs.find((t) => t.id === ui.phaseTab) || tabs[0]).render(main, ctx);
     } else (TABS.find((t) => t.id === ui.tab) || TABS[0]).render(main, ctx);
   } catch (e) {
     console.error(e);
-    main.append(h('pre', { class: 'error' }, `Render error: ${e.message}\n${e.stack}`));
+    main.append(
+      h('pre', { class: 'error' }, `Render error: ${e.message}\n${e.stack}`),
+      h('button', { onclick: () => { if (confirm('Start a new game? Your current run will be lost.')) ctx.newGame(); } }, 'Start a new game'),
+    );
   }
 }
 
 render();
+if (startupNote) {
+  save();
+  toast(startupNote, 'ok');
+}
 // Expose for debugging/balancing in the browser console.
 window.smithsy = { ctx, Game, CONFIG };

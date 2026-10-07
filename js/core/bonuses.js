@@ -19,7 +19,8 @@ export function smithBonuses(state, cfg = CONFIG) {
     refineTimePct: rv('processTime') + sk('refineTime'),
     cutTimePct: rv('processTime') + sk('cutTime'),
     oreUpgrade: (bar) => rv('oreGrade') + sk(`oreGrade_${bar}`),
-    gemUpgrade: (gem) => rv('gemGrade') + sk(`gemGrade_${gem}`),
+    gemUpgrade: () => rv('gemGrade'), // rings only; the gem grade skill blends the cut table instead
+    gemBlend: (gem) => sk(`gemGrade_${gem}`), // % of the way from novice to master table
     oreFailRed: (bar) => sk(`oreFail_${bar}`),
     gemFailRed: (gem) => sk(`gemFail_${gem}`),
   };

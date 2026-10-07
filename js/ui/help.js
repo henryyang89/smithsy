@@ -10,7 +10,9 @@ import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
 import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade } from './skillsview.js';
+import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
+import { VERSION } from '../version.js';
 
 // ------------------------------------------------------------------ helpers ----
 const p = (v, d = 1) => `${num(v, d)}%`;
@@ -20,7 +22,7 @@ const x = (v) => `×${num(v, 2)}`;
 const statLabel = (k) => (k === 'pierceRes' ? 'Pierce resistance %' : STAT_LABELS[k] || k);
 const gradeSpan = (g) => h('span', { class: `grade-${g}` }, g === 'F' ? 'Fail' : g);
 const gradeHead = () => GRADES.map((g) => ({ v: gradeSpan(g), cls: 'num' }));
-const OUTCOMES = ['S', 'A', 'B', 'C', 'D', 'F'];
+const OUTCOMES = GRADE_ORDER; // F D C B A S: lowest on the left, highest on the right
 
 function tbl(head, rows, cls = '') {
   const cell = (tag, c) => {
@@ -159,8 +161,10 @@ function howToPlay(ctx) {
       h('b', {}, 'If the adventurer loses a fight, the run is over.'), ` Each win scores points (${scores}) and drops a ring.`),
     h('ol', { class: 'mi-steps' },
       h('li', {}, h('b', {}, `Work from ${formatClock(t.dayStartMin)} to ${formatClock(t.dayEndMin)} (${dayLen} minutes). `),
-        'Only actions cost time. On the ', tab('map', 'Map'), ', travel to a field, search 3x3 areas for ore and gems, and carry them home in your bag ',
-        `(${cfg.bag.slots} slots). Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
+        'Only actions cost time. On the ', tab('map', 'Map'), ', travel to a field and search 3x3 areas for ore and gems. ',
+        'Everything you find goes to that field\'s pile; when you leave you choose what to carry in your bag ',
+        `(up to ${cfg.bag.slots} items, rarest first by default) and the rest stays in the pile for a later trip. `,
+        `Debris (the number on a brown cell) is cleared by searching; boulders can never be searched. Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
       h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear.'),
       h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
         `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
@@ -175,9 +179,13 @@ function howToPlay(ctx) {
       h('li', {}, 'The plan screen can simulate the fight to estimate your win chance before you confirm.'),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
       h('li', {}, `Skills level up on their own as you work${commonSkillRingGrade(cfg) ? ` (a level-${cfg.skills.maxLevel} skill is as strong as a ${commonSkillRingGrade(cfg)}-grade ring of the same kind)` : ''}. Farther fields are richer but cost more travel time.`),
+      h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
+      h('li', {}, 'Grades are always listed from lowest to highest, left to right: ', OUTCOMES.map((g, i) => [i ? ' < ' : '', gradeSpan(g)]), ' (Fail is the lowest outcome).'),
       (cfg.field.regrowPctPerDay || 0) > 0
         ? h('li', {}, `Searched cells slowly regrow: each night every searched cell has a ${p(cfg.field.regrowPctPerDay)} chance to become fresh and unsearched again.`)
-        : h('li', {}, 'Fields do not regrow: a searched cell stays searched for the rest of the run.')));
+        : h('li', {}, 'Fields do not regrow: a searched cell stays searched for the rest of the run.')),
+    h('p', { class: 'mi-note mi-version' }, `Smithsy v${VERSION}. What changed in each version (and how to go back to an older one): `,
+      h('a', { href: 'CHANGELOG.md', target: '_blank', rel: 'noopener', class: 'mi-link' }, 'CHANGELOG.md'), '.'));
 }
 
 // -------------------------------------------------------------------- time ----
@@ -186,7 +194,7 @@ function timeSection(cfg) {
   const g = cfg.gear;
   const byMinutes = (table) => {
     const groups = {};
-    for (const [k, v] of Object.entries(table)) (groups[v.minutes] ||= []).push(k);
+    for (const [k, v] of Object.entries(table)) (groups[v.minutes] = groups[v.minutes] || []).push(k);
     const entries = Object.entries(groups);
     if (entries.length === 1) return `${mins(Number(entries[0][0]))} each`;
     return entries.map(([m, ks]) => `${ks.join(', ')} ${mins(Number(m))}`).join(' · ');
@@ -194,19 +202,18 @@ function timeSection(cfg) {
   return [
     kv([
       ['Work day', `${formatClock(t.dayStartMin)} - ${formatClock(t.dayEndMin)} (${t.dayEndMin - t.dayStartMin} minutes)`],
-      ['Time limit rule', `Field actions (travel out, search, clear debris) need enough time left to walk back to camp by ${formatClock(t.dayEndMin)} at your current load. The trip back is always allowed, even if it ends late. The day can only be ended at camp.`],
+      ['Time limit rule', `Field actions (travel out, search) need enough time left to walk back to camp by ${formatClock(t.dayEndMin)} with a full load: your bag plus the field's pile, up to ${cfg.bag.slots} items (leaving items behind does not buy extra time). The trip back is always allowed, even if it ends late. The day can only be ended at camp.`],
       ['Time bonuses', `Rings and skills reduce times; the total reduction is capped at ${p(cfg.processing.maxTimeReduction)}.`],
     ]),
     sub('What costs time (base, before bonuses)'),
     tbl(['Activity', 'Base time'], [
       ['Travel', `${mins(cfg.map.travelMinPerStep)} per map step, +${p(cfg.map.loadPenaltyPerItem)} per item in the bag`],
-      ['Search a 3x3 area', mins(cfg.field.searchMin)],
-      ['Clear debris', `${mins(cfg.field.debrisClearMin)} per debris cell`],
+      ['Search a 3x3 area', `${mins(cfg.field.searchMin)} (also clears debris: no separate action)`],
       ['Refine a bar', byMinutes(cfg.refine)],
       ['Cut a gem', byMinutes(cfg.cut)],
       ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem`],
       ['Repair gear', `by day: ${p(g.repair.timeFraction)} of the smithing time x fraction repaired; at night (battle report / plan): no time`],
-      ['Pick up / drop items, unload at camp', 'free'],
+      ['Choose what to carry, move items between bag and field pile, unload at camp', 'free'],
     ]),
   ];
 }
@@ -223,7 +230,7 @@ function mapSection(cfg) {
     kv([
       ['Map', `${m.size} x ${m.size} fields, camp in the center. ${m.blockedCells} cells are blocked (impassable); every field stays reachable.`],
       ['Travel time', formula(`steps x ${m.travelMinPerStep}m x (1 + ${m.loadPenaltyPerItem}% x items in bag)`, 'Steps = shortest path around blocked cells. You can travel field to field.')],
-      ['Bag', `${cfg.bag.slots} slots, 1 raw ore or gem per slot. A full bag adds ${p(m.loadPenaltyPerItem * cfg.bag.slots)} travel time. Camp storage is unlimited.`],
+      ['Bag', `${cfg.bag.slots} slots, 1 raw ore or gem per slot. You choose what to carry each time you leave a field. A full bag adds ${p(m.loadPenaltyPerItem * cfg.bag.slots)} travel time. Camp storage is unlimited.`],
       ['Bonuses', `Travel rings reduce every trip; the Return travel skill reduces trips to camp. Total capped at ${p(cfg.processing.maxTimeReduction)}.`],
     ]),
     sub('Base travel minutes by distance and bag load'),
@@ -243,12 +250,24 @@ function fieldSection(cfg) {
   const toFinish = (e) => (e > 0 ? String(Math.ceil(100 / e - 1e-9)) : '?');
   const searchesToFinish = toFinish(effHi) === toFinish(effLo) ? toFinish(effHi) : `${toFinish(effHi)}-${toFinish(effLo)}`;
   const regrow = f.regrowPctPerDay || 0;
+  const da = f.debrisAmount;
+  const debrisSkill = cfg.skills.activity.debris;
+  const boulders = f.boulders || 0;
+  const searchCells = Math.max(0, cells - boulders); // boulders hold nothing
+  const gemsEqual = f.gemWeights.every((w) => new Set(Object.values(w)).size === 1);
+  // Searches needed to clear `t` debris at base power (each cell rolls effLo..effHi effort).
+  const clearSearches = (t) => {
+    if (effLo <= 0) return 'many searches';
+    const a = Math.ceil(t / effHi - 1e-9);
+    const b = Math.ceil(t / effLo - 1e-9);
+    return `${a === b ? a : `${a}-${b}`} search${b === 1 ? '' : 'es'}`;
+  };
   const lootRows = [];
   for (let d = 1; d <= maxDistance(cfg); d++) {
     const base = lootChance(cfg, d);
     const deb = Math.min(100, base + f.debrisLootBonus);
     const perCell = ((1 - f.debrisChance / 100) * base + (f.debrisChance / 100) * deb) / 100;
-    const items = cells * perCell * avg;
+    const items = searchCells * perCell * avg;
     lootRows.push([String(d), np(base), np(deb), n(items, 0), n(items * (f.oreShare / 100), 0), n(items * (1 - f.oreShare / 100), 0)]);
   }
   const weightTable = (rows, keys) => tbl(['Distance', ...keys.map((k) => ({ v: cap(k), cls: 'num' }))],
@@ -267,46 +286,84 @@ function fieldSection(cfg) {
         : `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
       ['Search efficiency', `${cfg.rings.types.searchEff ? `${cfg.rings.types.searchEff.name} rings` : 'Rings'} and the ${cfg.skills.activity.searchEff ? cfg.skills.activity.searchEff.name : 'search efficiency'} skill raise the average: average = ${p(f.searchEfficiency)} x (1 + bonus %).${rnd > 0 ? ` The ± ${num(rnd)} spread per cell stays the same.` : ''} The Map shows your current range.`],
       ['Hidden depth', 'Each item has a hidden depth from 0 to 100. It is found once the cell\'s searched % passes its depth. A fully searched cell gives up everything.'],
-      ['Debris', `${p(f.debrisChance)} of cells. Blocks searching until cleared (${mins(f.debrisClearMin)} per cell; clearing works on a 3x3 area). Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
+      ['Debris', `${p(f.debrisChance)} of cells, ${num(da.min)}-${num(da.max)} thick (in search effort; the number on the cell is what is left). There is no separate clear action: searching a debris cell spends that cell's effort roll (${p(f.searchEfficiency)} ± ${num(rnd)}) x debris clearing power (1 + ${debrisSkill ? debrisSkill.name : 'debris'} skill %) on the debris first; any effort left over searches the cell in the same search. At base power a ${num(da.min)}-thick cell takes ${clearSearches(da.min)} to clear, a ${num(da.max)}-thick one ${clearSearches(da.max)}. Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
+      debrisSkill ? ['Debris clearing skill', `+${num(debrisSkill.perLevel, 2)}% debris cleared per search per level (+${num(debrisSkill.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). XP: ${debrisSkill.xpFrom}.`] : null,
+      boulders ? ['Boulders', `${boulders} cell${boulders === 1 ? '' : 's'} per field (a dark rock): can never be cleared or searched and hold nothing. They do not count toward a field's searched %.`] : null,
       ['Ore sight', `Each searched cell has a chance to reveal everything still in it: ${p(cfg.intel.tracks.oreSight.base)} base (intel), plus intel points and Ore sight rings.`],
       ['Items per loot cell', `${Object.entries(countPct).map(([k, v]) => `${k} (${p(v, 0)})`).join(', ')}, average ${num(avg, 2)}`],
       ['Ores vs gems', `${p(f.oreShare, 0)} ores, ${p(100 - f.oreShare, 0)} gems`],
-      ['Full bag', 'Found items stay on the ground (visible); pick them up later.'],
+      ['Field pile', `Everything you find goes to that field's pile (no limit; it stays there for the rest of the run, and the map shows how many items each field's pile holds). In the field you can move single items between your bag and the pile for free.`],
+      ['Carrying', `When you leave a field you choose what to carry: up to ${cfg.bag.slots} items from your bag and the pile. Default "Rarest first": keep your bag and fill the free slots with the rarest items (mythril, then diamond, emerald, sapphire, topaz, ruby, coal, iron, copper). The rest stays in the pile.`],
       ['Regrowth', regrow > 0
-        ? `Each night, every searched cell (even partly searched) has a ${p(regrow)} chance to become a fresh, unsearched cell with new hidden contents rolled for its distance (it may get debris again). Items lying on the ground stay. A fully searched field regrows about ${num((cells * regrow) / 100, 2)} cells per night.`
+        ? `Each night, every searched cell (even partly searched) has a ${p(regrow)} chance to become a fresh, unsearched cell with new hidden contents rolled for its distance (it may get debris again). The field's pile stays. A fully searched field regrows about ${num((cells * regrow) / 100, 2)} cells per night.`
         : 'Off: fields do not regrow. A searched cell stays searched for the rest of the run.'],
     ]),
     sub('Richness by distance from camp'),
     tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
-    h('p', { class: 'mi-note' }, `Cell chance = ${f.lootChance.base}% + ${f.lootChance.perDistance}% per step beyond the first, max ${f.lootChance.max}%. Item estimates = ${cells} cells x average chance (incl. debris) x ${num(avg, 2)} items.`),
+    h('p', { class: 'mi-note' }, `Cell chance = ${f.lootChance.base}% + ${f.lootChance.perDistance}% per step beyond the first, max ${f.lootChance.max}%. Item estimates = ${searchCells} cells${boulders ? ` (${cells} minus ${boulders} boulder${boulders === 1 ? '' : 's'})` : ''} x average chance (incl. debris) x ${num(avg, 2)} items.`),
     h('div', { class: 'mi-two' },
       h('div', {}, sub('Ore mix by distance'), weightTable(f.oreWeights, oreKeys)),
-      h('div', {}, sub('Gem mix by distance'), weightTable(f.gemWeights, gemKeys))),
+      h('div', {}, sub('Gem mix by distance'), weightTable(f.gemWeights, gemKeys),
+        gemsEqual ? h('p', { class: 'mi-note' }, 'Every gem type is equally likely, at every distance.') : null)),
   ];
 }
 
 // -------------------------------------------------------------- processing ----
 function processSection(cfg) {
   const distCells = (dist) => OUTCOMES.map((g) => (dist[g] > 0 ? np(dist[g], 0) : { v: '·', cls: 'num muted' }));
+  const distCells1 = (dist) => OUTCOMES.map((g) => (dist[g] > 0.05 ? np(dist[g], 1) : { v: '·', cls: 'num muted' }));
   const outHead = () => OUTCOMES.map((g) => ({ v: gradeSpan(g), cls: 'num' })); // fresh nodes per table
+  const sk = cfg.skills;
+  const gg = sk.perMaterial.gemGrade;
+  const gf = sk.perMaterial.gemFail;
+  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(gg.perLevel, 1e-9) - 1e-9));
+  const gemLuck = cfg.rings.types.gemGrade;
+  const barLuck = cfg.rings.types.oreGrade;
   const barRows = BARS.map((b) => {
     const r = cfg.refine[b];
     return [h('b', {}, cap(b)), Object.entries(r.input).map(([o, k]) => `${k} ${o}`).join(' + '), n(r.minutes), ...distCells(r.dist)];
   });
-  const gemRows = GEMS.map((g) => {
+  // Gems that share the same tables are listed together.
+  const groups = [];
+  for (const g of GEMS) {
     const c = cfg.cut[g];
-    return [h('b', {}, cap(g)), `1 raw ${g}`, n(c.minutes), ...distCells(c.dist)];
-  });
+    const sig = JSON.stringify([c.minutes, c.novice, c.master, c.dist]);
+    const found = groups.find((x) => x.sig === sig);
+    if (found) found.gems.push(g);
+    else groups.push({ sig, gems: [g], c });
+  }
+  const gemLabel = (gems) => (gems.length === GEMS.length ? 'All gems' : gems.map(cap).join(', '));
+  // Failure only depends on the cutting skill: the master table's failure is reached at this cutting level.
+  const failLv = (c) => Math.min(sk.maxLevel, Math.max(0, Math.ceil((c.novice.F - c.master.F) / Math.max(gf.perLevel, 1e-9) - 1e-9)));
+  const gemRows = groups.flatMap(({ gems, c }) => (c.novice
+    ? [
+      [h('b', {}, gemLabel(gems)), 'Novice (grade skill 0)', n(c.minutes), ...distCells(c.novice)],
+      [h('b', {}, gemLabel(gems)), `Master (grade skill ${masterLv}, cutting skill ${failLv(c)})`, n(c.minutes), ...distCells(c.master)],
+    ]
+    : [[h('b', {}, gemLabel(gems)), 'Fixed table', n(c.minutes), ...distCells(c.dist)]]));
+  // How the gem grade skill blends the table (no cutting skill, no rings), for the first tiered gem.
+  const tiered = groups.find((x) => x.c.novice);
+  const levels = [];
+  for (let l = 0; l <= sk.maxLevel; l += Math.max(1, Math.floor(sk.maxLevel / 5))) levels.push(l);
+  if (levels[levels.length - 1] !== sk.maxLevel) levels.push(sk.maxLevel);
+  const blendRows = tiered ? levels.map((l) => {
+    const t = Math.min(100, gg.perLevel * l);
+    return [n(l, 0), np(t, 0), ...distCells1(blendCutTable(tiered.c, t / 100, 0))];
+  }) : [];
   return [
     sub('Refining ore into bars'),
     tbl(['Bar', 'Needs', { v: 'Minutes', cls: 'num' }, ...outHead()], barRows),
-    sub('Cutting gems'),
-    tbl(['Gem', 'Needs', { v: 'Minutes', cls: 'num' }, ...outHead()], gemRows),
+    sub('Cutting gems: novice and master tables'),
+    tbl(['Gem', 'Table', { v: 'Minutes', cls: 'num' }, ...outHead()], gemRows),
+    tiered ? [
+      sub(`Gem table by grade skill level (${tiered.gems.length === GEMS.length ? 'all gems' : gemLabel(tiered.gems)}; before the cutting skill and rings)`),
+      tbl([{ v: 'Grade skill level', cls: 'num' }, { v: 'Of the way to master', cls: 'num' }, ...outHead()], blendRows),
+    ] : null,
     h('ul', { class: 'mi-list' },
-      h('li', {}, 'Fail = the material is lost. The Workshop shows these chances already adjusted by your rings and skills.'),
+      h('li', {}, 'Grades read from lowest (left) to highest (right). Fail = the material is lost. The Workshop shows these chances already adjusted by your rings and skills.'),
       h('li', {}, 'Time: Refining rings (refining and cutting) + Refining / Cutting speed skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
-      h('li', {}, 'Upgrade luck: Bar luck / Gem luck rings + the grade skill for that bar or gem. After a successful roll, that % chance moves the result up one grade (S stays S).'),
-      h('li', {}, 'Failure reduction: the refining / cutting skill for that material moves failure chance into grade D.')),
+      h('li', {}, `Bars: ${barLuck ? `${barLuck.name} rings` : 'Rings'} + the bar grade skill (${num(sk.perMaterial.oreGrade.perLevel, 2)}% per level) give each successful bar that % chance to go up one grade (S stays S). The refining skill for that bar moves failure chance into grade D (${num(sk.perMaterial.oreFail.perLevel, 2)} points per level).`),
+      tiered ? h('li', {}, `Gems: each gem's grade skill blends its table from novice to master, ${num(gg.perLevel, 2)}% of the way per level (master at level ${masterLv}). D to S follow the blend and fill whatever failure leaves. Failure = the novice failure chance minus the gem's cutting skill (${num(gf.perLevel, 2)} points per level, ${num(gf.perLevel * sk.maxLevel, 2)} at level ${sk.maxLevel}). Then ${gemLuck ? `${gemLuck.name} rings` : 'gem luck rings'} give each successful cut their % chance to go up one grade, on top.`) : null),
   ];
 }
 
@@ -593,6 +650,9 @@ function skillSection(cfg) {
       h('div', {}, xpTable(BARS, 'Bar refined')),
       h('div', {}, xpTable(GEMS, 'Gem cut'))),
     h('p', { class: 'mi-note' }, 'Each refined bar gives this XP to both skills of that bar type (grade and refining); each cut gem to both skills of that gem.'),
+    h('ul', { class: 'mi-list' },
+      s.activity.debris ? h('li', {}, `${s.activity.debris.name}: +${num(s.activity.debris.perLevel, 2)}% debris cleared per search per level (+${num(s.activity.debris.perLevel * s.maxLevel, 2)}% at level ${s.maxLevel}). XP: ${s.activity.debris.xpFrom}. Debris is cleared by searching (see Fields & searching).`) : null,
+      h('li', {}, `Gem grade: ${num(s.perMaterial.gemGrade.perLevel, 2)}% of the way from the novice to the master cutting table per level (see Refining & cutting). It has no ring; Gem luck rings add upgrade chances on top.`)),
   ];
 }
 

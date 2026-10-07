@@ -134,3 +134,4 @@ pre.error { white-space: pre-wrap; color: var(--err); }
 .tier-normal { color: var(--grade-C); }
 .tier-elite { color: var(--grade-B); }
 .tier-champion { color: var(--grade-A); }
+#topbar .brand .version { margin-left: 5px; font-size: 11px; font-weight: 400; color: var(--muted); }

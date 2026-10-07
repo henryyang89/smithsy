@@ -1,66 +1,64 @@
-// Rules added after the review pass: time-limited free pick-ups, picking a single ground item,
-// smith ring lock, ore sight only on unfinished cells, duration formatting.
+// Rules added after the review pass: leaving items behind cannot beat the walk-home rule (v1.1: the
+// projected load), free late swaps, taking a single pile item, smith ring lock, ore sight only on
+// unfinished cells, duration formatting.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG } from '../js/config.js';
-import { pickUp, dropItem, search, pickUpLimit, returnMinutes } from '../js/core/map.js';
+import { moveToPile, takeFromPile, setCarry, search, returnMinutes, projectedLoad, currentField } from '../js/core/map.js';
 import { toggleRing, smithRingLock } from '../js/core/rings.js';
 import { formatDuration } from '../js/core/util.js';
 import { endDay } from '../js/core/game.js';
-import { game, standInBlankField, idx, addRing, cfgWith } from './helpers.mjs';
+import { game, standInBlankField, addRing, cfgWith } from './helpers.mjs';
 
 const DAY_END = CONFIG.time.dayEndMin;
+const SLOTS = CONFIG.bag.slots;
 
-test('dropping the bag cannot be used to search late and then pick everything back up', () => {
+test('leaving the load in the pile cannot be used to search late and then carry everything home in time', () => {
   const s = game(1);
   const field = standInBlankField(s, 4);
-  const c = idx(2, 2);
-  // late in the day with a full bag of copper
-  s.bag = Array(CONFIG.bag.slots).fill('ore:copper');
-  s.loadMark = s.bag.length;
-  // find a time where a search is refused with the full bag but allowed with an empty one
-  const full = returnMinutes(s, s.location, CONFIG.bag.slots);
+  s.bag = Array(SLOTS).fill('ore:copper');
+  // find a time where a search is refused with a full load but would fit with an empty one
+  const full = returnMinutes(s, s.location, SLOTS);
   const empty = returnMinutes(s, s.location, 0);
+  assert.ok(full > empty);
   s.time = DAY_END - CONFIG.field.searchMin - (full + empty) / 2;
   assert.equal(search(s, 2, 2).ok, false);
-  while (s.bag.length) dropItem(s, 0, c);
-  assert.equal(search(s, 2, 2).ok, true);
-  // after the search the walk home must still end by day end
-  const limit = pickUpLimit(s);
-  assert.ok(limit < CONFIG.bag.slots);
-  pickUp(s, c);
-  assert.equal(s.bag.length, limit);
-  assert.ok(s.time + returnMinutes(s) <= DAY_END + 1e-9);
-  assert.equal(pickUp(s, c).ok, false);
-  assert.ok(field.cells[c].ground.length > 0);
+  while (s.bag.length) moveToPile(s, 0);
+  assert.equal(field.pile.length, SLOTS);
+  assert.equal(projectedLoad(s), SLOTS, 'the pile still counts as load you could carry');
+  assert.equal(search(s, 2, 2).ok, false, 'dropping everything does not buy time');
+  assert.equal(setCarry(s, { bag: [], pile: [] }).ok, true);
+  assert.equal(search(s, 2, 2).ok, false, 'neither does an empty carry choice');
 });
 
-test('a late swap (drop one, pick one) is still allowed up to the bag size of the last timed action', () => {
+test('a late swap (leave one, take one) is free at any hour, up to the bag size', () => {
   const s = game(2);
   standInBlankField(s, 4);
-  const c = idx(1, 1);
+  const f = currentField(s);
   s.bag = Array(10).fill('ore:copper');
-  s.loadMark = 10;
+  f.pile.push('ore:mythril');
   s.time = DAY_END - 1; // the walk home already ends after day end
-  s.map.fields[`${s.location.x},${s.location.y}`].cells[c].ground.push('ore:mythril');
-  dropItem(s, 0, c);
-  const r = pickUp(s, c, CONFIG, s.map.fields[`${s.location.x},${s.location.y}`].cells[c].ground.indexOf('ore:mythril'));
-  assert.equal(r.ok, true);
+  assert.equal(moveToPile(s, 0).ok, true);
+  const r = takeFromPile(s, f.pile.indexOf('ore:mythril'));
+  assert.equal(r.ok, true, r.msg);
   assert.equal(s.bag.length, 10);
   assert.ok(s.bag.includes('ore:mythril'));
-  assert.equal(pickUp(s, c).ok, false); // cannot exceed the mark late in the day
+  assert.equal(s.time, DAY_END - 1, 'free');
+  // filling the bag late is allowed too (the pile already counted toward the projected load)
+  f.pile.push(...Array(SLOTS).fill('ore:iron'));
+  while (s.bag.length < SLOTS) assert.equal(takeFromPile(s, f.pile.length - 1).ok, true);
+  assert.equal(takeFromPile(s, 0).ok, false, 'never past the bag size');
 });
 
-test('pickUp with groundIndex takes exactly that item', () => {
+test('takeFromPile takes exactly the chosen item', () => {
   const s = game(3);
   const field = standInBlankField(s, 1);
-  const c = idx(0, 0);
-  field.cells[c].ground.push('ore:copper', 'gem:diamond', 'ore:iron');
-  const r = pickUp(s, c, CONFIG, 1);
+  field.pile.push('ore:copper', 'gem:diamond', 'ore:iron');
+  const r = takeFromPile(s, 1);
   assert.equal(r.ok, true);
   assert.deepEqual(s.bag, ['gem:diamond']);
-  assert.deepEqual(field.cells[c].ground, ['ore:copper', 'ore:iron']);
-  assert.equal(pickUp(s, c, CONFIG, 5).ok, false);
+  assert.deepEqual(field.pile, ['ore:copper', 'ore:iron']);
+  assert.equal(takeFromPile(s, 5).ok, false);
 });
 
 test('smith rings lock once the work day has started; adventurer rings do not', () => {

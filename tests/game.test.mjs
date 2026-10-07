@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { CONFIG, ORES, GEMS, BARS, GRADES } from '../js/config.js';
 import {
   newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, resolveBattle, rosterView, serialize, deserialize,
-  adventurerRingTotals, logResult, addLog, packedSlotsSummary, SAVE_VERSION, MAX_LOG,
+  adventurerRingTotals, logResult, addLog, packedSlotsSummary, migrateV1, SAVE_VERSION, MAX_LOG,
 } from '../js/core/game.js';
 import { ringLabel } from '../js/core/rings.js';
 import { repair } from '../js/core/gear.js';
-import { travel } from '../js/core/map.js';
-import { game, cfgWith, addGear, addRing, fullSet, fieldAt, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
+import { travel, search, setCarry, currentField, fieldProgress } from '../js/core/map.js';
+import { VERSION } from '../js/version.js';
+import { game, cfgWith, addGear, addRing, fullSet, fieldAt, fieldOf, idx, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
 
 const tierIndex = (s, tier) => s.roster.enemies.findIndex((e) => e.tier === tier);
 const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds, ringIds });
@@ -355,11 +356,14 @@ test('score: each win adds the enemy tier\'s score', () => {
 });
 
 // -------------------------------------------------------------- regrowth ----
-test('confirmPlan regrows searched cells overnight (regrowPctPerDay), ground items stay', () => {
+test('confirmPlan regrows searched cells overnight (regrowPctPerDay); piles and boulders stay', () => {
   const searchedCells = (s) => Object.values(s.map.fields).flatMap((f) => f.cells).filter((c) => c.searched > 0);
   const prep = (cfg) => {
     const s = game(8, cfg);
-    for (const f of Object.values(s.map.fields)) f.cells.slice(0, 5).forEach((c) => { c.searched = 100; c.items = []; c.ground = ['ore:iron']; });
+    for (const f of Object.values(s.map.fields)) {
+      f.cells.filter((c) => !c.boulder).slice(0, 5).forEach((c) => { c.searched = 100; c.items = []; c.debris = 0; });
+      f.pile = ['ore:iron'];
+    }
     endDay(s, cfg);
     return s;
   };
@@ -375,7 +379,10 @@ test('confirmPlan regrows searched cells overnight (regrowPctPerDay), ground ite
   const s1 = prep(all);
   confirmPlan(s1, plan(0), all);
   assert.equal(searchedCells(s1).length, 0, '100%: every searched cell is fresh');
-  for (const f of Object.values(s1.map.fields)) for (const c of f.cells.slice(0, 5)) assert.deepEqual(c.ground, ['ore:iron']);
+  for (const f of Object.values(s1.map.fields)) {
+    assert.deepEqual(f.pile, ['ore:iron'], 'the pile stays');
+    assert.equal(f.cells.filter((c) => c.boulder).length, CONFIG.field.boulders, 'boulders stay');
+  }
   assert.match(s1.log.find((l) => /regrew/.test(l.text)).text, new RegExp(`${n} searched cell`));
   // regrowth happens once per night, and the roster is unaffected by it
   assert.equal(s1.day, 2);
@@ -389,7 +396,8 @@ test('spec: fields do not regrow (regrowPctPerDay is 0), so nights leave every f
   assert.deepEqual(cfg.field, CONFIG.field);
   const s = game(8, cfg);
   for (const f of Object.values(s.map.fields)) {
-    f.cells.slice(0, 10).forEach((c, i) => { c.searched = i < 5 ? 100 : 40; c.ground = ['ore:iron']; });
+    f.cells.filter((c) => !c.boulder).slice(0, 10).forEach((c, i) => { c.searched = i < 5 ? 100 : 40; c.debris = 0; });
+    f.pile = ['ore:iron'];
   }
   const fields = structuredClone(s.map.fields);
   for (let night = 0; night < 10; night++) {
@@ -433,9 +441,112 @@ test('serialize / deserialize roundtrip (fresh game and mid-run)', () => {
 test('deserialize rejects other save versions and junk', () => {
   const s = game(9);
   assert.throws(() => deserialize(JSON.stringify({ ...s, version: SAVE_VERSION + 1 })), /Incompatible/);
+  assert.throws(() => deserialize(JSON.stringify({ ...s, version: 0 })), /Incompatible/);
+  assert.throws(() => deserialize(JSON.stringify({ ...s, version: String(SAVE_VERSION) })), /Incompatible/);
   assert.throws(() => deserialize('null'), /Incompatible/);
   assert.throws(() => deserialize('{not json'));
 });
+
+test('versions: the game version is exported; saves are version 2 (v1.1 field model)', () => {
+  assert.equal(typeof VERSION, 'string');
+  assert.match(VERSION, /^\d+\.\d+$/);
+  assert.ok(Number(VERSION) >= 1.1, VERSION);
+  assert.ok(SAVE_VERSION >= 2);
+  assert.equal(newGame(1).version, SAVE_VERSION);
+});
+
+// ------------------------------------------------------------ v1.0 saves ----
+// Turn a current game into what v1.0 saved: no piles, items on the ground of cells, debris true/false,
+// no boulders, a loadMark, version 1.
+function toV1(s) {
+  const v1 = structuredClone(s);
+  v1.version = 1;
+  v1.loadMark = v1.bag.length;
+  for (const f of Object.values(v1.map.fields)) {
+    delete f.pile;
+    for (const c of f.cells) {
+      c.debris = c.debris > 0;
+      delete c.boulder;
+      c.ground = [];
+    }
+  }
+  return v1;
+}
+
+test('migrateV1: ground items -> the field\'s pile, debris true/false -> thickness, no boulders, no loadMark', () => {
+  const s = game(31);
+  const v1 = toV1(s);
+  const keys = Object.keys(v1.map.fields);
+  // ground items in two cells of one field and one cell of another
+  v1.map.fields[keys[0]].cells[3].ground = ['ore:copper', 'gem:ruby'];
+  v1.map.fields[keys[0]].cells[40].ground = ['ore:mythril'];
+  v1.map.fields[keys[1]].cells[0].ground = ['gem:diamond'];
+  const wasDebris = Object.fromEntries(keys.map((k) => [k, v1.map.fields[k].cells.map((c) => c.debris)]));
+  assert.ok(Object.values(wasDebris).flat().some((d) => d === true), 'some v1 debris to convert');
+  const m = migrateV1(structuredClone(v1));
+  assert.equal(m.version, SAVE_VERSION);
+  assert.equal('loadMark' in m, false);
+  assert.deepEqual(m.map.fields[keys[0]].pile, ['ore:copper', 'gem:ruby', 'ore:mythril']);
+  assert.deepEqual(m.map.fields[keys[1]].pile, ['gem:diamond']);
+  const { min, max } = CONFIG.field.debrisAmount;
+  const thick = new Set();
+  for (const k of keys) {
+    const f = m.map.fields[k];
+    assert.ok(Array.isArray(f.pile));
+    if (k !== keys[0] && k !== keys[1]) assert.deepEqual(f.pile, []);
+    f.cells.forEach((c, i) => {
+      assert.equal('ground' in c, false);
+      assert.equal(c.boulder, false, 'v1 fields had no boulders');
+      if (wasDebris[k][i]) {
+        assert.ok(Number.isInteger(c.debris) && c.debris >= min && c.debris <= max, `${c.debris}`);
+        thick.add(c.debris);
+      } else assert.equal(c.debris, 0);
+    });
+  }
+  assert.equal(thick.size, 1, 'every old debris cell gets the same thickness');
+  // the thickness follows the config's range
+  const cfg = cfgWith({ field: { debrisAmount: { min: 100, max: 110 } } });
+  const m2 = migrateV1(structuredClone(v1), cfg);
+  const d2 = Object.values(m2.map.fields).flatMap((f) => f.cells).map((c) => c.debris).filter((d) => d > 0);
+  assert.ok(d2.length > 0 && d2.every((d) => d >= 100 && d <= 110));
+  // other parts of the save are kept
+  assert.deepEqual(m.storage, s.storage);
+  assert.deepEqual(m.skills, s.skills);
+  assert.deepEqual(m.roster, s.roster);
+  assert.deepEqual(m.rng, s.rng);
+});
+
+test('deserialize accepts a v1.0 save, migrates it, and the game plays on', () => {
+  const s = game(32);
+  const c = fieldAt(s, 1);
+  assert.equal(travel(s, { x: c.x, y: c.y }).ok, true);
+  const v1 = toV1(s);
+  const fv1 = fieldOf(v1, c);
+  fv1.cells[0].ground = ['ore:iron', 'ore:coal'];
+  fv1.cells.forEach((cl) => { cl.debris = false; });
+  fv1.cells[idx(1, 1)].debris = true; // the center of the search below
+  const back = deserialize(JSON.stringify(v1));
+  assert.equal(back.version, SAVE_VERSION);
+  const f = currentField(back);
+  assert.deepEqual(f.pile, ['ore:iron', 'ore:coal']);
+  assert.ok(f.cells[idx(1, 1)].debris > 0);
+  // search: clears the old debris first; found items join the pile
+  const r = search(back, 1, 1);
+  assert.equal(r.ok, true, r.msg);
+  assert.ok(r.debrisCleared > 0);
+  assert.ok(fieldProgress(f) > 0);
+  assert.equal(f.pile.length, 2 + r.found.length);
+  // carry the pile home
+  assert.equal(setCarry(back, { pile: f.pile.map((_, i) => i) }).ok, true);
+  const before = back.storage.ore.iron;
+  assert.equal(travel(back, back.map.camp).ok, true);
+  assert.equal(back.storage.ore.iron, before + 1 + r.found.filter((t) => t === 'ore:iron').length);
+  assert.deepEqual(f.pile, []);
+  // a migrated save serializes as the current version
+  assert.equal(JSON.parse(serialize(back)).version, SAVE_VERSION);
+  assert.deepEqual(deserialize(serialize(back)), back);
+});
+
 
 // ------------------------------------------------------------------- log ----
 test('log: logResult logs successes and notes; the log is capped', () => {
