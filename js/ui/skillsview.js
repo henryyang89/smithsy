@@ -2,7 +2,7 @@
 // All game-state changes go through spendIntel() inside ctx.act(). No UI-only state needed.
 import { h, num, bar } from './dom.js';
 import { BARS, GEMS } from '../config.js';
-import { skillDefs, xpToNext, skillBonus } from '../core/skills.js';
+import { skillDefs, xpToNext, skillBonus, itemXp } from '../core/skills.js';
 import { spendIntel, intelChance, intelChanceFor, nextIntelGain, gainForPoint } from '../core/intel.js';
 import { smithRingTotals } from '../core/rings.js';
 
@@ -65,9 +65,11 @@ function skillsPanel(ctx) {
   const groups = GROUPS.map((g) => {
     let list = defs.filter((d) => d.group === g.id);
     if (g.id !== 'activity') list = list.slice().sort((a, b) => materialSortKey(a) - materialSortKey(b));
+    const mats = g.id === 'ore' ? BARS : GEMS;
+    const xpList = mats.map((m) => `${m} ${num(itemXp(m, cfg))}`).join(', ');
     const note = g.id === 'activity'
       ? 'XP = minutes spent on the activity.'
-      : `${cfg.skills.xpPerItem} XP per ${g.id === 'ore' ? 'bar refined' : 'gem cut'} of that type, failed attempts included. "Grade" raises the chance to upgrade the result one grade; "${g.id === 'ore' ? 'refining' : 'cutting'}" moves failure chance into grade D.`;
+      : `XP per ${g.id === 'ore' ? 'bar refined' : 'gem cut'} of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" raises the chance to upgrade the result one grade; "${g.id === 'ore' ? 'refining' : 'cutting'}" moves failure chance into grade D.`;
     return h('div', { class: 'mi-group' },
       h('h4', {}, g.title),
       h('p', { class: 'mi-note mi-intro' }, note),

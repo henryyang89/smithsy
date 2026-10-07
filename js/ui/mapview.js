@@ -204,7 +204,7 @@ function worldTile(ctx, c) {
     `Field (${c.x + 1},${c.y + 1}) · distance ${c.dist} from camp`,
     `Searched: ${pctText(prog)}`,
     here ? 'You are here.' : `Travel there: ${dur(there)}, then back to camp: ${dur(back)}${load}`,
-    !here ? `Arrive ${clock(state.time + there)}${fits ? '' : ' - not enough time to get there and back by 18:00'}` : null,
+    !here ? `Arrive ${clock(state.time + there)}${fits ? '' : ` - not enough time to get there and back by ${clock(cfg.time.dayEndMin)}`}` : null,
     ground ? `${plural(ground, 'item')} left on the ground` : null,
   ].filter(Boolean).join('\n');
   return h('div', {
@@ -233,6 +233,7 @@ function campHint(ctx) {
     return state.time + there + back <= cfg.time.dayEndMin + EPS;
   }).length;
   const left = timeLeft(state, cfg);
+  const regrow = cfg.field.regrowPctPerDay || 0;
   const st = state.storage;
   const stored = [...ORES.map((o) => [`ore:${o}`, st.ore[o] || 0]), ...GEMS.map((g) => [`gem:${g}`, st.gem[g] || 0])].filter(([, v]) => v > 0);
   return h('div', {},
@@ -242,7 +243,8 @@ function campHint(ctx) {
       h('span', { class: 'muted' }, 'Walking'), h('span', {}, `${cfg.map.travelMinPerStep}m per step, +${cfg.map.loadPenaltyPerItem}% per item in the bag${b.travelPct ? `, -${round1(b.travelPct)}% (rings)` : ''}${b.returnPct ? `, -${round1(b.returnPct)}% more on the way home (skill)` : ''}`),
       h('span', { class: 'muted' }, 'Searching'), h('span', {}, `${dur(searchMinutes(state, cfg))} per 3x3 area, each search digs ${round1(searchEfficiency(state, cfg))}% deeper into every cell`),
       h('span', { class: 'muted' }, 'Ore sight'), h('span', {}, `${round1(b.revealPct)}% chance per searched cell to reveal everything still in it`),
-      h('span', { class: 'muted' }, 'Reachable'), h('span', { class: reachable ? '' : 'warn' }, `${reachable} of ${fields.length} fields are close enough to go to and be back by ${clock(cfg.time.dayEndMin)}`)),
+      h('span', { class: 'muted' }, 'Reachable'), h('span', { class: reachable ? '' : 'warn' }, `${reachable} of ${fields.length} fields are close enough to go to and be back by ${clock(cfg.time.dayEndMin)}`),
+      regrow > 0 ? [h('span', { class: 'muted' }, 'Regrowth'), h('span', {}, `searched cells have a ${round1(regrow)}% chance each night to turn fresh and unsearched, with new hidden items`)] : null),
     h('p', { class: 'muted mv-note' }, `You may only head out, search or clear debris if there is still time to walk back by ${clock(cfg.time.dayEndMin)} with your current load. The walk home itself is always allowed. Arriving at camp unloads the bag (${cfg.bag.slots} slots) into storage.`),
     h('div', { class: 'mv-stored' }, h('span', { class: 'muted' }, 'In storage: '),
       stored.length ? stored.map(([t, v]) => h('span', { class: 'chip' }, itemTag(t), ` ${v}`)) : h('span', { class: 'muted' }, 'no raw ore or gems yet')));
@@ -262,6 +264,8 @@ function oddsTable(ctx) {
   const dists = [...new Set(fields.map((c) => c.dist))].sort((a, b) => a - b);
   const countW = Object.entries(f.itemCountWeights);
   const avgCount = countW.reduce((a, [k, w]) => a + Number(k) * w, 0) / countW.reduce((a, [, w]) => a + w, 0);
+  const counts = countW.filter(([, w]) => w > 0).map(([k]) => Number(k));
+  const countRange = counts.length ? (Math.min(...counts) === Math.max(...counts) ? String(counts[0]) : `${Math.min(...counts)}-${Math.max(...counts)}`) : '0';
   const cellsPerField = f.size * f.size;
   const pctCell = (v) => (v > 0 ? `${Math.round(v)}%` : '-');
   const rows = dists.map((d) => {
@@ -290,7 +294,7 @@ function oddsTable(ctx) {
     th('Fields', { rowspan: 2, title: 'Number of fields at this distance on your map' }),
     th('Walk out / back', { rowspan: 2, title: 'Walking time from camp and back, with an empty bag' }),
     th('Cells with items', { rowspan: 2, title: `Chance each cell holds items (in brackets: under debris, +${f.debrisLootBonus} points)` }),
-    th('Items / field', { rowspan: 2, title: `Expected items in a whole ${f.size}x${f.size} field (1-3 per loot cell, about ${round1(avgCount)} on average)` }),
+    th('Items / field', { rowspan: 2, title: `Expected items in a whole ${f.size}x${f.size} field (${countRange} per loot cell, about ${round1(avgCount)} on average)` }),
     th('Searched', { rowspan: 2, title: 'Average % searched of your fields at this distance' }),
     h('th', { colspan: ORES.length, class: 'mv-group mv-sep-l' }, `Ores (${f.oreShare}% of items)`),
     h('th', { colspan: GEMS.length, class: 'mv-group' }, `Gems (${100 - f.oreShare}% of items)`));
@@ -518,14 +522,14 @@ function legend(ctx) {
       item(swatch('field', [h('span', { class: 'mv-wm-d' }, 'dist 2'), h('span', { class: 'mv-wm-p' }, '35%'), h('span', { class: 'mv-wm-t' }, '40m')], { big: true, wm: true, fill: 35 }),
         'Field: distance from camp, % searched (also shown as the fill), travel time from where you are now'),
       item(swatch('field here', h('span', { class: 'mv-wm-t' }, 'here'), { big: true, wm: true }), 'You are here'),
-      item(swatch('field mv-far', h('span', { class: 'mv-wm-t' }, '2h'), { big: true, wm: true }), 'Faded: not enough time to go there and get back by 18:00'),
+      item(swatch('field mv-far', h('span', { class: 'mv-wm-t' }, '2h'), { big: true, wm: true }), `Faded: not enough time to go there and get back by ${clock(ctx.cfg.time.dayEndMin)}`),
       item(swatch('blocked', '', { big: true }), 'Impassable rock'),
       item(swatch('camp', h('span', { class: 'mv-wm-p' }, 'Camp'), { big: true, wm: true }), 'Camp: storage and workshop; end the day here')),
     h('div', { class: 'mv-leg-title muted' }, 'Field cells'),
     h('div', { class: 'mv-legend mv-field' },
       item(swatch('', ''), 'Not searched yet'),
       item(swatch('mv-partial', h('span', { class: 'mv-pct' }, '50%'), { fill: 50 }), 'Partly searched: the fill rises with % searched'),
-      item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), 'Fully searched: nothing hidden left'),
+      item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), (ctx.cfg.field.regrowPctPerDay || 0) > 0 ? 'Fully searched: nothing hidden left (until it regrows overnight)' : 'Fully searched: nothing hidden left'),
       item(swatch('debris', h('span', { class: 'mv-debris-l' }, 'debris')), 'Debris: clear before searching (a bit richer)'),
       item(swatch('mv-revealed', [itemTag('ore:iron'), itemTag('gem:ruby')]), 'Revealed by ore sight: what is still in the cell'),
       item(swatch('mv-revealed', h('span', { class: 'mv-empty' }, 'empty')), 'Revealed and empty'),

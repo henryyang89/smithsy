@@ -2,31 +2,43 @@
 // ============================================================================
 // SMITHSY BALANCE REPORT — is the pacing and difficulty sensible?
 //
-//   node tools/balance.mjs [--section economy|power|bot|all] [--seeds N] [--days N]
-//                          [--samples N] [--minwin P] [--future F] [--quick] [--set path=value ...]
+//   node tools/balance.mjs [--section economy|power|bot|all] [--seeds N] [--days N] [--samples N]
+//                          [--minwin P] [--future F] [--ablate x,y] [--quick] [--set path=value ...]
 //
 //   --section  which report to run (default: all)
-//   --seeds    economy: number of generated maps (default 100); bot: number of runs (default 10)
-//   --days     bot: play up to this day (default 40)
+//   --seeds    economy: generated maps (default 100); bot: runs (default 20; survival numbers move
+//              by ~+-10 points between seed sets of this size, use 40+ to compare close what-ifs)
+//   --days     bot: play up to this day (default 80; runs that are still alive then are cut off)
 //   --samples  power: hidden-attribute guesses per win-% cell (default 100, x50 fights each)
 //   --minwin   bot: minimum estimated win % to accept a fight (default 90)
-//   --future   bot: value of staying alive, in points, used in expected-score picks (default 500)
-//   --quick    small sample sizes (smoke test)
-//   --set      what-if: override a CONFIG number in memory for this run only (repeatable), e.g.
-//              --set map.travelMinPerStep=30 --set field.oreWeights.1.mythril=0
-//              (path into CONFIG, value parsed as JSON). js/config.js itself is never changed.
+//   --future   bot: points one survival is worth when comparing fights (default 1000 = careful:
+//              a 50-point champion needs >= 96% of the best normal's win chance)
+//   --ablate   bot: play without some systems, comma separated: gems (never cut/infuse), rings (never
+//              wear), skills (no skill levels), intel (never spend), repair (never repair)
+//   --quick    small sample sizes (smoke test, a few seconds)
+//   --set      what-if: override a CONFIG value in memory for this run only (repeatable). The path walks
+//              object keys and array indices; '*' matches every key/index at that level; the value is
+//              parsed as JSON (numbers, arrays, objects) and falls back to a plain string, e.g.
+//                --set map.travelMinPerStep=30
+//                --set field.oreWeights.1.mythril=0          (array index)
+//                --set 'field.oreWeights.*.mythril=2'        (every row)
+//                --set 'gear.durabilityLoss={"min":2,"max":4}'
+//                --set 'refine.mythril.input={"mythril":2}'
+//              js/config.js itself is never changed.
 //
 // Sections
 //   economy  Uses the real map generation + search code on fresh games: items per search by field
 //            distance, ore/gem mix, minutes per raw item including travel, bars per grade per ore,
 //            and the minutes needed to mine + refine + smith a full set of each material.
-//   power    Win % of archetype loadouts vs each enemy tier over days (estimateWinChanceSync, all
-//            attributes hidden), the weakest full set that holds target win rates on each day,
-//            and how much each gem / ring / gear slot is worth.
-//   bot      A scripted player that drives the real game API day by day (gather, refine, cut,
-//            smith, repair, rings, intel, nightly plan) and reports survival, score, gear over
+//   power    Win % of loadouts vs each enemy tier over days (estimateWinChanceSync, all attributes
+//            hidden = a typical enemy of the tier): the day-2 fight with day-1 gear, archetype sets,
+//            the weakest full set that holds target win rates on each day, and how much each gem /
+//            ring / gear slot is worth.
+//   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
+//            cut, smith, repair, rings, intel, nightly plan) and reports survival, score, gear over
 //            time, the daily time split, rings, skills and the tiers it chose.
 //
+// Each section ends with a one-line SUMMARY that is easy to compare between what-if runs.
 // Never edits config or core files. Every game state here is a throwaway copy; the yield
 // measurements in `economy` reset the clock and bag of their scratch copies between searches.
 // ============================================================================
@@ -38,17 +50,30 @@ import {
 } from '../js/core/map.js';
 import { adjustDistribution, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
 import { gearStats, craftMinutes, craft, repairInfo, repair } from '../js/core/gear.js';
-import { ringDef, ringValue, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
+import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
 import { knownLevels } from '../js/core/enemies.js';
 import { spendIntel, intelChance } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
+import { itemXp } from '../js/core/skills.js';
 import { seededRng, mixSeed } from '../js/core/rng.js';
 import { EPS, deepClone } from '../js/core/util.js';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 
-const ARGS = parseArgs(process.argv.slice(2));
-for (const [path, value] of ARGS.set) applySet(path, value);
+const IS_MAIN = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const SET_LOG = [];
+let ARGS;
+try {
+  ARGS = IS_MAIN ? parseArgs(process.argv.slice(2)) : parseArgs([]);
+  for (const [path, value] of ARGS.set) SET_LOG.push(...applySet(path, value));
+  // System ablations that are pure config switches (applied before anything reads CONFIG).
+  if (ARGS.ablate.includes('skills')) SET_LOG.push(...applySet('skills.maxLevel', '0'));
+} catch (err) {
+  if (!IS_MAIN) throw err;
+  console.error(`balance.mjs: ${err.message}`);
+  process.exit(2);
+}
 
 const cfg = CONFIG;
 const DAY_START = cfg.time.dayStartMin;
@@ -56,8 +81,8 @@ const DAY_END = cfg.time.dayEndMin;
 const DAY_LEN = DAY_END - DAY_START;
 const BAG = cfg.bag.slots;
 const ADV_RINGS = Object.keys(cfg.rings.types).filter((t) => cfg.rings.types[t].owner === 'adventurer');
-const SMITH_RINGS = Object.keys(cfg.rings.types).filter((t) => cfg.rings.types[t].owner === 'smith');
 const TIME_CATS = ['travel', 'search', 'clear', 'refine', 'cut', 'smith', 'repair'];
+const MINING = ['travel', 'search', 'clear'];
 
 // ------------------------------------------------------------ formatting ----
 const fx = (v, d) => (Number.isFinite(v) ? v.toFixed(d) : '-');
@@ -72,7 +97,11 @@ const median = (a) => {
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 };
-const capz = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const quantile = (a, q) => {
+  if (!a.length) return NaN;
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.min(s.length - 1, Math.max(0, Math.round(q * (s.length - 1))))];
+};
 
 function h1(t) {
   console.log(`\n${'='.repeat(100)}\n${t}\n${'='.repeat(100)}`);
@@ -94,12 +123,17 @@ function printTable(headers, rows) {
 
 // ----------------------------------------------------------------- args ----
 function parseArgs(argv) {
-  const o = { section: 'all', seeds: null, days: 40, samples: null, minwin: 90, future: 500, quick: false, help: false, set: [] };
+  const o = { section: 'all', seeds: null, days: 80, samples: null, minwin: 90, future: 1000, quick: false, help: false, set: [], ablate: [] };
+  const ABLATIONS = ['gems', 'rings', 'skills', 'intel', 'repair'];
   for (let i = 0; i < argv.length; i++) {
     let a = argv[i];
     let v = null;
-    if (a.includes('=')) [a, v] = [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)];
-    const val = () => (v != null ? v : argv[++i]);
+    if (a.startsWith('--') && a.includes('=')) [a, v] = [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)];
+    const val = () => {
+      const x = v != null ? v : argv[++i];
+      if (x == null) throw new Error(`${a} needs a value`);
+      return x;
+    };
     const num = () => {
       const n = Number(val());
       if (!Number.isFinite(n)) throw new Error(`${a} needs a number`);
@@ -112,20 +146,26 @@ function parseArgs(argv) {
     else if (a === '--minwin') o.minwin = num();
     else if (a === '--future') o.future = num();
     else if (a === '--quick') o.quick = true;
-    else if (a === '--set') {
+    else if (a === '--ablate') {
+      for (const x of val().split(',').map((y) => y.trim()).filter(Boolean)) {
+        if (!ABLATIONS.includes(x)) throw new Error(`--ablate: unknown system ${x} (${ABLATIONS.join(', ')})`);
+        o.ablate.push(x);
+      }
+    } else if (a === '--set') {
       const kv = val();
-      const at = kv ? kv.indexOf('=') : -1;
+      const at = kv.indexOf('=');
       if (at < 1) throw new Error('--set needs path=value');
-      o.set.push([kv.slice(0, at), kv.slice(at + 1)]);
-    }
-    else if (a === '-h' || a === '--help') o.help = true;
+      o.set.push([kv.slice(0, at).trim(), kv.slice(at + 1).trim()]);
+    } else if (a === '-h' || a === '--help') o.help = true;
     else throw new Error(`Unknown option ${a} (try --help)`);
   }
   if (!['all', 'economy', 'power', 'bot'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
   return o;
 }
 
-// Override one CONFIG value in memory (what-if runs). Path segments are object keys or array indices.
+// Override CONFIG values in memory (what-if runs). Path segments are object keys or array indices;
+// '*' matches every key / index at that level. The path must already exist (catches typos), and a
+// number can only be replaced by a number. Returns ["path: old -> new", ...] for the report header.
 function applySet(path, raw) {
   let value;
   try {
@@ -133,15 +173,33 @@ function applySet(path, raw) {
   } catch {
     value = raw;
   }
-  const parts = path.split('.');
-  let obj = CONFIG;
-  for (const p of parts.slice(0, -1)) {
-    if (obj == null || !(p in obj)) throw new Error(`--set: no CONFIG path ${path}`);
-    obj = obj[p];
-  }
-  const last = parts[parts.length - 1];
-  if (obj == null || !(last in obj)) throw new Error(`--set: no CONFIG path ${path}`);
-  obj[last] = value;
+  const parts = path.split('.').filter((p) => p !== '');
+  if (!parts.length) throw new Error('--set: empty path');
+  const out = [];
+  const walk = (obj, i, trail) => {
+    const p = parts[i];
+    if (obj == null || typeof obj !== 'object') throw new Error(`--set: ${trail.join('.') || 'CONFIG'} is not an object or array (in ${path})`);
+    const keys = p === '*' ? Object.keys(obj) : [p];
+    if (p !== '*' && !Object.prototype.hasOwnProperty.call(obj, p)) {
+      const opts = Array.isArray(obj) ? `indices 0..${obj.length - 1}` : Object.keys(obj).join(', ');
+      throw new Error(`--set: no CONFIG path ${[...trail, p].join('.')} (options here: ${opts})`);
+    }
+    for (const k of keys) {
+      if (i < parts.length - 1) {
+        walk(obj[k], i + 1, [...trail, k]);
+        continue;
+      }
+      const old = obj[k];
+      if (typeof old === 'number' && typeof value !== 'number') throw new Error(`--set: ${[...trail, k].join('.')} is a number; got ${JSON.stringify(value)}`);
+      if (old !== null && typeof old === 'object' && (value === null || typeof value !== 'object')) {
+        throw new Error(`--set: ${[...trail, k].join('.')} is an ${Array.isArray(old) ? 'array' : 'object'}; give JSON or set its fields`);
+      }
+      obj[k] = value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
+      out.push(`${[...trail, k].join('.')}: ${JSON.stringify(old)} -> ${JSON.stringify(value)}`);
+    }
+  };
+  walk(CONFIG, 0, []);
+  return out;
 }
 
 // ======================================================== shared helpers ====
@@ -188,7 +246,7 @@ function itemShares(dist) {
 // field's distance. Items have uniform hidden depths, so a search finds min(eff, left)/left of
 // what is still in a cell. `clear` options clear the area's debris first; their rate spreads the
 // clearing time over the searches the cleared cells will get (100/eff of them).
-function centerOptions(st, field, fkey, vf, cleared) {
+function centerOptions(st, field, vf, cleared) {
   const n = cfg.field.size;
   const eff = searchEfficiency(st);
   const sMin = searchMinutes(st);
@@ -209,7 +267,7 @@ function centerOptions(st, field, fkey, vf, cleared) {
       for (const it of c.items) v += vf(it.t);
       return { items: c.items.length * frac, val: v * frac };
     }
-    const it = (cellPrior(field.dist, cleared.has(`${fkey}:${i}`)) * Math.min(eff, left)) / 100;
+    const it = (cellPrior(field.dist, cleared.has(c)) * Math.min(eff, left)) / 100;
     return { items: it, val: it * avgVal };
   });
   const out = [];
@@ -245,10 +303,10 @@ function centerOptions(st, field, fkey, vf, cleared) {
 }
 
 // `reserve` = minutes to keep free at camp after walking home (time to process the haul).
-function bestAction(st, field, fkey, vf, cleared, allowClear = true, reserve = 0) {
+function bestAction(st, field, vf, cleared, allowClear = true, reserve = 0) {
   const back = returnMinutes(st) + reserve;
   let best = null;
-  for (const o of centerOptions(st, field, fkey, vf, cleared)) {
+  for (const o of centerOptions(st, field, vf, cleared)) {
     if (o.clear && !allowClear) continue;
     if (st.time + o.minutes + back > DAY_END + EPS) continue;
     if (!best || o.rate > best.rate + 1e-12) best = o;
@@ -278,10 +336,9 @@ function runTrip(st, target, p) {
   let found = 0;
   for (let guard = 0; guard < 500; guard++) {
     const field = currentField(st);
-    const fkey = key(st.location.x, st.location.y);
     if (p.dump) tidyBag(st, field, p.vf);
     if (st.bag.length >= BAG) break;
-    const act = bestAction(st, field, fkey, p.vf, p.cleared, p.allowClear !== false, p.reserve ? p.reserve(st) : 0);
+    const act = bestAction(st, field, p.vf, p.cleared, p.allowClear !== false, p.reserve ? p.reserve(st) : 0);
     if (!act || act.rate < p.minRate) {
       if (p.allowMove && moves < 3 && p.chooseNext) {
         const next = p.chooseNext(st);
@@ -302,7 +359,7 @@ function runTrip(st, target, p) {
       if (!r.ok) break;
       p.log('clear', r.minutes);
       clears++;
-      for (const i of cells) p.cleared.add(`${fkey}:${i}`);
+      for (const i of cells) p.cleared.add(field.cells[i]);
     }
     r = search(st, act.cx, act.cy);
     if (!r.ok) break;
@@ -332,8 +389,7 @@ function exhaustField(st0, loc, clearAllDebris) {
   const st = deepClone(st0);
   st.location = { x: loc.x, y: loc.y };
   const field = currentField(st);
-  const fkey = key(loc.x, loc.y);
-  const cleared = new Set();
+  const cleared = new WeakSet(); // cleared debris cells (cell objects: a regrown cell is a new object)
   let clearMin = 0;
   if (clearAllDebris) {
     const n = cfg.field.size;
@@ -347,7 +403,7 @@ function exhaustField(st0, loc, clearAllDebris) {
         const r = clearDebris(st, x, y);
         if (r.ok) {
           clearMin += r.minutes;
-          for (const i of cells) cleared.add(`${fkey}:${i}`);
+          for (const i of cells) cleared.add(field.cells[i]);
         }
       }
     }
@@ -357,7 +413,7 @@ function exhaustField(st0, loc, clearAllDebris) {
   for (let guard = 0; guard < 600; guard++) {
     st.time = DAY_START;
     st.bag = [];
-    const act = bestAction(st, field, fkey, () => 1, cleared, false);
+    const act = bestAction(st, field, () => 1, cleared, false);
     if (!act) break;
     const r = search(st, act.cx, act.cy);
     if (!r.ok) break;
@@ -405,7 +461,14 @@ function economySection(o) {
   const totals = {};
   for (const b of BUCKETS) for (const [t, v] of Object.entries(agg[b].types)) totals[t] = (totals[t] || 0) + v;
   note(`Whole map, per run: ${f0(sum(Object.values(totals)) / N)} items = ` +
-    [...ORES.map((x) => `ore:${x}`), ...GEMS.map((x) => `gem:${x}`)].map((t) => `${t.split(':')[1]} ${f0((totals[t] || 0) / N)}`).join(', ') + '. Fields never regrow.');
+    [...ORES.map((x) => `ore:${x}`), ...GEMS.map((x) => `gem:${x}`)].map((t) => `${t.split(':')[1]} ${f0((totals[t] || 0) / N)}`).join(', ') + '.');
+  {
+    const cellsPerMap = sum(BUCKETS.map((b) => agg[b].fields)) / N * cfg.field.size ** 2;
+    const itemsPerMap = sum(Object.values(totals)) / N;
+    const r = cfg.field.regrowPctPerDay || 0;
+    note(`Regrowth: each searched cell has ${r}%/night to refill. On a fully searched map that is ~${f0((cellsPerMap * r) / 100)} fresh cells ` +
+      `(~${f1((itemsPerMap * r) / 100)} items) per night across all fields, i.e. the long-run supply cap once the map is spent.`);
+  }
 
   h2('1b. Ore / gem mix: expected count per field (and % of items)');
   const typeCols = [...ORES.map((x) => `ore:${x}`), ...GEMS.map((x) => `gem:${x}`)];
@@ -465,7 +528,7 @@ function economySection(o) {
       {
         const st = deepClone(st0);
         const tm = { travel: 0, search: 0, clear: 0 };
-        const res = runTrip(st, c, { vf: vf1, cleared: new Set(), log: (k, m) => (tm[k] += m), minRate: 0.002, allowMove: false, dump: false });
+        const res = runTrip(st, c, { vf: vf1, cleared: new WeakSet(), log: (k, m) => (tm[k] += m), minRate: 0.002, allowMove: false, dump: false });
         T.n++;
         T.min += st.time - DAY_START;
         T.items += res.carried.length;
@@ -475,7 +538,7 @@ function economySection(o) {
       // a whole day of repeated trips to that field
       {
         const st = deepClone(st0);
-        const cleared = new Set();
+        const cleared = new WeakSet();
         let items = 0;
         for (let t = 0; t < 6; t++) {
           const res = runTrip(st, c, { vf: vf1, cleared, log: () => {}, minRate: 0.002, allowMove: false, dump: false });
@@ -557,7 +620,8 @@ function economySection(o) {
     }),
   );
   const xpL10 = (cfg.skills.xpBase * maxSk * (maxSk + 1)) / 2;
-  note(`Per-material skills need ${xpL10} XP for level ${maxSk} = ${xpL10 / cfg.skills.xpPerItem} items of that one material.`);
+  note(`Per-material skills need ${xpL10} XP for level ${maxSk} = items of that one material: ` +
+    [...BARS, ...GEMS].map((m) => `${m} ${f0(xpL10 / Math.max(1e-9, itemXp(m, cfg)))}`).join(', ') + '.');
 
   // ---- 5. full sets
   h2('5. A full 5-piece set (sword 2 + chest 3 + helmet 2 + gloves 2 + boots 2 = 11 bars)');
@@ -566,6 +630,7 @@ function economySection(o) {
   const trials = o.quick ? 300 : 2000;
   const setRows = [];
   const minRows = [];
+  const setDays = {};
   for (const bar of BARS) {
     const dist = cfg.refine[bar].dist;
     const rng = seededRng(mixSeed(55, BARS.indexOf(bar)));
@@ -597,12 +662,19 @@ function economySection(o) {
       const ref = ore[g] * rm;
       const total = mine + ref + smith;
       minRows.push([`${bar} ${lbl}`, f0(ore[g]), f0(mine), f0(ref), f0(smith), f0(total), f1(total / DAY_LEN)]);
+      if (g === 0) setDays[bar] = total / DAY_LEN;
     }
   }
   printTable(['material', 'input', 'matched >=D', 'matched >=C', 'matched >=B', 'matched >=A', 'all-C', 'all-S'], setRows);
   printTable(['set', 'inputs', 'mining min', 'refining min', 'smithing min', 'total min', `work days (${DAY_LEN} min)`], minRows);
   note('Mining minutes use the best distance from 3b (dedicated trips, by-products ignored, skills 0).\n' +
     'Versus the 11-bar minimum, "matched >=D" shows the overhead from failures and grade spread.');
+
+  console.log(`\nECONOMY SUMMARY | items/search by dist ${BUCKETS.filter((b) => ex[b].n).map((b) => `d${bucketLabel(b)}:${f2(ex[b].i / ex[b].s)}`).join(' ')}` +
+    ` | one trip d1/d3: ${f0(trip[1].min / trip[1].n)}/${trip[3].n ? f0(trip[3].min / trip[3].n) : '-'} min for ${f1(trip[1].items / trip[1].n)}/${trip[3].n ? f1(trip[3].items / trip[3].n) : '-'} items` +
+    ` | field min per unit: ${['ore:copper', 'ore:iron', 'steel pair', 'ore:mythril', 'any gem'].map((r) => `${r.replace('ore:', '')} ${f0(bestMin[r].min)}`).join(', ')}` +
+    ` | full set >=D work days: ${BARS.map((b) => `${b} ${f1(setDays[b])}`).join(', ')}` +
+    ` | map mythril/run ${f1((totals['ore:mythril'] || 0) / N)}`);
   return { bestMin };
 }
 
@@ -688,11 +760,36 @@ function printValueTables(T) {
   printTable(['slot', 'steel C -> mythril C', 'remove the piece'], SLOTS.map((s) => [s, f1(T.slots[s].up), f1(T.slots[s].remove)]));
 }
 
+// Day-1 gear the player can realistically smith (one trip + refining leaves time for 1-3 pieces).
+const DAY1_LOADOUTS = [
+  { name: 'Copper D sword', gear: () => [mkItem('sword', 'copper', 'D')] },
+  { name: 'Copper C sword', gear: () => [mkItem('sword', 'copper', 'C')] },
+  { name: 'Copper C sword + C boots', gear: () => setOf('copper', 'C', { slots: ['sword', 'boots'] }) },
+  { name: 'Copper C sword + C chest', gear: () => setOf('copper', 'C', { slots: ['sword', 'chest'] }) },
+  { name: 'Copper C sword + C chest + C boots', gear: () => setOf('copper', 'C', { slots: ['sword', 'chest', 'boots'] }), ref: true },
+  { name: 'Copper D sword + D helmet + D gloves', gear: () => setOf('copper', 'D', { slots: ['sword', 'helmet', 'gloves'] }) },
+  { name: 'Copper B sword + B chest + B boots', gear: () => setOf('copper', 'B', { slots: ['sword', 'chest', 'boots'] }) },
+  { name: 'Copper C sword +ruby C + C boots', gear: () => setOf('copper', 'C', { swordGem: { type: 'ruby', grade: 'C' }, slots: ['sword', 'boots'] }) },
+  { name: 'Copper C full set (lucky day 1)', gear: () => setOf('copper', 'C') },
+  { name: 'Iron C sword + copper C boots', gear: () => [mkItem('sword', 'iron', 'C'), mkItem('boots', 'copper', 'C')] },
+];
+const DAY2_TARGET = { normal: [85, 95], elite: [40, 65], champion: [0, 20] };
+
 function powerSection(o, T) {
   const S = o.samples ?? (o.quick ? 20 : 100);
   const E = o.quick ? 20 : 50;
-  h1(`POWER CURVE — win % with all enemy attributes hidden (${S} attribute guesses x ${E} fights per cell)`);
-  const days = [2, 5, 10, 15, 20, 30, 40, 60];
+  h1(`POWER CURVE — win % vs a typical enemy of each tier: all attributes hidden (${S} attribute guesses x ${E} fights per cell)`);
+
+  // ---- 1. the first fight
+  const S2 = o.quick ? 40 : 200;
+  h2(`1. Day-2 fight with day-1 gear (target: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion < ${DAY2_TARGET.champion[1]}%; ${S2} x ${E} fights)`);
+  const day2 = DAY1_LOADOUTS.map((l) => ({ ...l, w: Object.fromEntries(TIERS.map((t, ti) => [t, winPct(l.gear(), {}, t, 2, S2, E, mixSeed(222, ti))])) }));
+  const mark = (t, v) => (v < DAY2_TARGET[t][0] - EPS ? ' (low)' : v > DAY2_TARGET[t][1] + EPS ? ' (high)' : '');
+  printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => `${f1(l.w[t])}${mark(t, l.w[t])}`)]));
+  note('* = the reference "sensible day 1" used in the summary line. (low)/(high) = outside the target band.');
+
+  // ---- 2. archetypes over time
+  const days = [2, 5, 10, 15, 20, 30, 40, 50, 60, 80];
   const C = (t, gr) => ({ type: t, grade: gr });
   const ARCH = [
     { name: 'Unarmed', gear: [] },
@@ -709,21 +806,21 @@ function powerSection(o, T) {
     { name: 'Mythril C + ruby B sword + 10 B rings', gear: setOf('mythril', 'C', { swordGem: C('ruby', 'B') }), rings: ringSet('B') },
     { name: 'CEILING: Mythril S + ruby S + emerald S armor + 10 S rings', gear: setOf('mythril', 'S', { swordGem: C('ruby', 'S'), armorGem: C('emerald', 'S') }), rings: ringSet('S') },
   ];
+  const arch = {};
   for (const [ti, tier] of TIERS.entries()) {
     const t = cfg.enemies.tiers[tier];
-    h2(`vs ${tier.toUpperCase()} (base HP ${t.hp}, damage ${t.damage}, defense ${t.defense}%, +${cfg.enemies.growthPerDay.hpDamage}%/day HP & damage, +${cfg.enemies.growthPerDay.ratings}%/day acc & dodge)`);
-    printTable(
-      ['loadout', ...days.map((d) => `d${d}`)],
-      ARCH.map((a) => [a.name, ...days.map((d) => f1(winPct(a.gear, a.rings || {}, tier, d, S, E, mixSeed(ti, d))))]),
-    );
+    h2(`2${'abc'[ti]}. vs ${tier.toUpperCase()} (base HP ${t.hp}, damage ${t.damage}, defense ${t.defense}%, +${cfg.enemies.growthPerDay.hpDamage}%/day HP & damage, +${cfg.enemies.growthPerDay.ratings}%/day acc & dodge)`);
+    arch[tier] = ARCH.map((a) => days.map((d) => winPct(a.gear, a.rings || {}, tier, d, S, E, mixSeed(ti, d))));
+    printTable(['loadout', ...days.map((d) => `d${d}`)], ARCH.map((a, i) => [a.name, ...arch[tier][i].map(f1)]));
   }
 
-  // weakest full set per day that keeps the target win rate
+  // ---- 3. weakest full set per day that keeps the target win rate
   const targets = { normal: 90, elite: 70, champion: 50 };
-  const ldays = [2, 3, 5, 7, 10, 12, 15, 20, 25, 30, 40, 50, 60];
-  h2(`Weakest plain full set (no gems, no rings) that keeps >= ${targets.normal}% vs normal / ${targets.elite}% vs elite / ${targets.champion}% vs champion`);
+  const ldays = [2, 3, 5, 7, 10, 12, 15, 20, 25, 30, 40, 50, 60, 70, 80];
+  h2(`3. Weakest plain full set (no gems, no rings) that keeps >= ${targets.normal}% vs normal / ${targets.elite}% vs elite / ${targets.champion}% vs champion`);
   const sets = LADDER.map(([m, g]) => setOf(m, g));
   const rows = [];
+  const weakest = {};
   for (const d of ldays) {
     const row = [`day ${d}`];
     for (const [ti, tier] of TIERS.entries()) {
@@ -733,6 +830,7 @@ function powerSection(o, T) {
       let hi = LADDER.length - 1;
       if (w(hi) < targets[tier]) {
         row.push(`none (myth S ${f0(w(hi))}%)`);
+        (weakest[tier] ||= {})[d] = null;
         continue;
       }
       while (lo < hi) {
@@ -740,19 +838,43 @@ function powerSection(o, T) {
         if (w(mid) >= targets[tier]) hi = mid;
         else lo = mid + 1;
       }
+      (weakest[tier] ||= {})[d] = lo;
       row.push(`${LADDER[lo][0]} ${LADDER[lo][1]} (${f0(w(lo))}%)`);
     }
     rows.push(row);
   }
   printTable(['day', `normal >=${targets.normal}%`, `elite >=${targets.elite}%`, `champion >=${targets.champion}%`], rows);
   note('Ladder by power (material x grade): ' + LADDER.map(([m, g]) => `${m[0].toUpperCase()}${g}=${f2(power(m, g))}`).join(' '));
+  note('Reading: the target progression (iron ~d5-8, steel ~d12-18, mythril ~d25+) should roughly match the "elite" column.');
 
-  const VT = T ?? valueTables(o.quick ? 40 : 300, o.quick ? 20 : 60);
+  const VT = T ?? valueTables(o.quick ? 40 : 200, o.quick ? 20 : 50);
   printValueTables(VT);
+
+  const ref = day2.find((l) => l.ref);
+  const lastDay = (tier, idx, thr) => {
+    let last = '-';
+    days.forEach((d, j) => {
+      if (arch[tier][idx][j] >= thr) last = d;
+    });
+    return last;
+  };
+  const archIdx = (name) => ARCH.findIndex((a) => a.name === name);
+  console.log(`\nPOWER SUMMARY | day-2 ref (${ref.name}) n/e/c ${TIERS.map((t) => f0(ref.w[t])).join('/')}%` +
+    ` | Cu D sword n/e/c ${TIERS.map((t) => f0(day2[0].w[t])).join('/')}%` +
+    ` | last day >=90% vs normal: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('normal', archIdx(n), 90)}`).join(', ')}` +
+    ` | >=70% vs elite: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('elite', archIdx(n), 70)}`).join(', ')}` +
+    ` | ceiling vs normal d60/d80 ${f0(arch.normal[ARCH.length - 1][days.indexOf(60)])}/${f0(arch.normal[ARCH.length - 1][days.indexOf(80)])}%`);
   return VT;
 }
 
 // ================================================================== BOT =====
+// A careful scripted player. It only sees what a player sees (visible enemy attributes, revealed
+// cells, expected field loot) and uses the same API as the UI. Heuristics, not an optimiser.
+const MAT_RANK = { none: 0, copper: 1, iron: 2, steel: 3, mythril: 4 };
+// Grade a bar of this material must reach to still be worth gathering for an upgrade.
+// The best material keeps being worth chasing up to A grade; older materials up to B.
+const WORTH_GRADE = { copper: 'B', iron: 'B', steel: 'B', mythril: 'A' };
+
 function botParams(T, o) {
   // win % per unit of slot power (upgrade steel C 2.2 -> mythril C 3.3)
   const dp = power('mythril', 'C') - power('steel', 'C');
@@ -765,11 +887,12 @@ function botParams(T, o) {
     gemArmor[g] = Math.max(0, T.gems[g].chestC) / cfg.gear.gemArmorMult.chest;
   }
   const ringW = {};
-  for (const t of ADV_RINGS) ringW[t] = Math.max(0, T.rings[t].B) / cfg.rings.types[t].values[2];
+  for (const t of ADV_RINGS) ringW[t] = Math.max(0.01, T.rings[t].B) / cfg.rings.types[t].values[2];
   const smithW = { travelTime: 1, searchTime: 1, searchEff: 0.5, reveal: 0.4, processTime: 1, oreGrade: 1.2, gemGrade: 0.3 };
-  const gemOrder = GEMS.filter((g) => Math.max(gemSword[g], gemArmor[g]) >= 2).sort((a, b) => Math.max(gemSword[b], gemArmor[b]) - Math.max(gemSword[a], gemArmor[a]));
+  const ablate = new Set(o.ablate || []);
+  const gemOrder = ablate.has('gems') ? [] : GEMS.filter((g) => Math.max(gemSword[g], gemArmor[g]) >= 2).sort((a, b) => Math.max(gemSword[b], gemArmor[b]) - Math.max(gemSword[a], gemArmor[a]));
   return {
-    slotW, gemSword, gemArmor, ringW, smithW, gemOrder,
+    slotW, gemSword, gemArmor, ringW, smithW, gemOrder, ablate,
     minWin: o.minwin, future: o.future,
     simOpts: o.quick ? { samples: 8, fightsPerLoadout: 1, evalFights: 15 } : { samples: 24, fightsPerLoadout: 1, evalFights: 25 },
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
@@ -803,11 +926,31 @@ function slotBestPower(st, P) {
   for (const g of st.gear) if (g.durability > P.usableDur) out[g.slot] = Math.max(out[g.slot], itemPower(g));
   return out;
 }
+const hasSword = (st, P) => bestScore(st, 'sword', P) > 0;
 
-// Which bars are still worth making: a B-grade bar of that material would upgrade some slot.
+// Bars still needed to fully repair the best item of each slot, by bar key ('iron:C': 0.7, ...).
+function repairNeed(st, P) {
+  const need = {};
+  if (P.ablate.has('repair')) return need;
+  for (const s of SLOTS) {
+    const g = st.gear.filter((x) => x.slot === s).sort((a, b) => score(b, P) - score(a, P))[0];
+    if (!g || g.durability >= 100) continue;
+    for (const [k, n] of Object.entries(repairInfo(g).bars)) need[k] = (need[k] || 0) + n;
+  }
+  return need;
+}
+// Materials whose repair stock is short (less than one full repair of the worn items in storage).
+function repairShort(st, P) {
+  const short = new Set();
+  for (const [k, n] of Object.entries(repairNeed(st, P))) if ((st.storage.bars[k] || 0) + EPS < n) short.add(k.split(':')[0]);
+  return short;
+}
+
+// Which bars are still worth making: an upgrade for some slot, or repair stock for worn gear.
 function worthFn(st, P) {
   const best = slotBestPower(st, P);
-  return (bar) => SLOTS.some((s) => best[s] < power(bar, 'B') - EPS);
+  const short = repairShort(st, P);
+  return (bar) => short.has(bar) || SLOTS.some((s) => best[s] < power(bar, WORTH_GRADE[bar]) - EPS);
 }
 
 function cutStock(st, gem) {
@@ -816,13 +959,20 @@ function cutStock(st, gem) {
 
 // Item value while gathering (0 = drop it).
 function makeValueFn(st, P) {
+  const v = {};
+  if (!hasSword(st, P)) {
+    // first sword: anything that makes a pair of same-grade bars soon
+    Object.assign(v, { 'ore:copper': 1, 'ore:iron': 1, 'ore:coal': 0.2, 'ore:mythril': 0.5 });
+    for (const g of GEMS) v[`gem:${g}`] = P.gemOrder.includes(g) ? 0.1 : 0;
+    return (t) => v[t] ?? 0;
+  }
   const worth = worthFn(st, P);
-  const v = {
-    'ore:copper': worth('copper') ? 1 : 0,
-    'ore:iron': Math.max(worth('iron') ? 1.5 : 0, worth('steel') ? 1 : 0),
-    'ore:coal': worth('steel') ? 1.5 : 0,
-    'ore:mythril': worth('mythril') ? 3 : 0.5,
-  };
+  v['ore:copper'] = worth('copper') ? 1 : 0;
+  // iron for steel only while there is coal to pair it with (plus a small reserve)
+  const ironForSteel = worth('steel') && st.storage.ore.iron < st.storage.ore.coal * ((cfg.refine.steel.input.iron || 1) / (cfg.refine.steel.input.coal || 1)) + P.ironReserve;
+  v['ore:iron'] = Math.max(worth('iron') ? 1.5 : 0, ironForSteel ? 1 : 0);
+  v['ore:coal'] = worth('steel') ? 1.5 : 0;
+  v['ore:mythril'] = worth('mythril') ? 3 : 0.5;
   for (const g of GEMS) {
     const useful = P.gemOrder.includes(g);
     v[`gem:${g}`] = useful ? (cutStock(st, g) + (st.storage.gem[g] || 0) < P.cutCap + 2 ? 0.8 : 0.2) : 0;
@@ -830,30 +980,28 @@ function makeValueFn(st, P) {
   return (t) => v[t] ?? 0;
 }
 
+const refineUnits = (st, bar) => Math.min(...Object.entries(cfg.refine[bar].input).map(([ore, n]) => Math.floor((st.storage.ore[ore] || 0) / n)));
+
 function nextRefine(st, P) {
   const ore = st.storage.ore;
+  if (!hasSword(st, P)) {
+    // no sword yet: refine the material with the most ore first (best odds of a same-grade pair)
+    const opts = BARS.filter((b) => refineUnits(st, b) >= 1).sort((a, b) => refineUnits(st, b) - refineUnits(st, a) || BARS.indexOf(b) - BARS.indexOf(a));
+    return opts[0] || null;
+  }
   const worth = worthFn(st, P);
-  if (ore.mythril >= 1 && worth('mythril')) return 'mythril';
-  if (ore.iron >= 1 && ore.coal >= 1 && worth('steel')) return 'steel';
-  const reserve = worth('steel') ? ore.coal + P.ironReserve : 0;
-  if (ore.iron > reserve && worth('iron')) return 'iron';
-  if (ore.copper >= 1 && worth('copper')) return 'copper';
+  if (refineUnits(st, 'mythril') >= 1 && worth('mythril')) return 'mythril';
+  if (refineUnits(st, 'steel') >= 1 && worth('steel')) return 'steel';
+  const coalPerSteel = cfg.refine.steel.input.coal || 1;
+  const ironPerSteel = cfg.refine.steel.input.iron || 0;
+  const reserve = worth('steel') ? Math.ceil((ore.coal / coalPerSteel) * ironPerSteel) + P.ironReserve : 0;
+  if (ore.iron - reserve >= (cfg.refine.iron.input.iron || 1) && worth('iron')) return 'iron';
+  if (refineUnits(st, 'copper') >= 1 && worth('copper')) return 'copper';
   return null;
 }
 
-function pendingMinutes(st, P) {
-  const ore = st.storage.ore;
-  const worth = worthFn(st, P);
-  let m = 0;
-  if (worth('mythril')) m += ore.mythril * refineMinutes(st, 'mythril');
-  const pairs = worth('steel') ? Math.min(ore.iron, ore.coal) : 0;
-  m += pairs * refineMinutes(st, 'steel');
-  if (worth('iron')) m += Math.max(0, ore.iron - pairs - (worth('steel') ? P.ironReserve : 0)) * refineMinutes(st, 'iron');
-  if (worth('copper')) m += ore.copper * refineMinutes(st, 'copper');
-  return m;
-}
-
 function nextCut(st, P) {
+  if (!hasSword(st, P)) return null;
   for (const g of P.gemOrder) if ((st.storage.gem[g] || 0) >= 1 && cutStock(st, g) < P.cutCap) return g;
   return null;
 }
@@ -875,7 +1023,7 @@ function bestCraft(st, P) {
   for (const slot of SLOTS) {
     const cur = bestScore(st, slot, P);
     const need = cfg.gear.slots[slot].bars;
-    const gem = bestGem(st, slot, P);
+    const gem = P.ablate.has('gems') ? null : bestGem(st, slot, P);
     for (const m of BARS) {
       for (const g of GRADES) {
         if ((st.storage.bars[`${m}:${g}`] || 0) + EPS < need) continue;
@@ -908,6 +1056,7 @@ function repairAffordable(st, item) {
 }
 
 function nextRepair(st, P, tried) {
+  if (P.ablate.has('repair')) return null;
   const top = topTwoIds(st, P);
   const c = st.gear
     .filter((g) => !g.packed && !tried.has(g.id) && top.has(g.id) && g.durability < P.repairBelow && repairAffordable(st, g))
@@ -932,16 +1081,19 @@ function campWork(st, ctx, rec) {
     rec.craftLog.push({ day: st.day, slot: c.slot, material: c.material, grade: c.grade, gem: c.gem ? `${c.gem.type} ${c.gem.grade}` : '' });
     return true;
   };
-  // Craft as soon as bars allow when time is short or there is no sword yet; otherwise refine
-  // everything first so the best bars are known before choosing what to craft.
+  // Refine everything worth refining first so the best bars are known before choosing what to craft;
+  // craft as soon as bars allow when there is no sword yet or time is getting short.
   for (let guard = 0; guard < 300; guard++) {
     const job = nextRefine(st, P);
     if (!job) break;
-    if (bestScore(st, 'sword', P) <= 0 || pendingMinutes(st, P) + 60 > DAY_END - st.time) while (tryCraft());
+    if (!hasSword(st, P) || refineUnits(st, job) * refineMinutes(st, job) + 60 > DAY_END - st.time) while (tryCraft());
     const r = log('refine', refine(st, job));
     if (!r.ok) break;
     if (r.grade !== 'F') rec.bars[job] = (rec.bars[job] || 0) + 1;
   }
+  // Cut gems first only if that still leaves an hour for smithing; otherwise smith first.
+  const cutAll = GEMS.reduce((a, g) => a + (P.gemOrder.includes(g) ? (st.storage.gem[g] || 0) * cutMinutes(st, g) : 0), 0);
+  if (DAY_END - st.time < 60 + cutAll) while (tryCraft());
   for (let guard = 0; guard < 100; guard++) {
     const g = nextCut(st, P);
     if (!g) break;
@@ -949,11 +1101,22 @@ function campWork(st, ctx, rec) {
   }
   while (tryCraft());
   const tried = new Set();
+  if (!P.ablate.has('repair')) {
+    // item-days where a worn top item could not be repaired for lack of same material+grade bars
+    const top = topTwoIds(st, P);
+    for (const g of st.gear) if (top.has(g.id) && !g.packed && g.durability < P.repairBelow && !repairAffordable(st, g)) rec.repairBlocked[st.day] = (rec.repairBlocked[st.day] || 0) + 1;
+  }
   for (let guard = 0; guard < 50; guard++) {
     const it = nextRepair(st, P, tried);
     if (!it) break;
     tried.add(it.id);
-    if (log('repair', repair(st, it.id)).ok) rec.repaired++;
+    const info = repairInfo(it);
+    const r = log('repair', repair(st, it.id));
+    if (r.ok) {
+      rec.repaired++;
+      rec.repairBars += sum(Object.values(info.bars));
+      rec.repairPct += info.missing;
+    }
   }
 }
 
@@ -977,49 +1140,68 @@ function pickRings(rings, weights, max) {
 }
 
 function wearSmithRings(st, P) {
+  if (P.ablate.has('rings')) return;
   const mine = st.rings.filter((r) => ringDef(r.type).owner === 'smith');
   const want = new Set(pickRings(mine, P.smithW, cfg.rings.maxWorn).map((r) => r.id));
   for (const r of wornRings(st, 'smith')) if (!want.has(r.id)) toggleRing(st, r.id);
   for (const r of mine) if (want.has(r.id) && !r.worn) toggleRing(st, r.id);
 }
 
-// Camp minutes needed to process what is in the bag (+ one craft), so the haul becomes gear today.
+// Camp minutes needed to process what is in the bag and smith, so the haul becomes gear today.
 function campReserve(st, P) {
   const worth = worthFn(st, P);
-  let m = 30;
+  const noSword = !hasSword(st, P);
+  const missing = SLOTS.filter((s) => bestScore(st, s, P) <= 0).length;
+  let m = craftMinutes('helmet', false) * Math.max(1, Math.min(3, missing)); // smithing: one 2-bar piece, or up to 3 missing pieces
   for (const t of st.bag) {
     const [kind, type] = t.split(':');
-    if (kind === 'gem') m += P.gemOrder.includes(type) ? cutMinutes(st, type) : 0;
-    else if (type === 'mythril') m += worth('mythril') ? refineMinutes(st, 'mythril') : 0;
-    else if (type === 'coal') m += worth('steel') ? refineMinutes(st, 'steel') : 0;
-    else if (type === 'iron') m += worth('iron') ? refineMinutes(st, 'iron') : 0;
-    else if (type === 'copper') m += worth('copper') ? refineMinutes(st, 'copper') : 0;
+    if (kind === 'gem') m += !noSword && P.gemOrder.includes(type) ? cutMinutes(st, type) : 0;
+    else if (type === 'mythril') m += noSword || worth('mythril') ? refineMinutes(st, 'mythril') : 0;
+    else if (type === 'coal') m += !noSword && worth('steel') ? refineMinutes(st, 'steel') : 0;
+    else if (type === 'iron') m += noSword || worth('iron') ? refineMinutes(st, 'iron') : 0;
+    else if (type === 'copper') m += noSword || worth('copper') ? refineMinutes(st, 'copper') : 0;
   }
   return Math.min(P.reserveCap, m);
+}
+
+// Expected camp minutes per item found at a field distance: refine/cut time of the items worth
+// keeping (worthless ones are dropped) plus half a bar's smithing for each ore kept.
+function procPerFoundItem(st, P, dist, vf) {
+  const bar = { copper: 'copper', iron: 'iron', coal: 'steel', mythril: 'mythril' };
+  let m = 0;
+  for (const [t, share] of Object.entries(itemShares(dist))) {
+    if (vf(t) <= 0) continue;
+    const [kind, type] = t.split(':');
+    m += share * (kind === 'gem' ? cutMinutes(st, type) : refineMinutes(st, bar[type]) + 0.5 * cfg.gear.smithMinPerBar);
+  }
+  return m;
 }
 
 function chooseField(st, ctx, vf, from) {
   const P = ctx.P;
   const sMin = searchMinutes(st);
-  const reserveEst = Math.min(P.reserveCap, campReserve(st, P) + 0.6 * Math.max(0, BAG - st.bag.length) * 12);
-  const left = DAY_END - st.time - reserveEst;
+  // camp time already committed (processing the current bag + smithing) and the rough processing
+  // time of each item a search will add, so the planned haul still becomes gear today
+  const committed = campReserve(st, P);
   let best = null;
-  const noSword = bestScore(st, 'sword', P) <= 0; // first days: stay close and get one ore type for a sword
-  for (const c of st.map.cells) {
-    if (c.type !== 'field' || sameLoc(c, from)) continue;
-    if (noSword && c.dist > 2) continue;
+  // No sword yet (day 1): stay at the closest fields (most copper, short walks, more time to smith).
+  const fields = st.map.cells.filter((c) => c.type === 'field');
+  const maxDist = hasSword(st, P) ? Infinity : Math.min(...fields.map((c) => c.dist)) + 1;
+  for (const c of fields) {
+    if (sameLoc(c, from) || c.dist > maxDist) continue;
     const tOut = travelMinutes(st, from, c, st.bag.length);
     const tBack = travelMinutes(st, c, st.map.camp, BAG);
-    const sTime = left - tOut - tBack;
-    if (sTime < sMin) continue;
     const field = st.map.fields[key(c.x, c.y)];
-    const opts = centerOptions(st, field, key(c.x, c.y), vf, ctx.cleared).sort((a, b) => b.rate - a.rate);
+    const opts = centerOptions(st, field, vf, ctx.cleared).sort((a, b) => b.rate - a.rate);
     if (!opts.length) continue;
-    const nAvail = Math.floor(sTime / sMin);
-    const m = Math.max(1, Math.ceil(nAvail / 4));
-    const top = opts.slice(0, m);
+    const top0 = opts.slice(0, 4);
+    const itemsPerSearch = mean(top0.map((x) => (x.items * sMin) / x.minutes));
+    const perSearch = sMin + Math.min(P.reserveCap, itemsPerSearch * procPerFoundItem(st, P, c.dist, vf));
+    const avail = DAY_END - st.time - committed - tOut - tBack;
+    const nAvail = Math.floor(avail / perSearch);
+    if (nAvail < 1) continue;
+    const top = opts.slice(0, Math.max(1, Math.ceil(nAvail / 4)));
     const ratePerMin = mean(top.map((x) => x.rate));
-    const itemsPerSearch = mean(top.map((x) => (x.items * sMin) / x.minutes));
     const space = Math.max(0, BAG - st.bag.length);
     const nNeed = Math.min(nAvail, Math.ceil(space / Math.max(0.1, itemsPerSearch)));
     const gain = ratePerMin * nNeed * sMin;
@@ -1032,7 +1214,8 @@ function chooseField(st, ctx, vf, from) {
 function workDay(st, ctx, rec) {
   wearSmithRings(st, ctx.P);
   campWork(st, ctx, rec);
-  for (let trips = 0; trips < 4; trips++) {
+  let trips = 0;
+  for (; trips < 5; trips++) {
     const vf = makeValueFn(st, ctx.P);
     const target = chooseField(st, ctx, vf, st.map.camp);
     if (!target) break;
@@ -1046,12 +1229,33 @@ function workDay(st, ctx, rec) {
     });
     if (!res.ok) break;
     rec.tripDist.push(st.map.cells.find((c) => sameLoc(c, target.loc)).dist);
+    rec.tripItems.push(res.carried.length);
     for (const t of res.carried) rec.gathered[t] = (rec.gathered[t] || 0) + 1;
     campWork(st, ctx, rec);
   }
+  rec.tripsByDay[st.day] = trips;
+  spareTime(st, ctx, rec);
 }
 
-function spendIntelPoints(st) {
+// Nothing left worth a trip: cut the remaining useful raw gems (better grades for infusions), then
+// smith any upgrade that made possible. A player with spare minutes at camp would do the same.
+function spareTime(st, ctx, rec) {
+  const P = ctx.P;
+  if (!atCamp(st) || !hasSword(st, P)) return;
+  let cutAny = false;
+  for (let guard = 0; guard < 100; guard++) {
+    const g = P.gemOrder.find((x) => (st.storage.gem[x] || 0) >= 1);
+    if (!g) break;
+    const r = cut(st, g);
+    if (!r.ok) break;
+    ctx.tm.cut += r.minutes;
+    cutAny = true;
+  }
+  if (cutAny) campWork(st, ctx, rec);
+}
+
+function spendIntelPoints(st, P) {
+  if (P.ablate.has('intel')) return;
   for (let guard = 0; guard < 20 && st.intel.points >= 1; guard++) {
     const track = intelChance(st, 'enemySight') < 80 ? 'enemySight' : intelChance(st, 'oreSight') < 40 ? 'oreSight' : 'ringTypeSight';
     if (!spendIntel(st, track).ok) break;
@@ -1065,10 +1269,10 @@ function choosePlan(st, ctx, rec) {
     const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
     let pick = items.slice(0, 2);
     // leave a worn-out best piece home for a day so it can be repaired (packed gear can't be)
-    if (items.length >= 2 && items[0].durability <= P.restBelow && repairAffordable(st, items[0])) pick = items.slice(1, 3);
+    if (items.length >= 2 && items[0].durability <= P.restBelow && repairAffordable(st, items[0]) && !P.ablate.has('repair')) pick = items.slice(1, 3);
     gearIds.push(...pick.map((g) => g.id));
   }
-  const advRings = st.rings.filter((r) => ringDef(r.type).owner === 'adventurer');
+  const advRings = P.ablate.has('rings') ? [] : st.rings.filter((r) => ringDef(r.type).owner === 'adventurer');
   const ringIds = pickRings(advRings, P.ringW, cfg.rings.maxWorn).map((r) => r.id);
   const rings = ringTotals(st.rings.filter((r) => ringIds.includes(r.id)));
   const packed = st.gear.filter((g) => gearIds.includes(g.id));
@@ -1090,10 +1294,14 @@ function choosePlan(st, ctx, rec) {
   }
   const pool = order.slice(0, P.verifyTop);
   const safe = pool.filter((x) => x.p >= P.minWin);
-  const pick = safe.length ? safe.reduce((a, b) => (b.ev > a.ev ? b : a)) : evals.reduce((a, b) => (b.p > a.p ? b : a));
+  const pick = safe.length ? safe.reduce((a, b) => (b.ev > a.ev ? b : a)) : pool.reduce((a, b) => (b.p > a.p ? b : a));
   const bestP = {};
-  for (const t of TIERS) bestP[t] = Math.max(...evals.filter((x) => x.tier === t).map((x) => x.p));
-  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: safe.length > 0, bestP });
+  const meanP = {};
+  for (const t of TIERS) {
+    bestP[t] = Math.max(...evals.filter((x) => x.tier === t).map((x) => x.p));
+    meanP[t] = mean(evals.filter((x) => x.tier === t).map((x) => x.p));
+  }
+  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: safe.length > 0, bestP, meanP });
   return { enemyIndex: pick.i, gearIds, ringIds };
 }
 
@@ -1106,20 +1314,32 @@ function snapshot(st, P) {
   const swordDmg = best.sword ? gearStats(best.sword).damage : cfg.adventurer.unarmedDamage;
   const defense = sum(ARMOR_SLOTS.map((s) => (best[s] ? gearStats(best[s]).defense || 0 : 0)));
   const powers = Object.fromEntries(SLOTS.map((s) => [s, best[s] ? itemPower(best[s]) : 0]));
+  const mats = Object.fromEntries(SLOTS.map((s) => [s, best[s] ? best[s].material : 'none']));
   const label = Object.fromEntries(SLOTS.map((s) => [s, best[s] ? `${best[s].material} ${best[s].grade}${best[s].gem ? '+' + best[s].gem.type[0] : ''}` : '-']));
-  return { score: st.stats.score, swordDmg, defense, powers, label, rings: st.rings.length };
+  const gems = SLOTS.filter((s) => best[s] && best[s].gem).length;
+  return { score: st.stats.score, swordDmg, defense, powers, mats, label, gems, rings: st.rings.length };
 }
 
 function runBot(seed, D, P) {
   const st = newGame(seed);
-  const ctx = { P, cleared: new Set(), seed, tm: null };
-  const rec = { seed, deathDay: null, lastDay: 1, timeByDay: {}, snaps: {}, picks: [], gathered: {}, bars: {}, crafted: 0, repaired: 0, gemsUsed: 0, destroyed: 0, craftLog: [], tripDist: [] };
+  const ctx = { P, cleared: new WeakSet(), seed, tm: null };
+  const rec = {
+    seed, deathDay: null, lastDay: 1, timeByDay: {}, tripsByDay: {}, snaps: {}, picks: [], gathered: {}, bars: {},
+    crafted: 0, repaired: 0, repairBars: 0, repairPct: 0, gemsUsed: 0, destroyed: 0, craftLog: [], tripDist: [], tripItems: [],
+    wornOut: 0, wornOutMat: {}, repairBlocked: {},
+  };
   for (;;) {
     const day = st.day;
     ctx.tm = Object.fromEntries(TIME_CATS.map((c) => [c, 0]));
     workDay(st, ctx, rec);
     rec.timeByDay[day] = ctx.tm;
+    const before = st.gear.map((g) => ({ id: g.id, slot: g.slot, material: g.material }));
     const r = endDay(st);
+    for (const g of before) {
+      if (st.gear.some((x) => x.id === g.id)) continue; // gone after the fight = worn down to 0%
+      rec.wornOut += cfg.gear.slots[g.slot].bars;
+      rec.wornOutMat[g.material] = (rec.wornOutMat[g.material] || 0) + cfg.gear.slots[g.slot].bars;
+    }
     if (!r.ok) throw new Error(`seed ${seed} day ${day}: endDay failed: ${r.msg}`);
     if (r.report) {
       const pk = rec.picks.find((x) => x.day === day);
@@ -1137,7 +1357,7 @@ function runBot(seed, D, P) {
     }
     if (st.phase === 'report') acknowledgeReport(st);
     if (day >= D) break;
-    spendIntelPoints(st);
+    spendIntelPoints(st, P);
     const c = confirmPlan(st, choosePlan(st, ctx, rec));
     if (!c.ok) throw new Error(`seed ${seed} day ${day}: confirmPlan failed: ${c.msg}`);
   }
@@ -1150,33 +1370,46 @@ function runBot(seed, D, P) {
   rec.gemLeft = { ...st.storage.gem };
   const sb = smithBonuses(st);
   rec.smithBonus = Object.fromEntries(Object.entries(sb).filter(([, v]) => typeof v === 'number'));
-  rec.advRingTotals = ringTotals(pickRings(st.rings.filter((r) => ringDef(r.type).owner === 'adventurer'), P.ringW, cfg.rings.maxWorn));
+  rec.advRingTotals = P.ablate.has('rings') ? {} : ringTotals(pickRings(st.rings.filter((r) => ringDef(r.type).owner === 'adventurer'), P.ringW, cfg.rings.maxWorn));
   rec.fieldsTouched = Object.values(st.map.fields).filter((f) => f.cells.some((c) => c.searched > 0)).length;
   rec.mapProgress = mean(Object.values(st.map.fields).map((f) => mean(f.cells.map((c) => c.searched))));
   return rec;
 }
 
+// First day (end of day) on which pred(snapshot) holds, or NaN.
+function firstDay(r, pred) {
+  for (let d = 1; d <= r.lastDay; d++) if (r.snaps[d] && pred(r.snaps[d])) return d;
+  return NaN;
+}
+const slotsAtLeast = (sn, m) => SLOTS.filter((s) => MAT_RANK[sn.mats[s]] >= MAT_RANK[m]).length;
+const PROGRESS_TARGET = { iron: '5-8', steel: '12-18', mythril: '25+' };
+
 function botSection(o, T) {
-  const N = o.seeds ?? (o.quick ? 3 : 10);
-  const D = o.days;
-  const VT = T ?? valueTables(o.quick ? 30 : 200, o.quick ? 15 : 40);
+  const N = o.seeds ?? (o.quick ? 3 : 20);
+  const D = o.quick ? Math.min(o.days, 40) : o.days;
+  const VT = T ?? valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
   const P = botParams(VT, o);
-  h1(`BOT — ${N} runs x up to ${D} days (pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%)`);
-  note(`Gem order: ${P.gemOrder.join(' > ') || '(none worth it)'}; slot weights (win% per power unit): ` + SLOTS.map((s) => `${s} ${f1(P.slotW[s])}`).join(', '));
+  h1(`BOT — ${N} runs x up to ${D} days (pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%)` +
+    (P.ablate.size ? `  ABLATED: ${[...P.ablate].join(', ')}` : ''));
+  note(`Gem order: ${P.gemOrder.join(' > ') || '(none)'}; slot weights (win% per power unit): ` + SLOTS.map((s) => `${s} ${f1(P.slotW[s])}`).join(', '));
   note(`Adventurer ring weights (win% per ring point): ` + ADV_RINGS.map((t) => `${t} ${f2(P.ringW[t])}`).join(', '));
   const t0 = Date.now();
   const recs = [];
   for (let s = 0; s < N; s++) recs.push(runBot(mixSeed(31337, s), D, P));
   note(`(${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+  const dayList = (arr) => arr.filter((d) => d <= D);
 
-  // survival
+  // ---- survival
   h2('Survival');
-  const checkDays = [2, 3, 5, 7, 10, 15, 20, 25, 30, 35, 40, 50, 60].filter((d) => d <= D);
+  const checkDays = dayList([2, 3, 5, 7, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 100]);
   const alive = (r, d) => r.lastDay >= d && !(r.deathDay != null && r.deathDay <= d);
-  printTable(['day', ...checkDays.map(String)], [['% alive (end of day)', ...checkDays.map((d) => f0((100 * recs.filter((r) => alive(r, d)).length) / N))]]);
+  const alivePct = (d) => (100 * recs.filter((r) => alive(r, d)).length) / N;
+  printTable(['day', ...checkDays.map(String)], [['% alive (end of day)', ...checkDays.map((d) => f0(alivePct(d)))]]);
   const deaths = recs.filter((r) => r.deathDay != null);
-  note(`Deaths: ${deaths.length}/${N}. Death days: ${deaths.map((r) => r.deathDay).sort((a, b) => a - b).join(', ') || 'none'}; median ${f1(median(deaths.map((r) => r.deathDay)))}.`);
-  for (const r of deaths) {
+  const deathDays = deaths.map((r) => r.deathDay).sort((a, b) => a - b);
+  note(`Deaths: ${deaths.length}/${N} by day ${D}. Death days: ${deathDays.join(', ') || 'none'}; median ${f1(median(deathDays))}` +
+    ` (runs alive at day ${D} count as > ${D}: median lifetime ${median(recs.map((r) => r.deathDay ?? Infinity)) === Infinity ? `> ${D}` : f1(median(recs.map((r) => r.deathDay ?? Infinity)))}).`);
+  for (const r of deaths.slice(0, 12)) {
     const pk = r.picks.find((x) => x.day === r.deathDay);
     const sn = r.snaps[r.deathDay - 1] || {};
     note(`  seed#${recs.indexOf(r)} died day ${r.deathDay} vs ${pk ? pk.tier : '?'} (est. win ${pk ? f0(pk.p) : '?'}%${pk && !pk.safe ? ', no safe option' : ''}); gear: ${sn.label ? SLOTS.map((s) => sn.label[s]).join(' / ') : '?'}`);
@@ -1187,27 +1420,35 @@ function botSection(o, T) {
   note(`Score: mean ${f0(mean(scores))}, median ${f0(median(scores))}, min ${Math.min(...scores)}, max ${Math.max(...scores)}. ` +
     `Wins per run: ${TIERS.map((t) => `${t} ${f1(mean(recs.map((r) => r.wins[t])))}`).join(', ')}.`);
 
-  // tiers chosen + calibration
-  h2('Fights chosen (share of fights in each day range) and estimate vs result');
-  const ranges = [[2, 5], [6, 10], [11, 20], [21, 30], [31, 40], [41, 60]].filter(([a]) => a <= D);
+  // ---- tiers chosen + calibration + risk
+  h2('Fights chosen (share per day range), estimate vs result, and risk per fight');
+  const ranges = [[2, 5], [6, 10], [11, 20], [21, 30], [31, 40], [41, 50], [51, 60], [61, 80], [81, 120]].filter(([a]) => a <= D);
+  const pickRows = ranges.map(([a, b]) => {
+    const pk = recs.flatMap((r) => r.picks.filter((x) => x.day >= a && x.day <= b && x.win !== undefined));
+    const losses = pk.filter((x) => !x.win && !x.draw).length;
+    return { a, b, pk, losses };
+  });
   printTable(
-    ['days', 'fights', ...TIERS.map((t) => `${t} %`), 'mean est. win %', 'actual win %', 'no-safe-option days'],
-    ranges.map(([a, b]) => {
-      const pk = recs.flatMap((r) => r.picks.filter((x) => x.day >= a && x.day <= b && x.win !== undefined));
-      return [`${a}-${b}`, pk.length, ...TIERS.map((t) => f0((100 * pk.filter((x) => x.tier === t).length) / Math.max(1, pk.length))),
-        f1(mean(pk.map((x) => x.p))), f1((100 * pk.filter((x) => x.win || x.draw).length) / Math.max(1, pk.length)), pk.filter((x) => !x.safe).length];
-    }),
+    ['days', 'fights', ...TIERS.map((t) => `${t} %`), 'mean est. win %', 'actual win %', 'loss per fight %', 'no-safe-option fights'],
+    pickRows.map(({ a, b, pk, losses }) => [`${a}-${b}`, pk.length, ...TIERS.map((t) => f0((100 * pk.filter((x) => x.tier === t).length) / Math.max(1, pk.length))),
+      f1(mean(pk.map((x) => x.p))), f1((100 * pk.filter((x) => x.win || x.draw).length) / Math.max(1, pk.length)), f1((100 * losses) / Math.max(1, pk.length)), pk.filter((x) => !x.safe).length]),
   );
-  h2("Best estimated win % on the roster with the bot's own gear (mean over runs alive)");
-  const pdays = [2, 3, 5, 7, 10, 15, 20, 25, 30, 35, 40, 50, 60].filter((d) => d <= D);
+  h2("Best estimated win % on each day's roster with the bot's own gear (mean over runs alive)");
+  const pdays = dayList([2, 3, 5, 7, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80]);
   printTable(
     ['tier', ...pdays.map((d) => `d${d}`)],
     TIERS.map((t) => [t, ...pdays.map((d) => f0(mean(recs.flatMap((r) => r.picks.filter((x) => x.day === d).map((x) => x.bestP[t])))))]),
   );
+  const d2picks = recs.flatMap((r) => r.picks.filter((x) => x.day === 2));
+  const day1 = recs.map((r) => r.craftLog.filter((c) => c.day === 1));
+  const d1label = (c) => `${c.material[0].toUpperCase()}${c.grade} ${c.slot}`;
+  note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean est. over the roster's enemies of the tier): ` +
+    TIERS.map((t) => `${t} ${f0(mean(d2picks.map((x) => x.meanP[t])))}%`).join(', ') + ` (target ${DAY2_TARGET.normal.join('-')} / ${DAY2_TARGET.elite.join('-')} / <${DAY2_TARGET.champion[1]}).`);
+  note(`Day-1 smithing: ${f1(mean(day1.map((c) => c.length)))} pieces/run; e.g. ${day1.slice(0, 6).map((cs) => cs.map(d1label).join(' + ') || 'nothing').join(' | ')}`);
 
-  // gear over time
+  // ---- gear over time
   h2('Gear over time (end of day, runs still alive)');
-  const gdays = [1, 2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 60].filter((d) => d <= D);
+  const gdays = dayList([1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80]);
   const modal = (arr) => {
     const c = {};
     for (const x of arr) c[x] = (c[x] || 0) + 1;
@@ -1215,47 +1456,75 @@ function botSection(o, T) {
     return e ? e[0] : '-';
   };
   printTable(
-    ['day', 'alive', 'sword dmg', 'total def %', ...SLOTS.map((s) => `${s} pow`), 'common sword', 'common chest', 'rings', 'score'],
+    ['day', 'alive', 'sword dmg', 'total def %', ...SLOTS.map((s) => `${s} pow`), 'slots>=iron', '>=steel', '>=myth', 'gems', 'common sword', 'common chest', 'rings', 'score'],
     gdays.map((d) => {
       const sn = recs.map((r) => r.snaps[d]).filter(Boolean);
       return [d, sn.length, f1(mean(sn.map((x) => x.swordDmg))), f1(mean(sn.map((x) => x.defense))), ...SLOTS.map((s) => f2(mean(sn.map((x) => x.powers[s])))),
-        modal(sn.map((x) => x.label.sword)), modal(sn.map((x) => x.label.chest)), f1(mean(sn.map((x) => x.rings))), f0(mean(sn.map((x) => x.score)))];
+        f1(mean(sn.map((x) => slotsAtLeast(x, 'iron')))), f1(mean(sn.map((x) => slotsAtLeast(x, 'steel')))), f1(mean(sn.map((x) => slotsAtLeast(x, 'mythril')))),
+        f1(mean(sn.map((x) => x.gems))), modal(sn.map((x) => x.label.sword)), modal(sn.map((x) => x.label.chest)), f1(mean(sn.map((x) => x.rings))), f0(mean(sn.map((x) => x.score)))];
     }),
   );
+  h2('Progression milestones (median day over runs that got there; target in brackets)');
+  const prog = {};
+  const progRows = ['iron', 'steel', 'mythril'].map((m) => {
+    const first = recs.map((r) => (r.craftLog.find((c) => MAT_RANK[c.material] >= MAT_RANK[m]) || { day: NaN }).day).filter(Number.isFinite);
+    const sword = recs.map((r) => firstDay(r, (sn) => MAT_RANK[sn.mats.sword] >= MAT_RANK[m])).filter(Number.isFinite);
+    const three = recs.map((r) => firstDay(r, (sn) => slotsAtLeast(sn, m) >= 3)).filter(Number.isFinite);
+    const all = recs.map((r) => firstDay(r, (sn) => slotsAtLeast(sn, m) >= 5)).filter(Number.isFinite);
+    prog[m] = { first: median(first), three: median(three) };
+    const fmt = (a) => `${f0(median(a))} (${a.length}/${N})`;
+    return [`${m} [${PROGRESS_TARGET[m]}]`, fmt(first), fmt(sword), fmt(three), fmt(all)];
+  });
+  printTable(['material >=', 'first piece', 'sword', '3 of 5 slots', 'all 5 slots'], progRows);
 
-  // time split
+  // ---- time split
   h2(`Daily time split (minutes per day, mean over days in range; day = ${DAY_LEN} min)`);
-  const tr = [[1, 1], [2, 5], [6, 10], [11, 20], [21, 30], [31, 40], [41, 60]].filter(([a]) => a <= D);
+  const tr = [[1, 1], [2, 5], [6, 10], [11, 20], [21, 30], [31, 40], [41, 60], [61, 120]].filter(([a]) => a <= D);
+  const daysIn = (a, b) => recs.flatMap((r) => Object.entries(r.timeByDay).filter(([d]) => d >= a && d <= b).map(([d, t]) => ({ t, trips: r.tripsByDay[d] || 0 })));
+  const miningPct = (days) => {
+    const mine = sum(days.map((x) => sum(MINING.map((c) => x.t[c]))));
+    const used = sum(days.map((x) => sum(TIME_CATS.map((c) => x.t[c]))));
+    return (100 * mine) / Math.max(1, used);
+  };
   printTable(
-    ['days', ...TIME_CATS, 'idle'],
+    ['days', ...TIME_CATS, 'idle', 'mining % of used', 'trips/day'],
     tr.map(([a, b]) => {
-      const days = recs.flatMap((r) => Object.entries(r.timeByDay).filter(([d]) => d >= a && d <= b).map(([, t]) => t));
-      const m = (c) => mean(days.map((t) => t[c]));
+      const days = daysIn(a, b);
+      const m = (c) => mean(days.map((x) => x.t[c]));
       const used = sum(TIME_CATS.map(m));
-      return [`${a}-${b}`, ...TIME_CATS.map((c) => f0(m(c))), f0(DAY_LEN - used)];
+      return [`${a}-${b}`, ...TIME_CATS.map((c) => f0(m(c))), f0(DAY_LEN - used), f0(miningPct(days)), f1(mean(days.map((x) => x.trips)))];
     }),
   );
+  const tripHist = [0, 1, 2, 3, 4, 5].map((n) => [n, recs.flatMap((r) => Object.values(r.tripsByDay)).filter((x) => x === n).length]);
+  const nDays = sum(tripHist.map(([, c]) => c));
+  note(`Trips per day: ${tripHist.filter(([, c]) => c).map(([n, c]) => `${n}: ${f0((100 * c) / nDays)}%`).join(', ')}; items per trip: mean ${f1(mean(recs.flatMap((r) => r.tripItems)))}` +
+    ` (bag ${BAG}; full ${f0((100 * recs.flatMap((r) => r.tripItems).filter((x) => x >= BAG).length) / Math.max(1, recs.flatMap((r) => r.tripItems).length))}% of trips).`);
 
-  // economy of the bot
+  // ---- economy of the bot
   h2('What the bot gathered and made (per run)');
   const types = [...ORES.map((x) => `ore:${x}`), ...GEMS.map((x) => `gem:${x}`)];
   printTable(['raw item', ...types.map((t) => t.split(':')[1])], [
     ['gathered', ...types.map((t) => f0(mean(recs.map((r) => r.gathered[t] || 0))))],
     ['left unprocessed', ...types.map((t) => f0(mean(recs.map((r) => (t.startsWith('ore:') ? r.oreLeft[t.slice(4)] : r.gemLeft[t.slice(4)]) || 0))))],
   ]);
+  const barsMade = mean(recs.map((r) => sum(Object.values(r.bars))));
+  const repairBars = mean(recs.map((r) => r.repairBars));
+  const repairMin = mean(recs.map((r) => sum(Object.values(r.timeByDay).map((t) => t.repair))));
+  const usedMin = mean(recs.map((r) => sum(Object.values(r.timeByDay).map((t) => sum(TIME_CATS.map((c) => t[c]))))));
   note(`Bars made: ${BARS.map((b) => `${b} ${f0(mean(recs.map((r) => r.bars[b] || 0)))}`).join(', ')}. ` +
-    `Crafted ${f1(mean(recs.map((r) => r.crafted)))} items (${f1(mean(recs.map((r) => r.gemsUsed)))} with gems), ` +
-    `${f1(mean(recs.map((r) => r.repaired)))} repairs, ${f1(mean(recs.map((r) => r.destroyed)))} items destroyed by wear. ` +
+    `Crafted ${f1(mean(recs.map((r) => r.crafted)))} items (${f1(mean(recs.map((r) => r.gemsUsed)))} with gems). ` +
     `Map searched: ${f0(mean(recs.map((r) => r.mapProgress)))}% (fields touched ${f1(mean(recs.map((r) => r.fieldsTouched)))}).`);
-  const td = [[1, 5], [6, 10], [11, 20], [21, 40], [41, 60]].filter(([a]) => a <= D);
+  const wornOut = mean(recs.map((r) => r.wornOut));
+  note(`Durability: ${f1(mean(recs.map((r) => r.repaired)))} repairs/run (${f0(mean(recs.map((r) => r.repairPct)))} durability points), ` +
+    `${f1(repairBars)} bars spent on repairs = ${f1((100 * repairBars) / Math.max(1, barsMade))}% of bars made, repair time ${f1((100 * repairMin) / Math.max(1, usedMin))}% of working time; ` +
+    `${f1(mean(recs.map((r) => r.destroyed)))} items destroyed by wear (${f1(wornOut)} bars = ${f1((100 * wornOut) / Math.max(1, barsMade))}% of bars made; ` +
+    BARS.map((b) => `${b} ${f1(mean(recs.map((r) => r.wornOutMat[b] || 0)))}`).join(', ') + ').');
+  note(`Repair blocked (a worn top-2 item below ${P.repairBelow}% with no bars of its exact material+grade in storage): ` +
+    `${f1(mean(recs.map((r) => Object.keys(r.repairBlocked).length)))} days/run, ${f1(mean(recs.map((r) => sum(Object.values(r.repairBlocked)))))} item-days/run.`);
   note('Trips per run by field distance: ' + [1, 2, 3, 4, 5].map((d) => `d${d === 5 ? '5+' : d} ${f1(mean(recs.map((r) => r.tripDist.filter((x) => Math.min(5, x) === d).length)))}`).join(', ') +
     `; mean trip distance ${f2(mean(recs.flatMap((r) => r.tripDist)))}.`);
-  void td;
-  const firstCraft = (pred) => median(recs.map((r) => (r.craftLog.find(pred) || { day: NaN }).day).filter(Number.isFinite));
-  note('Median day of first crafted piece: ' + BARS.map((b) => `${b} ${f0(firstCraft((c) => c.material === b))}`).join(', ') +
-    `; first full set (5 slots) day ${f0(median(recs.map((r) => (Object.entries(r.snaps).find(([, s]) => SLOTS.every((x) => s.powers[x] > 0)) || [NaN])[0]).map(Number).filter(Number.isFinite)))}.`);
 
-  // rings, skills, intel
+  // ---- rings, skills, intel
   h2('Rings, skills, intel (end of run)');
   const gi = (g) => GRADES.indexOf(g);
   note(`Rings collected: ${f1(mean(recs.map((r) => r.rings.length)))} (smith ${f1(mean(recs.map((r) => r.rings.filter((x) => ringDef(x.type).owner === 'smith').length)))}, ` +
@@ -1270,28 +1539,30 @@ function botSection(o, T) {
   note('Per-material skill levels (non-zero): ' + (perTop.map(([k, v]) => `${k} ${f1(v)}`).join(', ') || 'none'));
   note('Intel spent: ' + Object.keys(recs[0].intel).map((k) => `${k} ${f1(mean(recs.map((r) => r.intel[k])))}`).join(', '));
 
-  // one-line summary for comparing what-if runs
-  const at = (d, f) => f2(mean(recs.map((r) => r.snaps[d]).filter(Boolean).map(f)));
-  const armorPow = (sn) => mean(ARMOR_SLOTS.map((x) => sn.powers[x]));
-  const sd = [5, 10, 20, 30, 40].filter((d) => d <= D);
-  const firstMat = (m) => f0(median(recs.map((r) => (r.craftLog.find((c) => c.material === m) || { day: NaN }).day).filter(Number.isFinite)));
-  console.log(`\nBOT SUMMARY | alive ${[10, 20, 30, 40, 50, 60].filter((d) => d <= D).map((d) => `d${d}:${f0((100 * recs.filter((r) => alive(r, d)).length) / N)}%`).join(' ')}` +
-    ` | median death ${f1(median(recs.filter((r) => r.deathDay != null).map((r) => r.deathDay)))}` +
-    ` | score ${f0(mean(scores))} | first steel/mythril piece day ${firstMat('steel')}/${firstMat('mythril')}` +
-    ` | sword pow ${sd.map((d) => `d${d}:${at(d, (x) => x.powers.sword)}`).join(' ')}` +
-    ` | armor pow ${sd.map((d) => `d${d}:${at(d, armorPow)}`).join(' ')}` +
-    ` | trip dist ${f2(mean(recs.flatMap((r) => r.tripDist)))} | idle d21+ ${f0(mean(recs.flatMap((r) => Object.entries(r.timeByDay).filter(([d]) => d > 20).map(([, t]) => DAY_LEN - sum(TIME_CATS.map((c) => t[c]))))))}m`);
+  // ---- one-line summary for comparing what-if runs
+  const mid = recs.flatMap((r) => r.picks.filter((x) => x.day >= 11 && x.day <= 30 && x.win !== undefined));
+  const share = (arr, t) => f0((100 * arr.filter((x) => x.tier === t).length) / Math.max(1, arr.length));
+  const d2 = recs.flatMap((r) => r.picks.filter((x) => x.day === 2));
+  const life = median(recs.map((r) => r.deathDay ?? Infinity));
+  console.log(`\nBOT SUMMARY | alive ${dayList([10, 20, 30, 40, 50, 60, 80]).map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')}` +
+    ` | median life ${life === Infinity ? `>${D}` : f1(life)} | score ${f0(mean(scores))}` +
+    ` | d2 typical est n/e/c ${TIERS.map((t) => f0(mean(d2.map((x) => x.meanP[t])))).join('/')}` +
+    ` | first iron/steel/myth piece d${f0(prog.iron.first)}/${f0(prog.steel.first)}/${f0(prog.mythril.first)}` +
+    ` | 3-slot iron/steel/myth d${f0(prog.iron.three)}/${f0(prog.steel.three)}/${f0(prog.mythril.three)}` +
+    ` | d11-30 fights n/e/c ${TIERS.map((t) => share(mid, t)).join('/')}%` +
+    ` | mining ${f0(miningPct(daysIn(2, D)))}% trips/day ${f1(mean(daysIn(2, D).map((x) => x.trips)))} idle ${f0(mean(daysIn(2, D).map((x) => DAY_LEN - sum(TIME_CATS.map((c) => x.t[c])))))}m` +
+    ` | repair ${f1((100 * repairBars) / Math.max(1, barsMade))}% bars ${f1((100 * repairMin) / Math.max(1, usedMin))}% time`);
   return recs;
 }
 
 // ================================================================= MAIN =====
 function main() {
   const o = ARGS;
-  if (o.set.length) console.log(`WHAT-IF overrides (memory only): ${o.set.map(([k, v]) => `${k}=${v}`).join('  ')}`);
   if (o.help) {
     console.log(readHelp());
     return;
   }
+  if (SET_LOG.length) console.log(`WHAT-IF overrides (memory only):\n${SET_LOG.map((x) => `  ${x}`).join('\n')}`);
   const t0 = Date.now();
   let T = null;
   const run = (name, fn) => {
@@ -1306,20 +1577,19 @@ function main() {
 }
 
 function readHelp() {
-  return `Smithsy balance report
-  node tools/balance.mjs [--section economy|power|bot|all] [--seeds N] [--days N]
-                         [--samples N] [--minwin P] [--future F] [--quick] [--set path=value ...]
-  --section  economy | power | bot | all (default all)
-  --seeds    economy: maps (default 100); bot: runs (default 10)
-  --days     bot: last day to play (default 40)
-  --samples  power: hidden-attribute guesses per cell (default 100, x50 fights)
-  --minwin   bot: minimum estimated win % to accept a fight (default 90)
-  --future   bot: points a survival is worth when comparing fights (default 500)
-  --quick    small sample sizes
-  --set      override a CONFIG value in memory, e.g. --set map.travelMinPerStep=30
-             --set gear.slots.chest.stats.defense=10 (repeatable; value parsed as JSON)`;
+  const src = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n');
+  const out = [];
+  for (const line of src.slice(2)) {
+    if (!line.startsWith('//')) break;
+    if (line.startsWith('// ====')) break;
+    out.push(line.replace(/^\/\/ ?/, ''));
+  }
+  return out.join('\n');
 }
 
-export { runBot, botParams, valueTables, economySection, powerSection, botSection, centerOptions, chooseField, makeValueFn, campReserve };
+export {
+  applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, botSection,
+  centerOptions, chooseField, makeValueFn, campReserve, winPct, setOf, mkItem,
+};
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (IS_MAIN) main();

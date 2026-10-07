@@ -3,7 +3,7 @@
 import { h, section, bar, num } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, statsText, repairInfo, repair, scrap, STAT_LABELS } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, repairInfo, repair, scrap, STAT_LABELS } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, round2, EPS } from '../core/util.js';
@@ -20,7 +20,9 @@ const qty = (v) => {
 };
 const enough = (have, need) => (have || 0) + EPS >= need;
 const outcomeLabel = (g) => (g === 'F' ? 'Fail' : g);
-const statLabel = (k) => STAT_LABELS[k] || k;
+// pierce resistance is a % of the enemy's piercing ignored
+const statLabel = (k) => (k === 'pierceRes' ? 'Pierce resistance %' : STAT_LABELS[k] || k);
+const statLine = (stats) => Object.entries(stats).map(([k, v]) => `${statLabel(k)} ${num(v)}`).join(', ');
 const mins = (m) => formatDuration(m);
 
 // Small table. Cells: string | Node | { v, cls, title, span }. Rows: array of cells, or { attrs, cells }.
@@ -87,7 +89,7 @@ function statusBar(ctx, blocked) {
   return h('div', { class: 'ws-status' },
     h('b', {}, 'At camp'), ' · ', formatClock(s.time), ' · ',
     left > 0
-      ? h('span', {}, h('b', {}, mins(left)), ' of work time left today (day ends 18:00)')
+      ? h('span', {}, h('b', {}, mins(left)), ` of work time left today (day ends ${formatClock(cfg.time.dayEndMin)})`)
       : h('span', { class: 'warn' }, 'No work time left today. End the day from the top bar.'));
 }
 
@@ -447,7 +449,7 @@ function gearPanel(ctx, blocked) {
       cells: [
         h('div', {}, h('b', { class: `grade-${item.grade}` }, gearName(item)),
           item.packed ? h('div', {}, h('span', { class: 'chip ws-chip-packed' }, 'with the adventurer today')) : null),
-        h('span', { class: 'ws-statstext' }, statsText(gearStats(item, cfg))),
+        h('span', { class: 'ws-statstext' }, statLine(gearStats(item, cfg))),
         h('div', { class: 'ws-durcell' }, bar(d, `ws-dur ${d >= 60 ? 'hi' : d >= 30 ? 'mid' : 'lo'}`), h('span', { class: 'num' }, `${num(d)}%`)),
         repairCell,
         h('button', {

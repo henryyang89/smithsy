@@ -202,7 +202,9 @@ export function resolveBattle(state, cfg = CONFIG) {
   if (state.battles.length > MAX_BATTLES) state.battles.splice(0, state.battles.length - MAX_BATTLES);
   addLog(state, result.win
     ? `Victory over ${e.name} in ${result.time.toFixed(1)}s. Got ring: ${report.ringText}.`
-    : `The adventurer fell to ${e.name} after ${result.time.toFixed(1)}s.`);
+    : result.draw
+      ? `The fight with ${e.name} was called off after ${result.time.toFixed(1)}s: a draw (the adventurer survives, no ring).`
+      : `The adventurer fell to ${e.name} after ${result.time.toFixed(1)}s.`);
   if (destroyed.length) addLog(state, `Destroyed (0% durability): ${destroyed.join(', ')}.`);
   state.plan = null;
   return report;

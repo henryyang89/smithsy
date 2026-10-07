@@ -23,10 +23,9 @@ const signedPct = (v) => `${v > 0 ? '+' : ''}${num(v, 1)}%`;
 const LV = { low: 'Low', normal: 'Normal', high: 'High' };
 const SCOUT_TRACKS = ['enemySight', 'ringTypeSight', 'ringGradeSight'];
 
-// "25%", "20 pts", "120", "+5%" — the attribute's value with its unit.
+// "25%", "120", "+5%" — the attribute's value with its unit (pierce resistance is a % of your piercing ignored).
 export function attrValueText(key, level, cfg) {
   const v = cfg.enemies.attributes[key].values[level];
-  if (key === 'pierceRes') return `${v} pts`;
   if (key === 'accurate' || key === 'evasion') return String(v);
   if (key === 'fast') return `${v > 0 ? '+' : ''}${v}%`;
   return `${v}%`;
@@ -63,7 +62,7 @@ export function gearStatsText(g, cfg) {
   if (v('magicPct')) parts.push(`Magic +${f1(v('magicPct'))}% of damage`);
   if (v('magicRes')) parts.push(`Magic resist ${f1(v('magicRes'))}%`);
   if (v('pierce')) parts.push(`Piercing ${f1(v('pierce'))}%`);
-  if (v('pierceRes')) parts.push(`Pierce resist ${f1(v('pierceRes'))} pts`);
+  if (v('pierceRes')) parts.push(`Pierce resist ${f1(v('pierceRes'))}% of enemy piercing`);
   if (v('stunChance')) parts.push(`Stun ${f1(v('stunChance'))}% for ${f2(v('stunDur'))}s`);
   if (v('stunChanceRed')) parts.push(`Stun resist ${f1(v('stunChanceRed'))}% chance / ${f1(v('stunDurRed'))}% duration`);
   if (v('slowPct')) parts.push(`Slow ${f1(v('slowPct'))}% for ${f2(v('slowDur'))}s`);
@@ -104,7 +103,7 @@ export function ringNameNode(r, cfg) {
 const STAT_ROWS = [
   { k: 'hp', label: 'Max HP', fmt: f1, always: true },
   { k: 'damage', label: 'Damage per hit', fmt: f1, always: true },
-  { k: 'interval', label: 'Attacks every', fmt: (v) => `${f2(v)}s`, get: (c) => attackInterval(c, false, 0), always: true },
+  { k: 'interval', label: 'Attack bar fills in', fmt: (v) => `${f2(v)}s`, get: (c) => attackInterval(c, false, 0), always: true },
   { k: 'accuracy', label: 'Accuracy', fmt: f1, always: true },
   { k: 'dodge', label: 'Dodge', fmt: f1, always: true },
   { k: 'defense', label: 'Defense (damage reduction)', fmt: pctf, always: true },
@@ -112,12 +111,12 @@ const STAT_ROWS = [
   { k: 'magicPct', label: 'Magic damage (% of damage)', fmt: pctf },
   { k: 'magicRes', label: 'Magic resistance', fmt: pctf },
   { k: 'pierce', label: 'Piercing (% of defense ignored)', fmt: pctf },
-  { k: 'pierceRes', label: 'Pierce resistance', fmt: (v) => `${f1(v)} pts` },
+  { k: 'pierceRes', label: 'Pierce resistance (% of piercing ignored)', fmt: pctf },
   { k: 'stunChance', label: 'Stun chance per hit', fmt: pctf },
-  { k: 'stunDur', label: 'Stun duration', fmt: (v) => `${f2(v)}s` },
+  { k: 'stunDur', label: 'Stun duration (bar stops)', fmt: (v) => `${f2(v)}s` },
   { k: 'stunChanceRed', label: 'Stun chance reduction', fmt: pctf },
   { k: 'stunDurRed', label: 'Stun duration reduction', fmt: pctf },
-  { k: 'slowPct', label: 'Slow on hit', fmt: pctf },
+  { k: 'slowPct', label: 'Slow on hit (bar fills slower)', fmt: pctf },
   { k: 'slowDur', label: 'Slow duration', fmt: (v) => `${f2(v)}s` },
   { k: 'slowRed', label: 'Slow strength reduction', fmt: pctf },
   { k: 'slowDurRed', label: 'Slow duration reduction', fmt: pctf },
@@ -257,12 +256,18 @@ export function renderCombatLog(report) {
     }
     return h('div', { class: `adv-line ${e.side}${e.hit ? '' : ' miss'}` }, h('span', { class: 't' }, `[${e.t.toFixed(1)}s] `), text);
   };
-  // Very long fights: show the start and the end.
+  // Very long fights: show the start and the end. Saved reports of very long fights are already
+  // trimmed by the core (report.logTrimmed = attacks from the middle that were not saved).
   const HEAD = 1000;
   const TAIL = 300;
+  const trimmed = report.logTrimmed > 0 ? report.logTrimmed : 0;
   let shown = entries.map(line);
   if (entries.length > HEAD + TAIL) {
-    shown = [...entries.slice(0, HEAD).map(line), h('div', { class: 'adv-line muted' }, `… ${entries.length - HEAD - TAIL} more attacks …`), ...entries.slice(-TAIL).map(line)];
+    const hiddenHere = entries.length - HEAD - TAIL;
+    const more = hiddenHere + trimmed;
+    shown = [...entries.slice(0, HEAD).map(line),
+      h('div', { class: 'adv-line muted adv-gap' }, `… ${more} more attacks${trimmed ? ` (${trimmed} not saved: log trimmed)` : ''} …`),
+      ...entries.slice(-TAIL).map(line)];
   }
   const end = report.win ? `${en} is defeated after ${f1(report.time)}s.` : report.draw ? `Safety time cap reached after ${f1(report.time)}s — draw.` : `The adventurer falls after ${f1(report.time)}s.`;
   return h('div', { class: 'combatlog' },
@@ -279,8 +284,9 @@ function hpRow(label, hp, max, cls) {
     h('span', { class: 'adv-hpnum' }, `${f1(hp)} / ${f1(max)} HP`));
 }
 
-function summaryTable(report) {
+function summaryTable(report, cfg) {
   const S = report.summary;
+  const c = cfg.combat;
   const en = report.enemy.name;
   if (!S) return h('p', { class: 'muted' }, 'No summary recorded.');
   const sides = [
@@ -293,13 +299,13 @@ function summaryTable(report) {
     h('tbody', {},
       row('Attacks', (s) => String(s.st.attacks)),
       row('Hits', (s) => `${s.st.hits} (${s.st.attacks ? Math.round((s.st.hits / s.st.attacks) * 100) : 0}% landed)`),
-      row('Hit chance', (s) => pctf(s.hit * 100, 0), 'Accuracy vs dodge S-curve, clamped to 5-95%'),
+      row('Hit chance', (s) => pctf(s.hit * 100, 0), `Accuracy vs dodge S-curve, clamped to ${c.minHitPct}-${c.maxHitPct}%`),
       row('Avg damage per hit', (s) => (s.st.hits ? f1(s.st.dmg / s.st.hits) : '—')),
-      row('Per hit before roll', (s) => `${f1(s.dmg.phys)} phys + ${f1(s.dmg.magic)} magic`, 'Each hit rolls 90-110% of this'),
-      row('Target defense after piercing', (s) => pctf(s.dmg.effDef)),
+      row('Per hit before roll', (s) => `${f1(s.dmg.phys)} phys + ${f1(s.dmg.magic)} magic`, `Each hit rolls ${c.damageRoll[0]}-${c.damageRoll[1]}% of this`),
+      row('Target defense after piercing', (s) => pctf(s.dmg.effDef), 'Defense x (1 - effective piercing %); effective piercing = piercing x (1 - target\'s pierce resistance %)'),
       row('Total damage', (s) => f1(s.st.dmg)),
-      row('Stuns landed', (s) => (s.st.stuns ? `${s.st.stuns} (${f1(s.foe.stunnedFor)}s total)` : '0')),
-      row('Slows landed', (s) => String(s.st.slows))));
+      row('Stuns landed', (s) => (s.st.stuns ? `${s.st.stuns} (${f1(s.foe.stunnedFor)}s total)` : '0'), 'A stun stops the target\'s attack bar for its duration (stuns do not stack; a new one refreshes the timer)'),
+      row('Slows landed', (s) => String(s.st.slows), 'A slow makes the target\'s attack bar fill slower for its duration (slows do not stack; the stronger one is kept and the timer refreshes)')));
 }
 
 // Full report body. opts: { headline (default true), log (default true) }
@@ -324,10 +330,21 @@ export function renderBattleReport(report, ctx, opts = {}) {
     h('td', {}, w.name),
     h('td', { class: 'num err' }, `-${w.loss}%`),
     h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${f1(w.left)}% left`)));
+  // Packed but unused (report.packedIds; older saves may not have it). Unused items do not wear.
+  const usedIds = report.usedIds || [];
+  const unusedIds = Array.isArray(report.packedIds) ? report.packedIds.filter((id) => !usedIds.includes(id)) : [];
+  const unusedNode = unusedIds.length
+    ? h('p', { class: 'adv-tight muted adv-small' }, `Packed but not used (no wear): `,
+      unusedIds.map((id, i) => {
+        const g = ctx.state.gear.find((x) => x.id === id);
+        return [i ? ', ' : '', g ? gearNameNode(g) : 'an item you no longer own'];
+      }), '.')
+    : null;
   const gearPanel = section('Gear the adventurer used',
     report.usedNames.length
       ? h('p', { class: 'adv-tight' }, 'Picked from the packed gear after seeing the enemy: ', h('b', {}, report.usedNames.join(', ')), '.')
-      : h('p', { class: 'adv-tight muted' }, 'No gear — fought unarmed.'),
+      : h('p', { class: 'adv-tight muted' }, Array.isArray(report.packedIds) && report.packedIds.length ? 'No gear used — fought unarmed.' : 'No gear — fought unarmed.'),
+    unusedNode,
     wearRows.length ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)) : null,
     destroyed.length ? h('p', { class: 'err' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
     h('h4', { class: 'adv-h4' }, 'Reward'),
@@ -342,13 +359,20 @@ export function renderBattleReport(report, ctx, opts = {}) {
   const parts = [
     head,
     h('div', { class: 'cols' }, gearPanel, enemyPanel),
-    section('Summary', summaryTable(report),
+    section('Summary', summaryTable(report, cfg),
       report.adv && report.enemyC
         ? h('details', { class: 'adv-details' }, h('summary', {}, 'Combat stats of both sides'),
           combatStatsTable([{ label: 'Adventurer', c: report.adv }, { label: en, c: report.enemyC }]))
         : null),
   ];
-  if (opts.log !== false) parts.push(section(`Combat log (${(report.log || []).length} attacks)`, renderCombatLog(report)));
+  if (opts.log !== false) {
+    const attacks = (report.log || []).length + (report.logTrimmed > 0 ? report.logTrimmed : 0);
+    parts.push(section(`Combat log (${attacks} attacks${report.logTrimmed > 0 ? ', log trimmed' : ''})`,
+      report.logTrimmed > 0
+        ? h('p', { class: 'adv-tight muted adv-small' }, `Very long fight: ${report.logTrimmed} attacks from the middle were not saved (log trimmed). The start and the end are shown.`)
+        : null,
+      renderCombatLog(report)));
+  }
   return h('div', { class: 'adv-report' }, parts);
 }
 
@@ -570,7 +594,7 @@ function gearStep(ctx, p, selGear) {
     const n = counts[slot] || 0;
     rows.push(h('tr', { class: 'adv-slotrow' }, h('td', { colspan: 3 },
       h('b', {}, cap(slot)), h('span', { class: 'muted' }, ` · ${n}/2 packed`),
-      items.length === 0 ? h('span', { class: 'muted' }, slot === 'sword' ? ' · none owned (unarmed: 4 damage)' : ' · none owned')
+      items.length === 0 ? h('span', { class: 'muted' }, slot === 'sword' ? ` · none owned (unarmed: ${num(cfg.adventurer.unarmedDamage, 2)} damage)` : ' · none owned')
         : n === 0 ? h('span', { class: 'warn' }, ` · nothing packed (you own ${items.length})`) : null)));
     for (const g of items) {
       const on = p.gearIds.includes(g.id);
@@ -677,7 +701,7 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, key) {
     const nHidden = Object.keys(cfg.enemies.attributes).length - Object.keys(known).length;
     const o = cfg.sim;
     const how = h('p', { class: 'muted adv-small' },
-      `${o.samples} guesses of the ${nHidden} hidden attribute${nHidden === 1 ? '' : 's'} (consistent with the tier mix). For each guess the adventurer picks the best packed gear (${o.fightsPerLoadout} test fights per combination), then fights ${o.evalFights} fresh fights: ${o.samples * o.evalFights} fights in total.`);
+      `${o.samples} guesses of the ${nHidden} hidden attribute${nHidden === 1 ? '' : 's'} (consistent with the tier mix). For each guess the adventurer picks the best packed gear (${o.fightsPerLoadout} test fights per combination), then fights ${o.evalFights} fresh fights: ${o.samples * o.evalFights} fights in total. A draw (safety time cap) counts as survival.`);
     if (running && running.key === key) {
       right = h('div', {},
         h('div', { class: 'bar adv-progress' }, h('div', { id: 'adv-est-fill', class: 'bar-fill', style: { width: `${Math.round(running.progress * 100)}%` } })),

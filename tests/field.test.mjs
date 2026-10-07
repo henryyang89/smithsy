@@ -6,10 +6,21 @@ import {
   debrisMinutesPerCell, returnMinutes, currentField,
 } from '../js/core/map.js';
 import { smithBonuses } from '../js/core/bonuses.js';
-import { game, cfgWith, cell, idx, standInBlankField, addRing, setSkillLevel, DAY_END, DAY_START } from './helpers.mjs';
+import { intelChance } from '../js/core/intel.js';
+import { game, cfgWith, cell, idx, standInBlankField, addRing, setSkillLevel, ringVal, DAY_END, DAY_START } from './helpers.mjs';
 
-const NO_REVEAL = cfgWith({ intel: { tracks: { oreSight: { base: 0 } } } });
-const ALL_REVEAL = cfgWith({ intel: { tracks: { oreSight: { base: 100 } } } });
+// Pinned field numbers: the hand-computed times/percentages below hold whatever CONFIG says.
+const PIN = {
+  field: { searchMin: 30, searchEfficiency: 25, debrisClearMin: 15 },
+  map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
+  processing: { maxTimeReduction: 75 },
+  skills: { xpBase: 100, maxLevel: 10, activity: { searchTime: { perLevel: 0.5 }, searchEff: { perLevel: 1 }, debris: { perLevel: 2 }, returnTravel: { perLevel: 0.5 } } },
+  rings: { duplicateFactor: 0.5, types: { searchTime: { values: [5, 6, 7, 8, 10] }, searchEff: { values: [10, 12, 14, 16, 20] }, reveal: { values: [3, 4, 5, 6, 7] }, travelTime: { values: [5, 6, 7, 8, 10] } } },
+  intel: { gainsPerPoint: [10, 9, 8, 7, 6, 5, 4, 3, 2], minGain: 1, maxChance: 100, tracks: { oreSight: { base: 10 } } },
+};
+const CFG = cfgWith(PIN);
+const NO_REVEAL = cfgWith(PIN, { intel: { tracks: { oreSight: { base: 0 } } } });
+const ALL_REVEAL = cfgWith(PIN, { intel: { tracks: { oreSight: { base: 100 } } } });
 
 function setup(seed = 3) {
   const s = game(seed);
@@ -55,7 +66,7 @@ test('a search that completes a cell finds everything left in it', () => {
 
 test('efficiency 25 -> 4 searches fully search an area; a 5th is refused', () => {
   const { s, f } = setup();
-  assert.equal(searchEfficiency(s), 25);
+  assert.equal(searchEfficiency(s, NO_REVEAL), 25);
   for (let i = 1; i <= 4; i++) {
     assert.equal(search(s, 3, 3, NO_REVEAL).ok, true);
     for (const c of areaCells(3, 3)) assert.equal(f.cells[c].searched, Math.min(100, 25 * i));
@@ -67,9 +78,16 @@ test('efficiency 25 -> 4 searches fully search an area; a 5th is refused', () =>
   assert.equal(s.time, t, 'refused search costs no time');
 });
 
+test('search time / efficiency default to CONFIG with no bonuses', () => {
+  const { s } = setup();
+  assert.equal(searchMinutes(s), CONFIG.field.searchMin);
+  assert.equal(searchEfficiency(s), CONFIG.field.searchEfficiency);
+  assert.equal(debrisMinutesPerCell(s), CONFIG.field.debrisClearMin);
+});
+
 test('search costs 30 minutes and gives search XP; overlapping searches only search unfinished cells', () => {
   const { s, f } = setup();
-  assert.equal(searchMinutes(s), CONFIG.field.searchMin);
+  assert.equal(searchMinutes(s, NO_REVEAL), 30);
   const r = search(s, 2, 2, NO_REVEAL);
   assert.equal(r.minutes, 30);
   assert.equal(s.time, DAY_START + 30);
@@ -79,7 +97,7 @@ test('search costs 30 minutes and gives search XP; overlapping searches only sea
   for (let i = 0; i < 3; i++) search(s, 2, 2, NO_REVEAL);
   // 4 searches = 120 XP -> Search efficiency level 1 (+1%)
   assert.equal(s.skills.searchEff.level, 1);
-  assert.equal(searchEfficiency(s), 25.25);
+  assert.equal(searchEfficiency(s, NO_REVEAL), 25.25);
   const r2 = search(s, 3, 2, NO_REVEAL);
   assert.equal(r2.ok, true);
   assert.match(r2.msg, /Searched 3 cells/);
@@ -93,8 +111,8 @@ test('search speed / efficiency bonuses from rings and skills', () => {
   setSkillLevel(s, 'searchTime', 2); // +1%
   addRing(s, 'searchEff', 'S', true); // +20%
   setSkillLevel(s, 'searchEff', 4); // +4%
-  assert.equal(searchMinutes(s), 26.7); // 30 x 0.89
-  assert.equal(searchEfficiency(s), 31); // 25 x 1.24
+  assert.equal(searchMinutes(s, NO_REVEAL), 26.7); // 30 x 0.89
+  assert.equal(searchEfficiency(s, NO_REVEAL), 31); // 25 x 1.24
   search(s, 4, 4, NO_REVEAL);
   assert.equal(f.cells[idx(4, 4)].searched, 31);
   assert.equal(s.time, DAY_START + 26.7);
@@ -125,8 +143,8 @@ test('clearDebris clears every debris cell in the 3x3 area (15 min each) and gra
   const { s, f } = setup();
   for (const c of [idx(0, 0), idx(1, 0), idx(1, 1), idx(5, 5)]) f.cells[c].debris = true;
   f.cells[idx(1, 1)].items = [{ t: 'gem:topaz', d: 5 }];
-  assert.equal(debrisMinutesPerCell(s), 15);
-  const r = clearDebris(s, 0, 0);
+  assert.equal(debrisMinutesPerCell(s, CFG), 15);
+  const r = clearDebris(s, 0, 0, CFG);
   assert.equal(r.ok, true, r.msg);
   assert.equal(r.minutes, 45);
   assert.equal(s.time, DAY_START + 45);
@@ -137,7 +155,7 @@ test('clearDebris clears every debris cell in the 3x3 area (15 min each) and gra
   assert.equal(f.cells[idx(1, 1)].searched, 0, 'clearing does not search');
   const r2 = search(s, 0, 0, NO_REVEAL);
   assert.deepEqual(r2.found, ['gem:topaz']);
-  assert.equal(clearDebris(s, 0, 0).ok, false, 'no debris left there');
+  assert.equal(clearDebris(s, 0, 0, CFG).ok, false, 'no debris left there');
 });
 
 test('debris skill reduces clearing time', () => {
@@ -145,13 +163,13 @@ test('debris skill reduces clearing time', () => {
   setSkillLevel(s, 'debris', 5); // 10%
   f.cells[idx(3, 3)].debris = true;
   f.cells[idx(4, 4)].debris = true;
-  assert.equal(debrisMinutesPerCell(s), 13.5);
-  assert.equal(clearDebris(s, 3, 3).minutes, 27);
+  assert.equal(debrisMinutesPerCell(s, CFG), 13.5);
+  assert.equal(clearDebris(s, 3, 3, CFG).minutes, 27);
 });
 
 test('search / clear require time to walk back by 18:00 at the current load', () => {
   const { s, f } = setup();
-  const back = returnMinutes(s);
+  const back = returnMinutes(s, s.location, s.bag.length, CFG);
   assert.equal(back, 20);
   s.time = DAY_END - 30 - back + 0.5;
   assert.equal(search(s, 2, 2, NO_REVEAL).ok, false);
@@ -159,9 +177,9 @@ test('search / clear require time to walk back by 18:00 at the current load', ()
   s.time = DAY_END - 30 - 22;
   assert.equal(search(s, 2, 2, NO_REVEAL).ok, true, 'exact fit allowed');
   f.cells[idx(6, 6)].debris = true;
-  assert.equal(clearDebris(s, 6, 6).ok, false);
+  assert.equal(clearDebris(s, 6, 6, CFG).ok, false);
   s.time = DAY_END - 15 - 22;
-  assert.equal(clearDebris(s, 6, 6).ok, true);
+  assert.equal(clearDebris(s, 6, 6, CFG).ok, true);
 });
 
 test('search / clear are refused at camp and outside the work phase', () => {
@@ -224,9 +242,31 @@ test('pickUp / dropItem at camp are refused', () => {
   assert.deepEqual(s.bag, ['ore:copper']);
 });
 
+test('pickUp / dropItem are refused outside the work phase (nothing moves)', () => {
+  const { s, f } = setup();
+  f.cells[3].ground = ['gem:ruby'];
+  s.bag = ['ore:copper'];
+  for (const phase of ['report', 'plan', 'over']) {
+    s.phase = phase;
+    const p = pickUp(s, 3);
+    assert.equal(p.ok, false, phase);
+    assert.match(p.msg, /work day/);
+    const d = dropItem(s, 0, 5);
+    assert.equal(d.ok, false, phase);
+    assert.match(d.msg, /work day/);
+    assert.deepEqual(s.bag, ['ore:copper']);
+    assert.deepEqual(f.cells[3].ground, ['gem:ruby']);
+    assert.deepEqual(f.cells[5].ground, []);
+  }
+  s.phase = 'work';
+  assert.equal(pickUp(s, 3).ok, true);
+  assert.equal(dropItem(s, 0, 5).ok, true);
+});
+
 test('ore sight 0% never reveals, 100% reveals every searched (non-debris) cell', () => {
   const { s, f } = setup();
   assert.equal(smithBonuses(s, NO_REVEAL).revealPct, 0);
+  assert.equal(smithBonuses(s, ALL_REVEAL).revealPct, 100);
   for (let i = 0; i < 4; i++) search(s, 2, 2, NO_REVEAL);
   assert.equal(f.cells.filter((c) => c.revealed).length, 0);
 
@@ -241,16 +281,19 @@ test('ore sight 0% never reveals, 100% reveals every searched (non-debris) cell'
 test('ore sight chance = intel + smith ring; about that share of cells get revealed', () => {
   const s = game(5);
   assert.equal(smithBonuses(s).revealPct, CONFIG.intel.tracks.oreSight.base);
+  assert.equal(smithBonuses(s, CFG).revealPct, 10);
   addRing(s, 'reveal', 'S', true); // +7
   s.intel.spent.oreSight = 2; // +10 +9
-  assert.equal(smithBonuses(s).revealPct, 10 + 7 + 19);
+  assert.equal(smithBonuses(s, CFG).revealPct, 10 + 7 + 19);
+  // default config: same rule
+  assert.equal(smithBonuses(s).revealPct, intelChance(s, 'oreSight') + ringVal('reveal', 'S'));
   // statistical check at 36%
   let cells = 0;
   let revealed = 0;
   for (let k = 0; k < 40; k++) {
     const f = standInBlankField(s, 1);
     s.time = DAY_START;
-    for (const [x, y] of [[1, 1], [4, 1], [1, 4], [4, 4], [1, 7]]) search(s, x, y); // disjoint areas
+    for (const [x, y] of [[1, 1], [4, 1], [1, 4], [4, 4], [1, 7]]) search(s, x, y, CFG); // disjoint areas
     cells += f.cells.filter((c) => c.searched > 0).length;
     revealed += f.cells.filter((c) => c.revealed).length;
   }

@@ -74,6 +74,7 @@
 .combatlog .adv-line.miss { opacity: 0.6; }
 .combatlog .t { color: var(--muted); }
 .combatlog .adv-end { font-weight: 700; margin-top: 2px; }
+.combatlog .adv-gap { font-style: italic; padding: 3px 0; }
 
 /* screens */
 .adv-titlebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; margin-bottom: 8px; }

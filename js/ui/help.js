@@ -4,10 +4,10 @@
 // UI-only state: ctx.ui.help_open = { sectionId: true } (which reference sections are expanded).
 import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
-import { hitChance, hitDamage, adventurerCombatant } from '../core/combat.js';
+import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
 import { STAT_LABELS, craftMinutes, repairInfo } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
-import { skillDefs, xpToNext } from '../core/skills.js';
+import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 
@@ -15,7 +15,8 @@ import { formatClock, formatDuration, cap } from '../core/util.js';
 const p = (v, d = 1) => `${num(v, d)}%`;
 const mins = (m) => formatDuration(m);
 const x = (v) => `×${num(v, 2)}`;
-const statLabel = (k) => STAT_LABELS[k] || k;
+// pierce resistance is a % of the attacker's piercing ignored
+const statLabel = (k) => (k === 'pierceRes' ? 'Pierce resistance %' : STAT_LABELS[k] || k);
 const gradeSpan = (g) => h('span', { class: `grade-${g}` }, g === 'F' ? 'Fail' : g);
 const gradeHead = () => GRADES.map((g) => ({ v: gradeSpan(g), cls: 'num' }));
 const OUTCOMES = ['S', 'A', 'B', 'C', 'D', 'F'];
@@ -168,9 +169,13 @@ function howToPlay(ctx) {
       h('li', {}, h('b', {}, 'Day 1 is a rest day. '), 'From day 2 on there is a fight every day; it cannot be skipped.')),
     h('ul', { class: 'mi-list' },
       h('li', {}, 'Enemy attributes and reward rings are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them.'),
+      h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
       h('li', {}, 'The plan screen can simulate the fight to estimate your win chance before you confirm.'),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
-      h('li', {}, 'Skills level up on their own as you work (small bonuses). Farther fields are richer but cost more travel time.')));
+      h('li', {}, 'Skills level up on their own as you work (small bonuses). Farther fields are richer but cost more travel time.'),
+      (cfg.field.regrowPctPerDay || 0) > 0
+        ? h('li', {}, `Searched cells slowly regrow: each night every searched cell has a ${p(cfg.field.regrowPctPerDay)} chance to become fresh and unsearched again.`)
+        : null));
 }
 
 // -------------------------------------------------------------------- time ----
@@ -231,6 +236,7 @@ function fieldSection(cfg) {
   const avg = avgCount(f.itemCountWeights);
   const countPct = toPct(f.itemCountWeights);
   const searchesToFinish = Math.ceil(100 / f.searchEfficiency);
+  const regrow = f.regrowPctPerDay || 0;
   const lootRows = [];
   for (let d = 1; d <= maxDistance(cfg); d++) {
     const base = lootChance(cfg, d);
@@ -257,6 +263,9 @@ function fieldSection(cfg) {
       ['Items per loot cell', `${Object.entries(countPct).map(([k, v]) => `${k} (${p(v, 0)})`).join(', ')}, average ${num(avg, 2)}`],
       ['Ores vs gems', `${p(f.oreShare, 0)} ores, ${p(100 - f.oreShare, 0)} gems`],
       ['Full bag', 'Found items stay on the ground (visible); pick them up later.'],
+      ['Regrowth', regrow > 0
+        ? `Each night, every searched cell (even partly searched) has a ${p(regrow)} chance to become a fresh, unsearched cell with new hidden contents rolled for its distance (it may get debris again). Items lying on the ground stay. A fully searched field regrows about ${num((cells * regrow) / 100, 2)} cells per night.`
+        : 'Searched cells do not regrow.'],
     ]),
     sub('Richness by distance from camp'),
     tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
@@ -350,10 +359,10 @@ function gemSection(cfg) {
     tbl(['Gem', 'On', 'Effect', ...gradeHead()], rows, 'mi-gems'),
     h('ul', { class: 'mi-list' },
       h('li', {}, 'Ruby: magic damage = % of weapon damage, ignores defense / armor magic resistance.'),
-      h('li', {}, 'Topaz: chance per hit to stun (delays the target\'s next attack) / reduces enemy stun chance and duration.'),
+      h('li', {}, 'Topaz: chance per hit to stun (the target\'s attack bar stops filling for the duration) / reduces enemy stun chance and duration.'),
       h('li', {}, 'Emerald: accuracy rating / dodge rating.'),
-      h('li', {}, 'Sapphire: slows the target\'s attacks for a few seconds on hit / reduces enemy slow strength and duration.'),
-      h('li', {}, 'Diamond: piercing (% of enemy defense ignored) / pierce resistance (points subtracted from enemy piercing).')),
+      h('li', {}, 'Sapphire: on hit, the target\'s attack bar fills slower (by the slow %) for a few seconds / reduces enemy slow strength and duration.'),
+      h('li', {}, 'Diamond: piercing (% of enemy defense ignored) / pierce resistance (% of enemy piercing ignored).')),
   ];
 }
 
@@ -364,7 +373,7 @@ function adventurerSection(cfg) {
     kv([
       ['HP', num(a.hp)],
       ['Unarmed damage', `${num(a.unarmedDamage)} per hit (a sword replaces this)`],
-      ['Attack interval', `${num(a.attackInterval, 2)}s at 0% speed (${num(1 / a.attackInterval, 2)} attacks per second)`],
+      ['Attack bar', `fills in ${num(a.attackInterval, 2)}s at 0% speed (${num(1 / a.attackInterval, 2)} attacks per second); speed makes it fill faster`],
       ['Accuracy', num(a.accuracy)],
       ['Dodge', num(a.dodge)],
     ]),
@@ -406,29 +415,60 @@ function combatSection(cfg) {
     ...sets.map((s) => n(hitDamage(e.c, s.c, cfg).total)), np(hitChance(e.c.accuracy, a.dodge, cfg) * 100, 0)]);
   const normalAttr = (k) => cfg.enemies.attributes[k].values.normal;
 
+  // Attack bar fill time by speed and slow (core attackInterval).
+  const speeds = [-5, 0, 5, 10, 20];
+  const slows = [0, ...cfg.gemEffects.sapphire.weapon.slowPct.filter((_, i) => i % 2 === 0)];
+  const barRows = speeds.map((sp) => [{ v: `${sp > 0 ? '+' : ''}${sp}%`, cls: 'num' },
+    ...slows.map((sl) => ({ v: `${num(attackInterval({ interval: a.attackInterval, speed: sp }, sl > 0, sl), 2)}s`, cls: 'num' }))]);
+
+  // Piercing vs pierce resistance (core hitDamage), against each tier's defense.
+  const pierceVals = [0, ...cfg.gemEffects.diamond.weapon.pierce.filter((_, i) => i % 2 === 0)];
+  const resLevels = LEVELS.map((lv) => ({ lv, v: cfg.enemies.attributes.pierceRes.values[lv] }));
+  const effDef = (pierce, pierceRes, defense) => hitDamage({ damage: 1, pierce, magicPct: 0 }, { defense, pierceRes, magicRes: 0 }, cfg).effDef;
+  const pierceRows = resLevels.map(({ lv, v }) => [h('span', { class: `attr-${lv}` }, `${cap(lv)} (${p(v, 0)})`),
+    ...pierceVals.map((pv) => {
+      const effPierce = c.defenseCap > 0 ? (1 - effDef(pv, v, c.defenseCap) / c.defenseCap) * 100 : Math.min(pv, 100) * (1 - Math.min(v, c.resistCap) / 100);
+      return {
+        v: h('span', {}, p(effPierce), h('span', { class: 'mi-sub' }, `defense ${TIERS.map((t) => num(effDef(pv, v, cfg.enemies.tiers[t].defense), 1)).join(' / ')}%`)),
+        cls: 'num',
+      };
+    })]);
+
   return [
-    sub('Formulas'),
+    sub('Attack bars'),
+    formula('attack bar fills in base interval / (1 + speed% / 100) seconds; a full bar attacks and starts again from empty',
+      `Base interval: adventurer ${num(a.attackInterval, 2)}s, enemies ${num(cfg.enemies.attackInterval, 2)}s. If both bars fill at the same moment, the adventurer attacks first.`),
+    formula('slowed by X%: the bar fills X% slower (fill rate / (1 + X / 100)) until the slow ends',
+      `X = slow% x (1 - min(slow reduction, ${c.resistCap}) / 100); duration x (1 - min(slow duration reduction, ${c.resistCap}) / 100).`),
+    formula('stunned: the bar stops filling until the stun ends (progress is kept)',
+      `stun chance per hit = stun% x (1 - min(stun chance reduction, ${c.resistCap}) / 100); duration x (1 - min(stun duration reduction, ${c.resistCap}) / 100).`),
+    h('p', { class: 'mi-note' }, 'Stuns and slows do not stack: a new one while one is active refreshes the timer (it ends at whichever end is later). For slows the stronger strength is kept while the slow lasts.'),
+    sub('Hits and damage'),
     formula(`hit chance = acc² / (acc² + ${c.hitK} x dodge²), clamped to ${c.minHitPct}%..${c.maxHitPct}%`, 'An S-curve: more accuracy always helps, with diminishing returns.'),
-    formula(`attack interval = base interval / (1 + speed% / 100) x (1 + slow% / 100 while slowed)`),
     formula(`damage roll: each hit deals ${lo}%..${hi}% of the listed damage`),
-    formula(`physical = damage x (1 - effective defense / 100); effective defense = min(defense, ${c.defenseCap}) x (1 - pierce / 100)`,
-      'pierce = attacker piercing - defender pierce resistance (0..100).'),
+    formula(`effective pierce = min(piercing, 100) x (1 - min(pierce resistance, ${c.resistCap}) / 100)`,
+      'Pierce resistance is the % of the attacker\'s piercing that is ignored (not points subtracted).'),
+    formula(`effective defense = min(defense, ${c.defenseCap}) x (1 - effective pierce / 100)`),
+    formula('physical = damage x (1 - effective defense / 100)'),
     formula(`magic = damage x magic% / 100 x (1 - min(magic resist, ${c.resistCap}) / 100)`, 'Magic ignores defense. A hit deals physical + magic.'),
-    formula(`stun chance = stun% x (1 - min(stun chance reduction, ${c.resistCap}) / 100); stun delays the target's next attack by duration x (1 - reduction)`),
-    formula(`slow: target's interval x (1 + slow% x (1 - reduction)) for duration x (1 - reduction)`, 'Slows do not stack; a new slow refreshes the timer (the stronger slow is kept while active).'),
     kv([
-      ['Caps', `Defense ${p(c.defenseCap, 0)}. Magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
+      ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
-      ['Win-chance estimate', `Plan screen: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination.`],
+      ['Win-chance estimate', `Plan screen: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination. Draws count as survival.`],
     ]),
+    sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
+    tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
+    sub('Effective piercing vs enemy pierce resistance'),
+    tbl(['Enemy pierce resistance', ...pierceVals.map((pv) => ({ v: pv > 0 ? `Your piercing ${p(pv, 0)}` : 'No piercing', cls: 'num' }))], pierceRows),
+    h('p', { class: 'mi-note' }, `Small numbers: the enemy's defense after piercing for ${TIERS.join(' / ')} enemies (${TIERS.map((t) => p(cfg.enemies.tiers[t].defense, 0)).join(' / ')} base defense). Piercing values shown are diamond sword grades ${GRADES.filter((_, i) => i % 2 === 0).join(', ')}.`),
     sub('Hit chance by accuracy / dodge ratio'),
     tbl([{ v: 'Ratio', cls: 'num' }, 'Example', { v: 'Hit chance', cls: 'num' }], hitRows),
     sub('Your average damage per hit (day 1 enemies, all attributes Normal)'),
     tbl(['Enemy', { v: 'Defense', cls: 'num' }, ...swords.map((s) => ({ v: s.label, cls: 'num' })), { v: 'Your hit chance', cls: 'num' }], outRows),
     sub('Enemy average damage per hit on you (day 1, all attributes Normal)'),
     tbl(['Enemy', { v: 'Damage', cls: 'num' }, ...sets.map((s) => ({ v: s.label, cls: 'num' })), { v: 'Its hit chance', cls: 'num' }], inRows),
-    h('p', { class: 'mi-note' }, `Normal enemies here have ${p(normalAttr('piercing'), 0)} piercing and ${p(normalAttr('magical'), 0)} extra magic damage. Hit chances use base accuracy ${num(a.accuracy)} / dodge ${num(a.dodge)} (no gloves, boots or emeralds).`),
+    h('p', { class: 'mi-note' }, `Normal enemies here have ${p(normalAttr('piercing'), 0)} piercing, ${p(normalAttr('pierceRes'), 0)} pierce resistance and ${p(normalAttr('magical'), 0)} extra magic damage. Hit chances use base accuracy ${num(a.accuracy)} / dodge ${num(a.dodge)} (no gloves, boots or emeralds).`),
   ];
 }
 
@@ -462,8 +502,8 @@ function enemySection(cfg) {
   return [
     kv([
       ['Roster', `${rosterN} enemies each day (${TIERS.map((t) => `${e.tiers[t].count} ${t}`).join(', ')}). You pick one for tomorrow.`],
-      ['Attack interval', `${num(e.attackInterval, 2)}s (Fast attribute changes speed)`],
-      ['Stun / slow', `An enemy stun lasts ${num(e.stunDuration, 2)}s; a chilling hit slows you for ${num(e.slowDuration, 2)}s (before your resistances).`],
+      ['Attack bar', `fills in ${num(e.attackInterval, 2)}s at 0% speed (the Fast attribute changes speed)`],
+      ['Stun / slow', `An enemy stun stops your attack bar for ${num(e.stunDuration, 2)}s; a Chilling hit makes your bar fill slower (by its Chilling %) for ${num(e.slowDuration, 2)}s. Both before your resistances; neither stacks.`],
       ['Daily growth', formula(`HP & damage x (1 + ${e.growthPerDay.hpDamage}% x (day - 1)); accuracy & dodge x (1 + ${e.growthPerDay.ratings}% x (day - 1))`)],
       ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base).`],
     ]),
@@ -510,12 +550,24 @@ function skillSection(cfg) {
   const defs = skillDefs(cfg);
   const activity = defs.filter((d) => d.group === 'activity');
   const actRows = activity.map((d) => [h('b', {}, d.name), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc, d.xpFrom]);
+  const xpRange = (mats) => {
+    const xs = mats.map((m) => itemXp(m, cfg));
+    const lo = Math.min(...xs);
+    const hi = Math.max(...xs);
+    return lo === hi ? num(lo) : `${num(lo)}-${num(hi)}`;
+  };
   const matRows = Object.entries(s.perMaterial).map(([k, d]) => {
     const isOre = k.startsWith('ore');
     const label = `${isOre ? 'Bar' : 'Gem'} ${d.name}`;
     return [h('b', {}, label), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, d.desc,
-      `${s.xpPerItem} XP per ${isOre ? 'bar refined' : 'gem cut'} of that type (${isOre ? BARS.join(', ') : GEMS.join(', ')})`];
+      `${xpRange(isOre ? BARS : GEMS)} XP per ${isOre ? 'bar refined' : 'gem cut'} of that type (by material, table below)`];
   });
+  // XP per item by material, and how many items one skill needs to reach max level.
+  const xpTable = (mats, what) => tbl([what, { v: 'XP per item', cls: 'num' }, { v: `Items to level ${s.maxLevel}`, cls: 'num' }],
+    mats.map((m) => {
+      const xp = itemXp(m, cfg);
+      return [h('b', {}, cap(m)), n(xp, 0), xp > 0 ? n(Math.ceil(total / xp), 0) : { v: '·', cls: 'num muted' }];
+    }));
   return [
     kv([
       ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity.`],
@@ -526,6 +578,11 @@ function skillSection(cfg) {
     tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], actRows),
     sub('Per-material skills (one of each per bar type / gem type)'),
     tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, 'Effect', 'XP from'], matRows),
+    sub('Per-material XP (rarer materials give more; failed attempts count)'),
+    h('div', { class: 'mi-two' },
+      h('div', {}, xpTable(BARS, 'Bar refined')),
+      h('div', {}, xpTable(GEMS, 'Gem cut'))),
+    h('p', { class: 'mi-note' }, 'Each refined bar gives this XP to both skills of that bar type (grade and refining); each cut gem to both skills of that gem.'),
   ];
 }
 

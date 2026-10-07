@@ -5,17 +5,23 @@ import {
   newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, resolveBattle, rosterView, serialize, deserialize,
   adventurerRingTotals, logResult, addLog, packedSlotsSummary, SAVE_VERSION, MAX_LOG,
 } from '../js/core/game.js';
+import { ringLabel } from '../js/core/rings.js';
 import { repair } from '../js/core/gear.js';
 import { travel } from '../js/core/map.js';
-import { game, cfgWith, addGear, addRing, fullSet, fieldAt, DAY_START, DAY_END } from './helpers.mjs';
+import { game, cfgWith, addGear, addRing, fullSet, fieldAt, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
 
 const tierIndex = (s, tier) => s.roster.enemies.findIndex((e) => e.tier === tier);
 const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds, ringIds });
+// Fight outcomes fixed by config, so these tests check the day flow, not the balance.
+const WIN = cfgWith(WEAK_ENEMIES);
+const LOSE = cfgWith(DEADLY_ENEMIES);
+const { min: LOSS_MIN, max: LOSS_MAX } = CONFIG.gear.durabilityLoss;
+const rosterSize = Object.values(CONFIG.enemies.tiers).reduce((a, t) => a + t.count, 0);
 
 // Day 1 -> plan -> confirm. Returns the state on day 2 (adventurer away).
-function toDay2(s, p) {
-  assert.equal(endDay(s).ok, true);
-  const r = confirmPlan(s, typeof p === 'function' ? p(s) : p);
+function toDay2(s, p, cfg = CONFIG) {
+  assert.equal(endDay(s, cfg).ok, true);
+  const r = confirmPlan(s, typeof p === 'function' ? p(s) : p, cfg);
   assert.equal(r.ok, true, r.msg);
   return s;
 }
@@ -43,13 +49,13 @@ test('newGame: initial state shape', () => {
   assert.equal(s.nextId, 1);
   assert.equal(s.intel.points, 0);
   assert.equal(s.roster.day, 2, 'roster is for tomorrow');
-  assert.equal(s.roster.enemies.length, 7);
+  assert.equal(s.roster.enemies.length, rosterSize);
   assert.equal(s.plan, null);
   assert.equal(s.report, null);
   assert.deepEqual(s.stats, { score: 0, wins: { normal: 0, elite: 0, champion: 0 }, fights: 0, bestDay: 1 });
   assert.equal(s.log.length, 1);
   assert.deepEqual(s.battles, []);
-  assert.equal(s.map.cells.length, 25);
+  assert.equal(s.map.cells.length, CONFIG.map.size ** 2);
 });
 
 test('newGame is deterministic for a seed', () => {
@@ -97,10 +103,13 @@ test('validatePlan: enemy required, max 2 gear per slot, adventurer rings only, 
   assert.equal(validatePlan(s, plan(0, [sw1.id, sw2.id, ch.id])), null);
   assert.match(validatePlan(s, plan(0, [sw1.id, sw2.id, sw3.id])), /At most 2 items per slot \(sword\)/);
   assert.equal(validatePlan(s, plan(0, [999])), 'Unknown gear selected.');
-  const advRings = Array.from({ length: 11 }, () => addRing(s, 'accuracy', 'D'));
+  const max = CONFIG.rings.maxWorn;
+  const advRings = Array.from({ length: max + 1 }, () => addRing(s, 'accuracy', 'D'));
   const smithRing = addRing(s, 'travelTime', 'S');
-  assert.equal(validatePlan(s, plan(0, [], advRings.slice(0, 10).map((r) => r.id))), null);
-  assert.match(validatePlan(s, plan(0, [], advRings.map((r) => r.id))), /At most 10 rings/);
+  assert.equal(validatePlan(s, plan(0, [], advRings.slice(0, max).map((r) => r.id))), null);
+  assert.match(validatePlan(s, plan(0, [], advRings.map((r) => r.id))), new RegExp(`At most ${max} rings`));
+  // the ring limit comes from the config
+  assert.match(validatePlan(s, plan(0, [], advRings.slice(0, 3).map((r) => r.id)), cfgWith({ rings: { maxWorn: 2 } })), /At most 2 rings/);
   assert.match(validatePlan(s, plan(0, [], [smithRing.id])), /Only adventurer rings/);
   assert.match(validatePlan(s, plan(0, [], [12345])), /Only adventurer rings/);
 });
@@ -153,13 +162,21 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
   const set = fullSet(s, 'mythril', 'S');
   const spareSword = addGear(s, 'sword', 'copper', 'D');
   const unpacked = addGear(s, 'boots', 'copper', 'D');
-  toDay2(s, (st) => plan(tierIndex(st, 'normal'), [...set.map((g) => g.id), spareSword.id]));
+  const packedIds = [...set.map((g) => g.id), spareSword.id];
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), packedIds), WIN);
   const enemy = s.plan.enemy;
   const ids0 = s.nextId;
-  const r = endDay(s);
+  const r = endDay(s, WIN);
   assert.equal(r.ok, true);
   const rep = r.report;
-  assert.equal(rep.win, true, 'top gear should beat a day-2 normal enemy');
+  assert.equal(rep.win, true);
+  assert.equal(rep.draw, false);
+  assert.deepEqual(rep.packedIds, packedIds, 'report lists everything that was packed');
+  assert.ok(rep.packedIds.includes(spareSword.id) && !rep.usedIds.includes(spareSword.id), 'packed but unused');
+  for (const id of rep.usedIds) assert.ok(rep.packedIds.includes(id));
+  assert.equal(rep.logTrimmed, 0);
+  assert.equal(rep.log.length, rep.summary.A.attacks + rep.summary.E.attacks, 'short fights keep the whole log');
+  assert.equal(rep.ringText, ringLabel(rep.ring));
   assert.equal(s.phase, 'report');
   assert.equal(s.report, rep);
   assert.equal(s.plan, null);
@@ -176,13 +193,13 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
   assert.ok(!rep.usedIds.includes(spareSword.id));
   for (const g of s.gear) {
     const used = rep.usedIds.includes(g.id);
-    if (used) assert.ok(g.durability >= 93 && g.durability <= 97, `${g.slot} at ${g.durability}`);
+    if (used) assert.ok(g.durability >= 100 - LOSS_MAX && g.durability <= 100 - LOSS_MIN, `${g.slot} at ${g.durability}`);
     else assert.equal(g.durability, 100);
     assert.equal(g.packed, false, 'gear comes home');
   }
   assert.equal(unpacked.durability, 100);
   assert.equal(rep.wear.length, 5);
-  for (const w of rep.wear) assert.ok(w.loss >= 3 && w.loss <= 7 && w.left === 100 - w.loss);
+  for (const w of rep.wear) assert.ok(w.loss >= LOSS_MIN && w.loss <= LOSS_MAX && w.left === 100 - w.loss);
   assert.equal(s.battles.length, 1);
   assert.ok(rep.log.length > 0);
   assert.equal(rep.enemy.name, enemy.name);
@@ -194,22 +211,22 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
 test('gear at 0% durability is destroyed after the fight', () => {
   const s = game(11);
   const set = fullSet(s, 'mythril', 'S');
-  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: 3 });
-  for (const g of set) g.durability = 3; // every fight costs at least 3%
-  toDay2(s, (st) => plan(tierIndex(st, 'normal'), [...set.map((g) => g.id), spare.id]));
-  const rep = endDay(s).report;
+  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: LOSS_MIN });
+  for (const g of set) g.durability = LOSS_MIN; // every fight costs at least durabilityLoss.min
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), [...set.map((g) => g.id), spare.id]), WIN);
+  const rep = endDay(s, WIN).report;
   assert.equal(rep.win, true);
   assert.equal(rep.destroyed.length, 5);
   for (const g of set) assert.ok(!s.gear.includes(g), `${g.slot} should be gone`);
   assert.ok(s.gear.includes(spare), 'unused item survives');
-  assert.equal(spare.durability, 3);
+  assert.equal(spare.durability, LOSS_MIN);
   for (const w of rep.wear) assert.equal(w.left, 0);
 });
 
 test('a lost fight is game over: no ring, no score', () => {
   const s = game(3);
-  toDay2(s, (st) => plan(tierIndex(st, 'champion')));
-  const r = endDay(s);
+  toDay2(s, (st) => plan(tierIndex(st, 'champion')), LOSE);
+  const r = endDay(s, LOSE);
   assert.equal(r.report.win, false);
   assert.equal(r.report.draw, false);
   assert.equal(s.phase, 'over');
@@ -221,10 +238,12 @@ test('a lost fight is game over: no ring, no score', () => {
   assert.equal(acknowledgeReport(s).ok, false);
   assert.equal(endDay(s).ok, false);
   assert.match(s.log[s.log.length - 1].text, /GAME OVER/);
+  assert.ok(s.log.some((l) => /fell to/.test(l.text)));
 });
 
 test('a fight that hits the safety cap is a draw: adventurer survives, no ring', () => {
-  const cfg = cfgWith({ combat: { safetyCapSeconds: 1 } });
+  // a cap shorter than any first attack: nobody even swings
+  const cfg = cfgWith({ combat: { safetyCapSeconds: 0.01 } });
   const s = game(3);
   const sw = addGear(s, 'sword');
   endDay(s, cfg);
@@ -232,21 +251,51 @@ test('a fight that hits the safety cap is a draw: adventurer survives, no ring',
   const r = endDay(s, cfg);
   assert.equal(r.report.draw, true);
   assert.equal(r.report.win, false);
+  assert.equal(r.report.time, 0.01);
+  assert.equal(r.report.advHp, r.report.advMaxHp);
   assert.equal(s.phase, 'report');
   assert.equal(s.rings.length, 0);
+  assert.equal(r.report.ring, null);
   assert.equal(s.stats.score, 0);
+  assert.equal(s.stats.fights, 1);
   assert.ok(sw.durability < 100, 'used gear still wears');
+  const last = s.log.filter((l) => l.day === 2).map((l) => l.text).join('\n');
+  assert.doesNotMatch(last, /fell to/, 'a draw is not reported as a death');
+  assert.match(last, /draw/i);
+  assert.equal(acknowledgeReport(s).ok, true, 'the run goes on');
+});
+
+test('battle report: logs of very long fights are capped (first 1500 + last 500 lines)', () => {
+  // nobody can hurt anybody and the cap is far away: thousands of attacks
+  const cfg = cfgWith({ adventurer: { unarmedDamage: 0 }, enemies: { tiers: { normal: { damage: 0 } } }, combat: { safetyCapSeconds: 4000 } });
+  const s = game(3);
+  toDay2(s, (st) => plan(tierIndex(st, 'normal')), cfg);
+  const rep = endDay(s, cfg).report;
+  assert.equal(rep.draw, true);
+  const total = rep.summary.A.attacks + rep.summary.E.attacks;
+  assert.ok(total > 2000, `only ${total} attacks`);
+  assert.equal(rep.log.length, 2000);
+  assert.equal(rep.logTrimmed, total - 2000);
+  // the kept lines are the first 1500 and the last 500, in order
+  for (let i = 1; i < rep.log.length; i++) assert.ok(rep.log[i].t >= rep.log[i - 1].t);
+  assert.ok(rep.log[0].t <= 2.5, 'starts with the first attacks');
+  assert.ok(rep.log[1999].t > cfg.combat.safetyCapSeconds - 3, 'ends with the last attacks');
+  assert.ok(rep.log[1500].t - rep.log[1499].t > 100, 'a gap where the middle was cut');
+  assert.equal(rep.time, cfg.combat.safetyCapSeconds);
+  // the capped report is what gets saved
+  assert.equal(s.battles[s.battles.length - 1].log.length, 2000);
+  assert.deepEqual(deserialize(serialize(s)).battles.at(-1).logTrimmed, rep.logTrimmed);
 });
 
 test('battle uses the plan\'s rings (health ring raises max HP)', () => {
   const s = game(11);
   const set = fullSet(s, 'mythril', 'S');
   const hp = addRing(s, 'health', 'S');
-  toDay2(s, (st) => plan(tierIndex(st, 'normal'), set.map((g) => g.id), [hp.id]));
-  assert.deepEqual(adventurerRingTotals(s), { health: 7 });
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), set.map((g) => g.id), [hp.id]), WIN);
+  assert.deepEqual(adventurerRingTotals(s), { health: ringVal('health', 'S') });
   assert.deepEqual(adventurerRingTotals(s, []), {});
-  const rep = endDay(s).report;
-  assert.equal(rep.advMaxHp, 107);
+  const rep = endDay(s, WIN).report;
+  assert.ok(Math.abs(rep.advMaxHp - CONFIG.adventurer.hp * (1 + ringVal('health', 'S') / 100)) < 1e-9);
 });
 
 test('resolveBattle is reproducible from a saved state', () => {
@@ -257,36 +306,80 @@ test('resolveBattle is reproducible from a saved state', () => {
   const a = endDay(s).report;
   const b = endDay(copy).report;
   assert.deepEqual(a, b);
+  assert.deepEqual(a.packedIds, set.map((g) => g.id));
 });
 
 // ------------------------------------------------------------ intel + days ----
-test('intel point at the end of day 5 (and 10), not on other days', () => {
-  const s = game(31);
-  const set = fullSet(s, 'mythril', 'S');
-  let day = 1;
-  while (day <= 10) {
-    const r = endDay(s);
-    assert.equal(r.ok, true);
-    if (r.report) {
-      assert.equal(r.report.win, true, `day ${day} fight lost`);
-      acknowledgeReport(s);
+test('intel point at the end of every daysPerPoint-th day, not on other days', () => {
+  for (const dpp of [CONFIG.intel.daysPerPoint, 3]) {
+    const cfg = cfgWith(WEAK_ENEMIES, { intel: { daysPerPoint: dpp } });
+    const last = 2 * dpp;
+    const s = game(31, cfg);
+    const set = fullSet(s, 'mythril', 'S');
+    let day = 1;
+    while (day <= last) {
+      const r = endDay(s, cfg);
+      assert.equal(r.ok, true);
+      if (r.report) {
+        assert.equal(r.report.win, true, `day ${day} fight lost`);
+        acknowledgeReport(s);
+      }
+      assert.equal(s.intel.points, Math.floor(day / dpp), `after day ${day} (every ${dpp} days)`);
+      for (const g of set) g.durability = 100; // keep the test about intel, not wear
+      const res = confirmPlan(s, plan(tierIndex(s, 'normal'), set.map((g) => g.id)), cfg);
+      assert.equal(res.ok, true, res.msg);
+      day += 1;
+      assert.equal(s.day, day);
+      assert.equal(s.roster.day, day + 1);
+      assert.equal(s.plan.day, day);
+      assert.equal(s.plan.enemy.day, day, 'the enemy was generated for the fight day');
     }
-    assert.equal(s.intel.points, day >= 10 ? 2 : day >= 5 ? 1 : 0, `after day ${day}`);
-    for (const g of set) g.durability = 100; // keep the test about intel, not wear
-    const res = confirmPlan(s, plan(tierIndex(s, 'normal'), set.map((g) => g.id)));
-    assert.equal(res.ok, true, res.msg);
-    day += 1;
-    assert.equal(s.day, day);
-    assert.equal(s.roster.day, day + 1);
-    assert.equal(s.plan.day, day);
-    assert.equal(s.plan.enemy.day, day, 'the enemy was generated for the fight day');
+    const fights = last - 1;
+    assert.equal(s.stats.fights, fights);
+    assert.equal(s.stats.wins.normal, fights);
+    assert.equal(s.stats.score, fights * CONFIG.enemies.tiers.normal.score);
+    assert.equal(s.rings.length, fights);
+    assert.equal(new Set(s.rings.map((r) => r.id)).size, fights);
+    assert.equal(s.stats.bestDay, last + 1);
   }
-  assert.equal(s.stats.fights, 9);
-  assert.equal(s.stats.wins.normal, 9);
-  assert.equal(s.stats.score, 90);
-  assert.equal(s.rings.length, 9);
-  assert.equal(new Set(s.rings.map((r) => r.id)).size, 9);
-  assert.equal(s.stats.bestDay, 11);
+});
+
+test('score: each win adds the enemy tier\'s score', () => {
+  for (const tier of Object.keys(CONFIG.enemies.tiers)) {
+    const s = game(5);
+    toDay2(s, (st) => plan(tierIndex(st, tier)), WIN);
+    endDay(s, WIN);
+    assert.equal(s.stats.score, CONFIG.enemies.tiers[tier].score, tier);
+    assert.equal(s.stats.wins[tier], 1);
+  }
+});
+
+// -------------------------------------------------------------- regrowth ----
+test('confirmPlan regrows searched cells overnight (regrowPctPerDay), ground items stay', () => {
+  const searchedCells = (s) => Object.values(s.map.fields).flatMap((f) => f.cells).filter((c) => c.searched > 0);
+  const prep = (cfg) => {
+    const s = game(8, cfg);
+    for (const f of Object.values(s.map.fields)) f.cells.slice(0, 5).forEach((c) => { c.searched = 100; c.items = []; c.ground = ['ore:iron']; });
+    endDay(s, cfg);
+    return s;
+  };
+  const none = cfgWith({ field: { regrowPctPerDay: 0 } });
+  const s0 = prep(none);
+  const n = searchedCells(s0).length;
+  assert.ok(n > 0);
+  confirmPlan(s0, plan(0), none);
+  assert.equal(searchedCells(s0).length, n, '0%: nothing regrows');
+  assert.ok(!s0.log.some((l) => /regrew/.test(l.text)));
+
+  const all = cfgWith({ field: { regrowPctPerDay: 100 } });
+  const s1 = prep(all);
+  confirmPlan(s1, plan(0), all);
+  assert.equal(searchedCells(s1).length, 0, '100%: every searched cell is fresh');
+  for (const f of Object.values(s1.map.fields)) for (const c of f.cells.slice(0, 5)) assert.deepEqual(c.ground, ['ore:iron']);
+  assert.match(s1.log.find((l) => /regrew/.test(l.text)).text, new RegExp(`${n} searched cell`));
+  // regrowth happens once per night, and the roster is unaffected by it
+  assert.equal(s1.day, 2);
+  assert.equal(s1.roster.day, 3);
 });
 
 // --------------------------------------------------------------- roster view --
@@ -295,7 +388,7 @@ test('rosterView: known levels follow intel', () => {
   const v = rosterView(s);
   assert.equal(v.length, 7);
   for (const row of v) for (const [k, lv] of Object.entries(row.known)) assert.equal(row.enemy.levels[k], lv);
-  s.intel.spent.enemySight = 30; // 100%
+  s.intel.spent.enemySight = 1000; // far past the cap: maxChance (100%)
   for (const row of rosterView(s)) assert.deepEqual(row.known, row.enemy.levels);
 });
 
@@ -304,16 +397,17 @@ test('serialize / deserialize roundtrip (fresh game and mid-run)', () => {
   const s = game(9);
   assert.deepEqual(deserialize(serialize(s)), s);
   const set = fullSet(s, 'mythril', 'S');
-  toDay2(s, (st) => plan(tierIndex(st, 'normal'), set.map((g) => g.id)));
-  endDay(s);
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), set.map((g) => g.id)), WIN);
+  endDay(s, WIN);
+  assert.equal(s.phase, 'report');
   const back = deserialize(serialize(s));
   assert.deepEqual(back, s);
   // the restored state keeps playing identically
-  acknowledgeReport(s);
-  acknowledgeReport(back);
+  assert.equal(acknowledgeReport(s).ok, true);
+  assert.equal(acknowledgeReport(back).ok, true);
   const p = plan(tierIndex(s, 'elite'), set.filter((g) => s.gear.includes(g)).map((g) => g.id));
-  confirmPlan(s, p);
-  confirmPlan(back, p);
+  assert.equal(confirmPlan(s, p, WIN).ok, true);
+  assert.equal(confirmPlan(back, p, WIN).ok, true);
   assert.equal(serialize(back), serialize(s));
 });
 

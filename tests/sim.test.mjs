@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { SLOTS } from '../js/config.js';
 import { loadouts, bestLoadout, estimateWinChance, estimateWinChanceSync } from '../js/core/sim.js';
 import { enemyCombatant } from '../js/core/enemies.js';
-import { allLevels } from './helpers.mjs';
+import { allLevels, cfgWith, combatant, WEAK_ENEMIES, DEADLY_ENEMIES } from './helpers.mjs';
+
+// Nobody can hurt anybody (unarmed adventurer, harmless enemies) and fights are cut short: every fight is a draw.
+const HARMLESS = cfgWith({ adventurer: { unarmedDamage: 0 }, enemies: { tiers: { normal: { damage: 0 }, elite: { damage: 0 }, champion: { damage: 0 } } }, combat: { safetyCapSeconds: 30 } });
 
 let nextId = 1;
 const item = (slot, material = 'copper', grade = 'D', gem = null) => ({ id: nextId++, slot, material, grade, gem, durability: 100, packed: true });
@@ -44,8 +47,9 @@ test('bestLoadout picks the clearly better sword and armor', () => {
 });
 
 test('bestLoadout: when every loadout loses every simulated fight, the one that does more damage wins the tie', () => {
-  // ~0.25% (copper chest) vs ~0.55% (mythril chest) true win chance: 60 fights see 0 wins for both.
-  const champ = enemyCombatant('champion', 5, allLevels('high'));
+  // An enemy that cannot be killed: every loadout loses every fight. The better chest survives longer
+  // and so removes more enemy HP.
+  const champ = combatant({ hp: 1e9, damage: 25, accuracy: 120 });
   for (const order of [[1, 2], [2, 1]]) {
     const chests = { 1: item('chest', 'copper', 'D'), 2: item('chest', 'mythril', 'S') };
     const gear = [item('sword', 'steel', 'B'), ...order.map((k) => chests[k])];
@@ -68,26 +72,49 @@ test('bestLoadout is deterministic for a seed', () => {
   assert.deepEqual(bestLoadout(c, {}, enemy, 55, 40), bestLoadout(c, {}, enemy, 55, 40));
 });
 
-test('estimateWinChanceSync: ~100% with top gear vs a day-1 normal enemy', () => {
-  const r = estimateWinChanceSync({ gearItems: set('mythril', 'S'), ringTotals: {}, tier: 'normal', day: 1, known: {}, seed: 1 }, FAST);
-  assert.equal(r.fights, FAST.samples * FAST.evalFights);
-  assert.ok(r.winPct >= 99, `win ${r.winPct}%`);
+test('estimateWinChanceSync: 100% when the enemy cannot win, 0% when it cannot lose', () => {
+  const weak = estimateWinChanceSync({ gearItems: set('copper', 'D'), ringTotals: {}, tier: 'normal', day: 1, known: {}, seed: 1 }, FAST, cfgWith(WEAK_ENEMIES));
+  assert.equal(weak.fights, FAST.samples * FAST.evalFights);
+  assert.equal(weak.winPct, 100);
+  const deadly = estimateWinChanceSync({ gearItems: set('mythril', 'S'), ringTotals: {}, tier: 'champion', day: 30, known: {}, seed: 1 }, FAST, cfgWith(DEADLY_ENEMIES));
+  assert.equal(deadly.winPct, 0);
 });
 
-test('estimateWinChanceSync: ~0% unarmed vs a late champion', () => {
-  const r = estimateWinChanceSync({ gearItems: [], ringTotals: {}, tier: 'champion', day: 30, known: {}, seed: 1 }, FAST);
-  assert.ok(r.winPct <= 1, `win ${r.winPct}%`);
+test('estimateWinChanceSync: top gear beats unarmed against the same enemy (default config)', () => {
+  const p = { ringTotals: {}, tier: 'elite', day: 3, known: {}, seed: 4 };
+  const top = estimateWinChanceSync({ ...p, gearItems: set('mythril', 'S') }, FAST).winPct;
+  const none = estimateWinChanceSync({ ...p, gearItems: [] }, FAST).winPct;
+  assert.ok(top > none, `${top} > ${none}`);
+});
+
+test('estimateWinChanceSync counts draws (safety cap reached) as survival', () => {
+  const r = estimateWinChanceSync({ gearItems: [], ringTotals: {}, tier: 'champion', day: 1, known: {}, seed: 3 }, FAST, HARMLESS);
+  assert.equal(r.fights, FAST.samples * FAST.evalFights);
+  assert.equal(r.winPct, 100);
+});
+
+test('estimateWinChance (async) counts draws as survival with full HP and time = safety cap', async () => {
+  const r = await estimateWinChance({ gearItems: [], ringTotals: {}, tier: 'elite', day: 2, known: {}, seed: 3 }, FAST, null, HARMLESS);
+  assert.equal(r.winPct, 100);
+  assert.equal(r.avgTime, HARMLESS.combat.safetyCapSeconds);
+  assert.equal(r.avgHpLeftPct, 100);
 });
 
 test('estimateWinChanceSync is deterministic and respects fully known attributes', () => {
+  // HP is the only attribute that decides here: low HP enemies die at once, high HP enemies cannot be killed
+  const cfg = cfgWith({ enemies: { attributes: { hp: { values: { low: 0.01, normal: 100, high: 1e9 } } } } });
   const p = { gearItems: [item('sword', 'iron', 'B'), item('chest', 'iron', 'B')], ringTotals: { health: 5 }, tier: 'elite', day: 4, known: {}, seed: 77 };
-  const a = estimateWinChanceSync(p, FAST);
-  assert.deepEqual(a, estimateWinChanceSync(p, FAST));
-  assert.ok(a.winPct > 0 && a.winPct < 100, `expected a contested fight, got ${a.winPct}%`);
-  // all attributes known: high everything is harder than low everything (same tier: elite counts ignored when fully known)
-  const lowAll = estimateWinChanceSync({ ...p, known: allLevels('low') }, FAST).winPct;
-  const highAll = estimateWinChanceSync({ ...p, known: allLevels('high') }, FAST).winPct;
-  assert.ok(lowAll > highAll, `${lowAll} > ${highAll}`);
+  const a = estimateWinChanceSync(p, FAST, cfg);
+  assert.deepEqual(a, estimateWinChanceSync(p, FAST, cfg));
+  // all attributes known (the tier's low/normal/high counts do not apply then)
+  const lowAll = estimateWinChanceSync({ ...p, known: allLevels('low') }, FAST, cfg).winPct;
+  const highAll = estimateWinChanceSync({ ...p, known: allLevels('high') }, FAST, cfg).winPct;
+  assert.ok(lowAll > 95, `low ${lowAll}`);
+  assert.equal(highAll, 0);
+  // only HP known: the rest is sampled, but HP alone already decides
+  assert.equal(estimateWinChanceSync({ ...p, known: { hp: 'high' } }, FAST, cfg).winPct, 0);
+  // default config is deterministic too
+  assert.deepEqual(estimateWinChanceSync(p, FAST), estimateWinChanceSync(p, FAST));
 });
 
 test('estimateWinChance (async) matches the sync version and reports progress', async () => {

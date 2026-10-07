@@ -1,6 +1,10 @@
 // Shared test helpers (not a test file itself: `node --test tests/*.test.mjs` skips it).
 // Tests may set up state directly; only UI code is restricted to core actions.
-import { CONFIG } from '../js/config.js';
+//
+// Balance numbers in js/config.js get re-tuned often. Tests therefore never hardcode a CONFIG number:
+// they either derive the expectation from CONFIG, or pass an explicit config (cfgWith) that pins the
+// numbers a hand-computed expectation depends on, or use hand-built combatants.
+import { CONFIG, GRADES } from '../js/config.js';
 import { newGame } from '../js/core/game.js';
 import { seededRng } from '../js/core/rng.js';
 import { pathSteps, generateField, key } from '../js/core/map.js';
@@ -13,15 +17,33 @@ const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 function merge(target, patch) {
   for (const [k, v] of Object.entries(patch)) {
     if (isObj(v) && isObj(target[k])) merge(target[k], v);
-    else target[k] = v;
+    else target[k] = isObj(v) ? structuredClone(v) : v;
   }
   return target;
 }
 
-// A deep copy of CONFIG with `patch` deep-merged in (arrays and scalars replace).
-export function cfgWith(patch) {
-  return merge(structuredClone(CONFIG), patch);
+// A deep copy of CONFIG with each patch deep-merged in, in order (arrays and scalars replace).
+export function cfgWith(...patches) {
+  const cfg = structuredClone(CONFIG);
+  for (const p of patches) merge(cfg, p);
+  return cfg;
 }
+
+// A ring type's value at a grade, read from a config.
+export const ringVal = (type, grade, cfg = CONFIG) => cfg.rings.types[type].values[GRADES.indexOf(grade)];
+
+// Scripted rand() for fights: returns `values` in order, then `rest` forever.
+// (0.99 is above the 95% hit cap, so with the default rest every later attack misses.)
+export function scriptRand(values, rest = 0.99) {
+  let i = 0;
+  return () => (i < values.length ? values[i++] : rest);
+}
+
+// Config patches for tests about rules (day flow, reports, estimates), not balance:
+// with WEAK_ENEMIES the adventurer always wins (even unarmed), with DEADLY_ENEMIES it always loses.
+const tiersWith = (stats) => Object.fromEntries(Object.keys(CONFIG.enemies.tiers).map((t) => [t, { ...stats }]));
+export const WEAK_ENEMIES = { enemies: { tiers: tiersWith({ hp: 0.01, damage: 1e-6 }) } };
+export const DEADLY_ENEMIES = { enemies: { tiers: tiersWith({ hp: 1e9, damage: 1e6 }) } };
 
 export function game(seed = 12345, cfg = CONFIG) {
   return newGame(seed, cfg);

@@ -4,10 +4,36 @@ import { CONFIG, SLOTS, GRADES, BARS } from '../js/config.js';
 import {
   gearStats, craft, canCraft, craftCost, craftMinutes, repairInfo, repair, scrap, gearName, barKey, statsText,
 } from '../js/core/gear.js';
-import { game, approx, addGear, standInBlankField, DAY_END, DAY_START } from './helpers.mjs';
+import { game, approx, addGear, standInBlankField, cfgWith, DAY_END, DAY_START } from './helpers.mjs';
 
 const item = (slot, material = 'copper', grade = 'D', gem = null, extra = {}) => ({ id: 1, slot, material, grade, gem, durability: 100, packed: false, ...extra });
 const close = (a, b, msg = '') => assert.ok(approx(a, b, 1e-9), `${a} != ${b} ${msg}`);
+
+// Pinned gear numbers: the hand-computed stats / costs / minutes below hold whatever CONFIG says.
+const PG = cfgWith({
+  gear: {
+    materialMult: { copper: 1.0, iron: 1.5, steel: 2.0, mythril: 3.0 },
+    gradeMult: { D: 1.0, C: 1.1, B: 1.2, A: 1.3, S: 1.5 },
+    slots: {
+      sword: { bars: 2, stats: { damage: 10, accuracy: 10 } },
+      chest: { bars: 3, stats: { defense: 6 } },
+      helmet: { bars: 2, stats: { defense: 4 } },
+      gloves: { bars: 2, stats: { defense: 2, accuracy: 10 } },
+      boots: { bars: 2, stats: { defense: 2, dodge: 10, speed: 3 } },
+    },
+    smithMinPerBar: 15,
+    infuseMin: 10,
+    gemArmorMult: { chest: 1.25, helmet: 1.1, gloves: 1.0, boots: 1.0 },
+    repair: { materialFraction: 35, timeFraction: 50 },
+  },
+  gemEffects: {
+    ruby: { weapon: { magicPct: [10, 15, 20, 25, 30] }, armor: { magicRes: [4, 6, 8, 10, 12] } },
+    topaz: { weapon: { stunChance: [4, 6, 8, 10, 12], stunDur: [0.5, 0.6, 0.7, 0.8, 1.0] }, armor: { stunChanceRed: [4, 6, 8, 10, 12], stunDurRed: [4, 6, 8, 10, 12] } },
+    emerald: { weapon: { accuracy: [10, 15, 20, 25, 30] }, armor: { dodge: [4, 6, 8, 10, 12] } },
+    sapphire: { weapon: { slowPct: [10, 15, 20, 25, 30], slowDur: [1, 1.5, 2, 2.5, 3] }, armor: { slowRed: [4, 6, 8, 10, 12], slowDurRed: [4, 6, 8, 10, 12] } },
+    diamond: { weapon: { pierce: [10, 15, 20, 25, 30] }, armor: { pierceRes: [4, 6, 8, 10, 12] } },
+  },
+});
 
 // ----------------------------------------------------------------- stats ----
 test('gearStats = slot base x material multiplier x grade multiplier', () => {
@@ -22,11 +48,17 @@ test('gearStats = slot base x material multiplier x grade multiplier', () => {
       }
     }
   }
-  // spot checks
-  close(gearStats(item('chest', 'iron', 'B')).defense, 10.8); // 6 x 1.5 x 1.2
-  assert.deepEqual(gearStats(item('sword', 'mythril', 'S')), { damage: 45, accuracy: 45 });
-  assert.deepEqual(gearStats(item('boots')), { defense: 2, dodge: 10, speed: 3 });
-  close(gearStats(item('gloves', 'steel', 'C')).accuracy, 22);
+  // spot checks (pinned numbers)
+  close(gearStats(item('chest', 'iron', 'B'), PG).defense, 10.8); // 6 x 1.5 x 1.2
+  assert.deepEqual(gearStats(item('sword', 'mythril', 'S'), PG), { damage: 45, accuracy: 45 });
+  assert.deepEqual(gearStats(item('boots'), PG), { defense: 2, dodge: 10, speed: 3 });
+  close(gearStats(item('gloves', 'steel', 'C'), PG).accuracy, 22);
+});
+
+test('better materials and grades never make gear weaker (config ordering)', () => {
+  const { materialMult, gradeMult } = CONFIG.gear;
+  for (let i = 1; i < BARS.length; i++) assert.ok(materialMult[BARS[i]] >= materialMult[BARS[i - 1]], BARS[i]);
+  for (let i = 1; i < GRADES.length; i++) assert.ok(gradeMult[GRADES[i]] >= gradeMult[GRADES[i - 1]], GRADES[i]);
 });
 
 test('armor ordering: chest > helmet > gloves = boots defense', () => {
@@ -34,11 +66,35 @@ test('armor ordering: chest > helmet > gloves = boots defense', () => {
   assert.ok(d('chest') > d('helmet'));
   assert.ok(d('helmet') > d('gloves'));
   assert.equal(d('gloves'), d('boots'));
+  // gloves add accuracy, boots add speed and dodge, the sword adds damage and accuracy
+  assert.ok(gearStats(item('gloves')).accuracy > 0);
+  assert.ok(gearStats(item('boots')).speed > 0 && gearStats(item('boots')).dodge > 0);
+  assert.ok(gearStats(item('sword')).damage > 0 && gearStats(item('sword')).accuracy > 0);
+});
+
+test('gems add their effect by gem grade (independent of gear grade), from the config tables', () => {
+  for (const [type, fx] of Object.entries(CONFIG.gemEffects)) {
+    GRADES.forEach((g, gi) => {
+      for (const mat of ['copper', 'mythril']) {
+        const sw = gearStats(item('sword', mat, 'S', { type, grade: g }));
+        const plain = gearStats(item('sword', mat, 'S'));
+        for (const [k, arr] of Object.entries(fx.weapon)) close(sw[k], (plain[k] || 0) + arr[gi], `${type} ${g} ${k}`);
+        for (const slot of ['chest', 'helmet', 'gloves', 'boots']) {
+          const ar = gearStats(item(slot, mat, 'D', { type, grade: g }));
+          const base = gearStats(item(slot, mat, 'D'));
+          for (const [k, arr] of Object.entries(fx.armor)) close(ar[k], (base[k] || 0) + arr[gi] * CONFIG.gear.gemArmorMult[slot], `${slot} ${type} ${g} ${k}`);
+        }
+      }
+    });
+  }
+  // armor gem effects are stronger on chests than helmets, and on helmets than gloves/boots
+  const M = CONFIG.gear.gemArmorMult;
+  assert.ok(M.chest >= M.helmet && M.helmet >= M.gloves && M.gloves === M.boots);
 });
 
 test('sword gems add weapon effects by gem grade (independent of gear grade)', () => {
-  const fx = CONFIG.gemEffects;
-  const sw = (type, grade) => gearStats(item('sword', 'copper', 'D', { type, grade }));
+  const fx = PG.gemEffects;
+  const sw = (type, grade) => gearStats(item('sword', 'copper', 'D', { type, grade }), PG);
   assert.equal(sw('ruby', 'A').magicPct, fx.ruby.weapon.magicPct[3]);
   assert.deepEqual(sw('topaz', 'S'), { damage: 10, accuracy: 10, stunChance: 12, stunDur: 1.0 });
   assert.equal(sw('emerald', 'C').accuracy, 10 + 15, 'emerald adds to the sword accuracy');
@@ -49,7 +105,7 @@ test('sword gems add weapon effects by gem grade (independent of gear grade)', (
 });
 
 test('armor gems: chest x1.25, helmet x1.1, gloves/boots x1', () => {
-  const ar = (slot, type, grade) => gearStats(item(slot, 'copper', 'D', { type, grade }));
+  const ar = (slot, type, grade) => gearStats(item(slot, 'copper', 'D', { type, grade }), PG);
   close(ar('chest', 'ruby', 'S').magicRes, 15);
   close(ar('helmet', 'ruby', 'S').magicRes, 13.2);
   close(ar('gloves', 'ruby', 'S').magicRes, 12);
@@ -76,15 +132,22 @@ test('gearName / statsText / barKey', () => {
 
 // ----------------------------------------------------------------- craft ----
 test('craftMinutes: 15 per bar (+10 with a gem)', () => {
-  assert.equal(craftMinutes('sword', false), 30);
-  assert.equal(craftMinutes('chest', false), 45);
-  assert.equal(craftMinutes('chest', true), 55);
-  assert.equal(craftMinutes('boots', true), 40);
+  assert.equal(craftMinutes('sword', false, PG), 30);
+  assert.equal(craftMinutes('chest', false, PG), 45);
+  assert.equal(craftMinutes('chest', true, PG), 55);
+  assert.equal(craftMinutes('boots', true, PG), 40);
+  // default config
+  const C = CONFIG.gear;
+  for (const slot of SLOTS) {
+    assert.equal(craftMinutes(slot, false), C.slots[slot].bars * C.smithMinPerBar);
+    assert.equal(craftMinutes(slot, true), C.slots[slot].bars * C.smithMinPerBar + C.infuseMin);
+  }
 });
 
 test('craftCost: bars of one material+grade, plus one cut gem', () => {
-  assert.deepEqual(craftCost({ slot: 'chest', material: 'iron', grade: 'B' }), { bars: { 'iron:B': 3 }, gems: {} });
-  assert.deepEqual(craftCost({ slot: 'sword', material: 'steel', grade: 'S', gem: { type: 'topaz', grade: 'C' } }), { bars: { 'steel:S': 2 }, gems: { 'topaz:C': 1 } });
+  assert.deepEqual(craftCost({ slot: 'chest', material: 'iron', grade: 'B' }, PG), { bars: { 'iron:B': 3 }, gems: {} });
+  assert.deepEqual(craftCost({ slot: 'sword', material: 'steel', grade: 'S', gem: { type: 'topaz', grade: 'C' } }, PG), { bars: { 'steel:S': 2 }, gems: { 'topaz:C': 1 } });
+  for (const slot of SLOTS) assert.deepEqual(craftCost({ slot, material: 'copper', grade: 'D' }), { bars: { 'copper:D': CONFIG.gear.slots[slot].bars }, gems: {} });
 });
 
 test('craft requires same-grade bars (mixed grades do not count)', () => {
@@ -93,8 +156,8 @@ test('craft requires same-grade bars (mixed grades do not count)', () => {
   s.storage.bars['iron:A'] = 1;
   s.storage.bars['copper:B'] = 5;
   const spec = { slot: 'sword', material: 'iron', grade: 'B' };
-  assert.match(canCraft(s, spec), /Need 2 iron B bars/);
-  const r = craft(s, spec);
+  assert.match(canCraft(s, spec, PG), /Need 2 iron B bars/);
+  const r = craft(s, spec, PG);
   assert.equal(r.ok, false);
   assert.equal(s.storage.bars['iron:B'], 1);
   assert.equal(s.storage.bars['iron:A'], 1);
@@ -106,14 +169,15 @@ test('craft consumes bars, creates the item with the bars\' grade and spends tim
   const s = game(1);
   s.storage.bars['iron:B'] = 5;
   const id0 = s.nextId;
-  const r = craft(s, { slot: 'chest', material: 'iron', grade: 'B' });
+  const r = craft(s, { slot: 'chest', material: 'iron', grade: 'B' }, PG);
   assert.equal(r.ok, true, r.msg);
   assert.equal(s.storage.bars['iron:B'], 2);
   assert.deepEqual(r.item, { id: id0, slot: 'chest', material: 'iron', grade: 'B', gem: null, durability: 100, packed: false });
   assert.equal(s.nextId, id0 + 1);
   assert.equal(s.gear.length, 1);
   assert.equal(s.time, DAY_START + 45);
-  assert.equal(canCraft(s, { slot: 'chest', material: 'iron', grade: 'B' }) !== null, true, 'only 2 bars left');
+  assert.equal(r.minutes, 45);
+  assert.equal(canCraft(s, { slot: 'chest', material: 'iron', grade: 'B' }, PG) !== null, true, 'only 2 bars left');
 });
 
 test('craft with a gem needs and consumes the cut gem (+10 minutes)', () => {
@@ -121,11 +185,11 @@ test('craft with a gem needs and consumes the cut gem (+10 minutes)', () => {
   s.storage.bars['steel:A'] = 2;
   const spec = { slot: 'sword', material: 'steel', grade: 'A', gem: { type: 'ruby', grade: 'S' } };
   s.storage.cut['ruby:B'] = 3;
-  assert.match(canCraft(s, spec), /cut ruby S/);
-  assert.equal(craft(s, spec).ok, false);
+  assert.match(canCraft(s, spec, PG), /cut ruby S/);
+  assert.equal(craft(s, spec, PG).ok, false);
   assert.equal(s.storage.bars['steel:A'], 2, 'bars untouched when the gem is missing');
   s.storage.cut['ruby:S'] = 1;
-  const r = craft(s, spec);
+  const r = craft(s, spec, PG);
   assert.equal(r.ok, true, r.msg);
   assert.deepEqual(r.item.gem, { type: 'ruby', grade: 'S' });
   assert.notEqual(r.item.gem, spec.gem, 'gem object is copied');
@@ -138,51 +202,55 @@ test('craft with a gem needs and consumes the cut gem (+10 minutes)', () => {
 test('craft requires camp, work phase, a valid slot and enough time', () => {
   const s = game(1);
   s.storage.bars['copper:D'] = 10;
-  assert.equal(craft(s, { slot: 'ring', material: 'copper', grade: 'D' }).ok, false);
+  const sword = { slot: 'sword', material: 'copper', grade: 'D' };
+  assert.equal(craft(s, { slot: 'ring', material: 'copper', grade: 'D' }, PG).ok, false);
   s.time = DAY_END - 29;
-  assert.equal(craft(s, { slot: 'sword', material: 'copper', grade: 'D' }).ok, false);
+  assert.equal(craft(s, sword, PG).ok, false);
   assert.equal(s.storage.bars['copper:D'], 10);
   s.time = DAY_END - 30;
-  assert.equal(craft(s, { slot: 'sword', material: 'copper', grade: 'D' }).ok, true);
+  assert.equal(craft(s, sword, PG).ok, true);
   s.time = DAY_START;
   s.phase = 'over';
-  assert.equal(craft(s, { slot: 'sword', material: 'copper', grade: 'D' }).ok, false);
+  assert.equal(craft(s, sword, PG).ok, false);
   s.phase = 'work';
   standInBlankField(s, 1);
-  assert.equal(craft(s, { slot: 'sword', material: 'copper', grade: 'D' }).ok, false);
+  assert.equal(craft(s, sword, PG).ok, false);
 });
 
 // ---------------------------------------------------------------- repair ----
 test('repairInfo: 35% of bars (+gem) x missing fraction, rounded up to 0.01; time 50% x craft time x fraction', () => {
   const chest = item('chest', 'iron', 'B', { type: 'ruby', grade: 'S' }, { durability: 80 });
-  assert.deepEqual(repairInfo(chest), { missing: 20, bars: { 'iron:B': 0.21 }, gems: { 'ruby:S': 0.07 }, minutes: 5.5 });
+  assert.deepEqual(repairInfo(chest, PG), { missing: 20, bars: { 'iron:B': 0.21 }, gems: { 'ruby:S': 0.07 }, minutes: 5.5 });
   // rounding up: 2 x 0.35 x 0.01 = 0.007 -> 0.01 bars
   const helm = item('helmet', 'copper', 'C', null, { durability: 99 });
-  assert.deepEqual(repairInfo(helm).bars, { 'copper:C': 0.01 });
-  assert.deepEqual(repairInfo(helm).gems, {});
+  assert.deepEqual(repairInfo(helm, PG).bars, { 'copper:C': 0.01 });
+  assert.deepEqual(repairInfo(helm, PG).gems, {});
   // 3 x 0.35 x 0.99 = 1.0395 -> 1.04
-  assert.deepEqual(repairInfo(item('chest', 'iron', 'D', null, { durability: 1 })).bars, { 'iron:D': 1.04 });
+  assert.deepEqual(repairInfo(item('chest', 'iron', 'D', null, { durability: 1 }), PG).bars, { 'iron:D': 1.04 });
   // full repair from 0 would be 35% of everything and 50% of the time
-  const z = repairInfo(item('sword', 'mythril', 'S', { type: 'topaz', grade: 'A' }, { durability: 0 }));
+  const z = repairInfo(item('sword', 'mythril', 'S', { type: 'topaz', grade: 'A' }, { durability: 0 }), PG);
   assert.deepEqual(z, { missing: 100, bars: { 'mythril:S': 0.7 }, gems: { 'topaz:A': 0.35 }, minutes: 20 });
   // exact hundredths are not bumped up: 2 x 0.35 x 0.5 = 0.35
-  assert.deepEqual(repairInfo(item('boots', 'copper', 'D', null, { durability: 50 })).bars, { 'copper:D': 0.35 });
+  assert.deepEqual(repairInfo(item('boots', 'copper', 'D', null, { durability: 50 }), PG).bars, { 'copper:D': 0.35 });
   // nothing missing -> free
-  assert.deepEqual(repairInfo(item('boots')), { missing: 0, bars: { 'copper:D': 0 }, gems: {}, minutes: 0 });
+  assert.deepEqual(repairInfo(item('boots'), PG), { missing: 0, bars: { 'copper:D': 0 }, gems: {}, minutes: 0 });
 });
 
 test('repairInfo amounts never undercharge (ceil to 0.01) for every durability', () => {
+  const f = CONFIG.gear.repair.materialFraction / 100;
   for (let dur = 0; dur <= 100; dur++) {
     for (const slot of SLOTS) {
       const info = repairInfo(item(slot, 'iron', 'B', { type: 'ruby', grade: 'D' }, { durability: dur }));
-      const exactBars = CONFIG.gear.slots[slot].bars * 0.35 * ((100 - dur) / 100);
+      const exactBars = CONFIG.gear.slots[slot].bars * f * ((100 - dur) / 100);
       const bars = info.bars['iron:B'];
       assert.ok(bars + 1e-9 >= exactBars, `${slot} ${dur}: ${bars} < ${exactBars}`);
       assert.ok(bars - exactBars < 0.01 + 1e-9, `${slot} ${dur}: overcharged ${bars} vs ${exactBars}`);
       assert.ok(approx(bars * 100, Math.round(bars * 100), 1e-6), 'multiple of 0.01');
-      const exactGem = 0.35 * ((100 - dur) / 100);
+      const exactGem = f * ((100 - dur) / 100);
       assert.ok(info.gems['ruby:D'] + 1e-9 >= exactGem);
       assert.ok(info.gems['ruby:D'] - exactGem < 0.01 + 1e-9);
+      const exactMin = craftMinutes(slot, true) * (CONFIG.gear.repair.timeFraction / 100) * ((100 - dur) / 100);
+      assert.ok(Math.abs(info.minutes - exactMin) <= 0.05 + 1e-9, 'minutes rounded to 0.1');
     }
   }
 });
@@ -192,13 +260,13 @@ test('repair consumes fractional bars and gems, restores 100% and spends time', 
   const g = addGear(s, 'chest', 'iron', 'B', { type: 'ruby', grade: 'S' }, { durability: 80 });
   s.storage.bars['iron:B'] = 1;
   s.storage.cut['ruby:S'] = 1;
-  const r = repair(s, g.id);
+  const r = repair(s, g.id, PG);
   assert.equal(r.ok, true, r.msg);
   assert.equal(g.durability, 100);
   assert.equal(s.storage.bars['iron:B'], 0.79);
   assert.equal(s.storage.cut['ruby:S'], 0.93);
   assert.equal(s.time, DAY_START + 5.5);
-  assert.equal(repair(s, g.id).ok, false, 'already at 100%');
+  assert.equal(repair(s, g.id, PG).ok, false, 'already at 100%');
 });
 
 test('repeated fractional repairs keep clean 0.01 amounts and can use the last fraction', () => {
@@ -207,11 +275,11 @@ test('repeated fractional repairs keep clean 0.01 amounts and can use the last f
   s.storage.bars['copper:D'] = 0.21;
   for (let i = 0; i < 3; i++) {
     g.durability = 90;
-    assert.equal(repair(s, g.id).ok, true, `repair ${i}`);
+    assert.equal(repair(s, g.id, PG).ok, true, `repair ${i}`);
   }
   assert.equal(s.storage.bars['copper:D'], 0);
   g.durability = 90;
-  const r = repair(s, g.id);
+  const r = repair(s, g.id, PG);
   assert.equal(r.ok, false);
   assert.match(r.msg, /Need 0.07/);
 });
@@ -221,10 +289,10 @@ test('repair refuses when materials are short (nothing consumed)', () => {
   const g = addGear(s, 'chest', 'iron', 'B', { type: 'ruby', grade: 'S' }, { durability: 80 });
   s.storage.bars['iron:B'] = 0.2; // need 0.21
   s.storage.cut['ruby:S'] = 1;
-  assert.equal(repair(s, g.id).ok, false);
+  assert.equal(repair(s, g.id, PG).ok, false);
   s.storage.bars['iron:B'] = 0.21;
   s.storage.cut['ruby:S'] = 0.06; // need 0.07
-  assert.equal(repair(s, g.id).ok, false);
+  assert.equal(repair(s, g.id, PG).ok, false);
   assert.equal(s.storage.bars['iron:B'], 0.21);
   assert.equal(g.durability, 80);
   assert.equal(s.time, DAY_START);
@@ -234,16 +302,29 @@ test('packed gear cannot be repaired; unknown ids and time are checked', () => {
   const s = game(1);
   const g = addGear(s, 'sword', 'copper', 'D', null, { durability: 50, packed: true });
   s.storage.bars['copper:D'] = 5;
-  const r = repair(s, g.id);
+  const r = repair(s, g.id, PG);
   assert.equal(r.ok, false);
   assert.match(r.msg, /adventurer/);
   assert.equal(g.durability, 50);
-  assert.equal(repair(s, 9999).ok, false);
+  assert.equal(repair(s, 9999, PG).ok, false);
   g.packed = false;
   s.time = DAY_END - 7; // needs 7.5
-  assert.equal(repair(s, g.id).ok, false);
+  assert.equal(repair(s, g.id, PG).ok, false);
   s.time = DAY_END - 7.5;
-  assert.equal(repair(s, g.id).ok, true);
+  assert.equal(repair(s, g.id, PG).ok, true);
+});
+
+test('repair requires camp and the work phase', () => {
+  const s = game(1);
+  const g = addGear(s, 'sword', 'copper', 'D', null, { durability: 50 });
+  s.storage.bars['copper:D'] = 5;
+  s.phase = 'plan';
+  assert.equal(repair(s, g.id, PG).ok, false);
+  s.phase = 'work';
+  standInBlankField(s, 1);
+  assert.match(repair(s, g.id, PG).msg, /camp/);
+  assert.equal(g.durability, 50);
+  assert.equal(s.storage.bars['copper:D'], 5);
 });
 
 test('scrap removes unpacked gear only', () => {
@@ -254,4 +335,24 @@ test('scrap removes unpacked gear only', () => {
   assert.equal(scrap(s, a.id).ok, true);
   assert.deepEqual(s.gear.map((g) => g.id), [b.id]);
   assert.equal(scrap(s, a.id).ok, false);
+});
+
+test('scrap requires the work phase and being at camp', () => {
+  const s = game(1);
+  const a = addGear(s, 'sword');
+  for (const phase of ['report', 'plan', 'over']) {
+    s.phase = phase;
+    const r = scrap(s, a.id);
+    assert.equal(r.ok, false, phase);
+    assert.match(r.msg, /work day/);
+  }
+  s.phase = 'work';
+  standInBlankField(s, 1);
+  const r = scrap(s, a.id);
+  assert.equal(r.ok, false);
+  assert.match(r.msg, /camp/);
+  assert.deepEqual(s.gear.map((g) => g.id), [a.id], 'nothing scrapped');
+  s.location = { ...s.map.camp };
+  assert.equal(scrap(s, a.id).ok, true);
+  assert.deepEqual(s.gear, []);
 });

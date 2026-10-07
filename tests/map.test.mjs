@@ -1,11 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG, ORES, GEMS } from '../js/config.js';
-import { seededRng } from '../js/core/rng.js';
+import { seededRng, makeRng } from '../js/core/rng.js';
 import {
   generateMap, generateField, pathSteps, mapCell, key, travelMinutes, returnMinutes, travel, atCamp, timeLeft,
+  rollCell, regrowFields,
 } from '../js/core/map.js';
 import { game, cfgWith, customMap, addRing, setSkillLevel, DAY_END, DAY_START, fieldAt } from './helpers.mjs';
+
+// Pinned travel numbers: the hand-computed minutes below hold whatever CONFIG says.
+const TRAVEL = cfgWith({
+  map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
+  processing: { maxTimeReduction: 75 },
+  rings: { duplicateFactor: 0.5, types: { travelTime: { values: [5, 6, 7, 8, 10] } } },
+  skills: { xpBase: 100, activity: { returnTravel: { perLevel: 0.5 } } },
+});
 
 // Independent BFS for cross-checking.
 function bfs(map, from) {
@@ -32,8 +41,9 @@ test('generateMap: camp in the center, exact blocked count, every field reachabl
     const n = CONFIG.map.size;
     assert.equal(map.size, n);
     assert.equal(map.cells.length, n * n);
-    assert.deepEqual(map.camp, { x: 2, y: 2 });
-    assert.equal(mapCell(map, 2, 2).type, 'camp');
+    const c = Math.floor(n / 2);
+    assert.deepEqual(map.camp, { x: c, y: c });
+    assert.equal(mapCell(map, c, c).type, 'camp');
     const blocked = map.cells.filter((c) => c.type === 'blocked');
     const fields = map.cells.filter((c) => c.type === 'field');
     assert.equal(blocked.length, CONFIG.map.blockedCells);
@@ -62,7 +72,7 @@ test('generateMap is deterministic for a seed', () => {
 test('generateMap with no blocked cells: dist = Manhattan distance', () => {
   const cfg = cfgWith({ map: { blockedCells: 0 } });
   const map = generateMap(seededRng(5), cfg);
-  for (const c of map.cells) if (c.type === 'field') assert.equal(c.dist, Math.abs(c.x - 2) + Math.abs(c.y - 2));
+  for (const c of map.cells) if (c.type === 'field') assert.equal(c.dist, Math.abs(c.x - map.camp.x) + Math.abs(c.y - map.camp.y));
 });
 
 test('mapCell returns null outside the map', () => {
@@ -72,25 +82,45 @@ test('mapCell returns null outside the map', () => {
   assert.equal(mapCell(map, 5, 5), null);
 });
 
-test('generateField: valid items, depth 0..100, 1-3 items per loot cell, no mythril next to camp', () => {
+// Ore/gem weight row and loot chance used for a field at distance d (rows past the table reuse the last one).
+const weightRow = (rows, d) => rows[Math.max(0, Math.min(d, rows.length) - 1)];
+const lootPct = (d, debris, cfg = CONFIG) => {
+  const L = cfg.field.lootChance;
+  return Math.min(100, Math.min(L.max, L.base + L.perDistance * (d - 1)) + (debris ? cfg.field.debrisLootBonus : 0));
+};
+
+test('generateField: valid items, depth 0..100, item count from itemCountWeights, zero-weight types never appear', () => {
   const rng = seededRng(11);
+  const maxItems = Math.max(...Object.keys(CONFIG.field.itemCountWeights).map(Number));
   for (let i = 0; i < 60; i++) {
-    const dist = 1 + (i % 4);
+    const dist = 1 + (i % 5);
     const f = generateField(rng, dist);
     assert.equal(f.dist, dist);
+    assert.equal(f.cells.length, CONFIG.field.size ** 2);
+    const oreW = weightRow(CONFIG.field.oreWeights, dist);
+    const gemW = weightRow(CONFIG.field.gemWeights, dist);
     for (const c of f.cells) {
       assert.equal(c.searched, 0);
       assert.equal(c.revealed, false);
       assert.deepEqual(c.ground, []);
-      assert.ok(c.items.length <= 3);
+      assert.ok(c.items.length <= maxItems);
       for (const it of c.items) {
         const [kind, type] = it.t.split(':');
         assert.ok(kind === 'ore' ? ORES.includes(type) : kind === 'gem' && GEMS.includes(type), it.t);
+        assert.ok((kind === 'ore' ? oreW : gemW)[type] > 0, `${it.t} has weight 0 at distance ${dist}`);
         assert.ok(it.d >= 0 && it.d < 100);
-        if (dist === 1) assert.notEqual(it.t, 'ore:mythril');
       }
     }
   }
+});
+
+test('generateField with pinned weights: no mythril next to camp, distance picks the weight row', () => {
+  const cfg = cfgWith({ field: { oreShare: 100, lootChance: { base: 100, perDistance: 0, max: 100 }, oreWeights: [{ copper: 1, iron: 0, coal: 0, mythril: 0 }, { copper: 0, iron: 0, coal: 0, mythril: 1 }] } });
+  const rng = seededRng(13);
+  const types = (d) => new Set(generateField(rng, d, cfg).cells.flatMap((c) => c.items.map((it) => it.t)));
+  assert.deepEqual([...types(1)], ['ore:copper']);
+  assert.deepEqual([...types(2)], ['ore:mythril']);
+  assert.deepEqual([...types(6)], ['ore:mythril'], 'farther fields reuse the last row');
 });
 
 test('generateField: farther fields and debris cells hold more items on average', () => {
@@ -106,10 +136,13 @@ test('generateField: farther fields and debris cells hold more items on average'
   };
   const near = stat(1);
   const far = stat(4);
-  assert.ok(Math.abs(near.clear - 0.40) < 0.02, `dist1 loot ${near.clear}`);
-  assert.ok(Math.abs(far.clear - 0.55) < 0.02, `dist4 loot ${far.clear}`);
-  assert.ok(Math.abs(near.debris - 0.60) < 0.03, `debris loot ${near.debris}`);
-  assert.ok(Math.abs(near.debrisShare - 0.15) < 0.01, `debris share ${near.debrisShare}`);
+  assert.ok(Math.abs(near.clear - lootPct(1, false) / 100) < 0.02, `dist1 loot ${near.clear}`);
+  assert.ok(Math.abs(far.clear - lootPct(4, false) / 100) < 0.02, `dist4 loot ${far.clear}`);
+  assert.ok(Math.abs(near.debris - lootPct(1, true) / 100) < 0.03, `debris loot ${near.debris}`);
+  assert.ok(Math.abs(near.debrisShare - CONFIG.field.debrisChance / 100) < 0.01, `debris share ${near.debrisShare}`);
+  // the rule itself: farther fields and debris cells are at least as rich
+  assert.ok(lootPct(4, false) >= lootPct(1, false));
+  assert.ok(lootPct(1, true) >= lootPct(1, false));
 });
 
 // ---------------------------------------------------------------- pathSteps --
@@ -139,21 +172,28 @@ function travelState(blocked = [{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }])
   return s;
 }
 
+test('travelMinutes defaults: steps x travelMinPerStep', () => {
+  const s = travelState();
+  const camp = s.map.camp;
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 0), CONFIG.map.travelMinPerStep);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 0 }, 0), 6 * CONFIG.map.travelMinPerStep);
+});
+
 test('travelMinutes = steps x 20 min (no load, no bonuses)', () => {
   const s = travelState();
   const camp = s.map.camp;
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 0), 20);
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 0 }, 0), 120); // 6 steps around the wall
-  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0), 80);
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 1 }, 0), Infinity);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 0, TRAVEL), 20);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 0 }, 0, TRAVEL), 120); // 6 steps around the wall
+  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0, TRAVEL), 80);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 1 }, 0, TRAVEL), Infinity);
 });
 
 test('travelMinutes: +1% per bag item', () => {
   const s = travelState();
   const camp = s.map.camp;
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 10), 22);
-  assert.equal(travelMinutes(s, { x: 2, y: 0 }, camp, 20), 144);
-  assert.equal(returnMinutes(s, { x: 2, y: 4 }, 5), 42);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 10, TRAVEL), 22);
+  assert.equal(travelMinutes(s, { x: 2, y: 0 }, camp, 20, TRAVEL), 144);
+  assert.equal(returnMinutes(s, { x: 2, y: 4 }, 5, TRAVEL), 42);
 });
 
 test('travelMinutes: travel ring applies everywhere, return skill only when going to camp', () => {
@@ -162,43 +202,44 @@ test('travelMinutes: travel ring applies everywhere, return skill only when goin
   addRing(s, 'travelTime', 'S', true); // 10%
   setSkillLevel(s, 'returnTravel', 4); // 4 x 0.5 = 2%
   // out to a field: only the ring
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0), 36); // 40 x 0.9
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 36); // 40 x 0.9
   // field to field: only the ring
-  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0), 72);
+  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0, TRAVEL), 72);
   // back to camp: ring + skill = 12%
-  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 0), 35.2); // 40 x 0.88
+  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 0, TRAVEL), 35.2); // 40 x 0.88
   // with load: 40 x 1.1 x 0.88 = 38.72 -> 38.7
-  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 10), 38.7);
+  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 10, TRAVEL), 38.7);
 });
 
 test('travelMinutes: unworn rings do not count; duplicate rings stack 1 / 0.5', () => {
   const s = travelState();
   const camp = s.map.camp;
   addRing(s, 'travelTime', 'S', false);
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0), 40);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 40);
   addRing(s, 'travelTime', 'S', true);
   addRing(s, 'travelTime', 'S', true); // 10 + 5 = 15%
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0), 34);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 34);
 });
 
-test('travelMinutes: time reductions are capped at 75%', () => {
-  const cfg = cfgWith({ skills: { activity: { returnTravel: { perLevel: 20 } } } });
+test('travelMinutes: time reductions are capped at maxTimeReduction', () => {
+  const cfg = cfgWith(TRAVEL, { skills: { activity: { returnTravel: { perLevel: 20 } } } });
   const s = travelState();
   setSkillLevel(s, 'returnTravel', 10); // 200% -> capped at 75%
   assert.equal(travelMinutes(s, { x: 2, y: 4 }, s.map.camp, 0, cfg), 10);
+  assert.equal(travelMinutes(s, { x: 2, y: 4 }, s.map.camp, 0, cfgWith(cfg, { processing: { maxTimeReduction: 50 } })), 20);
 });
 
 // ------------------------------------------------------------------- travel --
 test('travel to a field spends the travel time and moves the smith', () => {
   const s = travelState();
-  const r = travel(s, { x: 2, y: 4 });
+  const r = travel(s, { x: 2, y: 4 }, TRAVEL);
   assert.equal(r.ok, true, r.msg);
   assert.equal(r.minutes, 40);
   assert.equal(s.time, DAY_START + 40);
   assert.deepEqual(s.location, { x: 2, y: 4 });
   assert.equal(atCamp(s), false);
   // field to field
-  const r2 = travel(s, { x: 4, y: 4 });
+  const r2 = travel(s, { x: 4, y: 4 }, TRAVEL);
   assert.equal(r2.ok, true, r2.msg);
   assert.equal(s.time, DAY_START + 80);
 });
@@ -223,12 +264,12 @@ test('cannot leave for a field without time to walk back by 18:00', () => {
   const s = travelState();
   // (2,4): 40 there + 40 back = 80
   s.time = DAY_END - 79;
-  const r = travel(s, { x: 2, y: 4 });
+  const r = travel(s, { x: 2, y: 4 }, TRAVEL);
   assert.equal(r.ok, false);
   assert.match(r.msg, /Not enough time/);
   assert.deepEqual(s.location, s.map.camp);
   s.time = DAY_END - 80;
-  assert.equal(travel(s, { x: 2, y: 4 }).ok, true, 'exactly enough time is allowed');
+  assert.equal(travel(s, { x: 2, y: 4 }, TRAVEL).ok, true, 'exactly enough time is allowed');
   assert.equal(s.time, DAY_END - 40);
 });
 
@@ -238,16 +279,16 @@ test('field-to-field travel checks the way back from the destination (with curre
   s.bag = Array(10).fill('ore:copper');
   // to (2,4): 22 there + 44 back from (2,4) = 66
   s.time = DAY_END - 65;
-  assert.equal(travel(s, { x: 2, y: 4 }).ok, false);
+  assert.equal(travel(s, { x: 2, y: 4 }, TRAVEL).ok, false);
   s.time = DAY_END - 66;
-  assert.equal(travel(s, { x: 2, y: 4 }).ok, true);
+  assert.equal(travel(s, { x: 2, y: 4 }, TRAVEL).ok, true);
 });
 
 test('returning to camp is always allowed, even if it ends after 18:00', () => {
   const s = travelState();
   s.location = { x: 2, y: 0 }; // 6 steps = 120 min
   s.time = DAY_END - 10;
-  const r = travel(s, s.map.camp);
+  const r = travel(s, s.map.camp, TRAVEL);
   assert.equal(r.ok, true, r.msg);
   assert.equal(s.time, DAY_END + 110);
   assert.equal(atCamp(s), true);
@@ -258,7 +299,7 @@ test('arriving at camp unloads the bag into storage and grants return-travel XP'
   const s = travelState();
   s.location = { x: 2, y: 4 };
   s.bag = ['ore:copper', 'ore:copper', 'ore:mythril', 'gem:ruby', 'gem:diamond'];
-  const r = travel(s, s.map.camp);
+  const r = travel(s, s.map.camp, TRAVEL);
   assert.equal(r.ok, true);
   assert.match(r.msg, /Unloaded 5 items/);
   assert.deepEqual(s.bag, []);
@@ -275,7 +316,7 @@ test('travelling out does not unload or grant return XP', () => {
   const s = travelState();
   s.location = { x: 2, y: 3 };
   s.bag = ['ore:iron'];
-  assert.equal(travel(s, { x: 2, y: 4 }).ok, true);
+  assert.equal(travel(s, { x: 2, y: 4 }, TRAVEL).ok, true);
   assert.deepEqual(s.bag, ['ore:iron']);
   assert.equal(s.storage.ore.iron, 0);
   assert.equal(s.skills.returnTravel.xp, 0);
@@ -291,4 +332,95 @@ test('travel works on a generated map: every field can be reached on day 1 from 
     assert.equal(r.minutes, c.dist * CONFIG.map.travelMinPerStep);
   }
   assert.ok(fieldAt(s, 1));
+});
+
+// ----------------------------------------------------------------- regrowth --
+// A game whose fields have a mix of searched / unsearched cells, with ground items on some.
+function regrowState(seed = 3) {
+  const s = game(seed);
+  const rng = seededRng(seed + 100);
+  for (const f of Object.values(s.map.fields)) {
+    f.cells.forEach((c, i) => {
+      if (i % 3 === 0) { c.searched = 100; c.items = []; c.revealed = rng.chance(50); }
+      else if (i % 3 === 1) { c.searched = rng.float(1, 99); }
+      if (i % 5 === 0) c.ground = [`ore:copper`, `gem:ruby`];
+    });
+  }
+  return s;
+}
+const searchedCount = (s) => Object.values(s.map.fields).reduce((a, f) => a + f.cells.filter((c) => c.searched > 0).length, 0);
+
+test('regrowFields at 0% does nothing (and uses no randomness)', () => {
+  const s = regrowState();
+  const before = structuredClone(s.map);
+  const holder = { s: 42 };
+  assert.equal(regrowFields(s, makeRng(holder), cfgWith({ field: { regrowPctPerDay: 0 } })), 0);
+  assert.deepEqual(s.map, before);
+  assert.equal(holder.s, 42);
+});
+
+test('regrowFields at 100% resets every searched cell, keeps ground items, leaves unsearched cells alone', () => {
+  const s = regrowState();
+  const before = structuredClone(s.map.fields);
+  const n0 = searchedCount(s);
+  assert.ok(n0 > 0);
+  const n = regrowFields(s, seededRng(9), cfgWith({ field: { regrowPctPerDay: 100 } }));
+  assert.equal(n, n0, 'returns the number of regrown cells');
+  assert.equal(searchedCount(s), 0, 'every searched cell is fresh');
+  for (const [k, f] of Object.entries(s.map.fields)) {
+    assert.equal(f.dist, before[k].dist);
+    f.cells.forEach((c, i) => {
+      const old = before[k].cells[i];
+      assert.deepEqual(c.ground, old.ground, 'ground items stay');
+      if (old.searched > 0) {
+        assert.equal(c.searched, 0);
+        assert.equal(c.revealed, false);
+        assert.ok(Array.isArray(c.items));
+        for (const it of c.items) assert.ok(it.d >= 0 && it.d < 100);
+      } else {
+        assert.deepEqual(c, old, 'unsearched cell untouched');
+      }
+    });
+  }
+});
+
+test('regrowFields: a regrown cell is a fresh roll for its field\'s distance', () => {
+  // replay: per searched cell the regrowth uses one chance roll, then rollCell(rng, field.dist)
+  const cfg = cfgWith({ field: { regrowPctPerDay: 100 } });
+  const s = regrowState(5);
+  const before = structuredClone(s.map.fields);
+  regrowFields(s, seededRng(77), cfg);
+  const replay = seededRng(77);
+  for (const [k, f] of Object.entries(before)) {
+    f.cells.forEach((old, i) => {
+      if (old.searched <= 0) return;
+      replay.next(); // the regrowth chance roll
+      const expected = rollCell(replay, f.dist, cfg);
+      expected.ground = old.ground;
+      assert.deepEqual(s.map.fields[k].cells[i], expected);
+    });
+  }
+  // semantic check: with distance-specific ore tables, regrown cells follow their field's distance
+  const pinned = cfgWith({ field: { regrowPctPerDay: 100, debrisChance: 0, oreShare: 100, lootChance: { base: 100, perDistance: 0, max: 100 }, oreWeights: [{ copper: 1, iron: 0, coal: 0, mythril: 0 }, { copper: 0, iron: 0, coal: 0, mythril: 1 }] } });
+  const s2 = regrowState(6);
+  const before2 = structuredClone(s2.map.fields);
+  regrowFields(s2, seededRng(1), pinned);
+  assert.ok(new Set(Object.values(s2.map.fields).map((f) => f.dist)).size > 1, 'fields at several distances');
+  for (const [k, f] of Object.entries(s2.map.fields)) {
+    f.cells.forEach((c, i) => {
+      if (before2[k].cells[i].searched <= 0) return;
+      assert.ok(c.items.length > 0, 'loot chance 100%');
+      for (const it of c.items) assert.equal(it.t, f.dist === 1 ? 'ore:copper' : 'ore:mythril');
+    });
+  }
+});
+
+test('regrowFields: about regrowPctPerDay % of searched cells regrow each night', () => {
+  const s = regrowState(7);
+  const n0 = searchedCount(s);
+  const n = regrowFields(s, seededRng(3), cfgWith({ field: { regrowPctPerDay: 30 } }));
+  assert.ok(Math.abs(n / n0 - 0.3) < 0.05, `${n}/${n0}`);
+  assert.equal(searchedCount(s), n0 - n);
+  // the configured default is a sane percentage
+  assert.ok(CONFIG.field.regrowPctPerDay >= 0 && CONFIG.field.regrowPctPerDay <= 100);
 });

@@ -88,7 +88,7 @@ function statsPanel(ctx) {
   const a = cfg.adventurer;
   return section('Adventurer',
     h('p', { class: 'adv-tight muted adv-small' },
-      `Base: ${a.hp} HP, ${a.unarmedDamage} damage unarmed, attacks every ${a.attackInterval}s, accuracy ${a.accuracy}, dodge ${a.dodge}. `,
+      `Base: ${a.hp} HP, ${a.unarmedDamage} damage unarmed, attack bar fills in ${a.attackInterval}s (attacks when full), accuracy ${a.accuracy}, dodge ${a.dodge}. `,
       best.length ? `"Best gear" = the strongest-looking owned item per slot (${best.length}).` : 'No gear owned yet.'),
     combatStatsTable([
       { label: 'Base', c: adventurerCombatant([], {}, cfg) },
