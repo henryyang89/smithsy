@@ -1,18 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIG, BARS, GEMS } from '../js/config.js';
+import { CONFIG, BARS, GEMS, GRADES } from '../js/config.js';
 import { seededRng } from '../js/core/rng.js';
 import {
-  adjustDistribution, refineDistribution, cutDistribution, refineMinutes, cutMinutes, rollGrade, refine, cut,
+  adjustDistribution, refineDistribution, cutDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut,
   canRefine, repeat, GRADE_ORDER,
 } from '../js/core/processing.js';
+import { smithBonuses } from '../js/core/bonuses.js';
 import { itemXp, xpToNext } from '../js/core/skills.js';
 import { round1 } from '../js/core/util.js';
-import { game, cfgWith, approx, addRing, setSkillLevel, standInBlankField, ringVal, DAY_END, DAY_START } from './helpers.mjs';
+import { game, cfgWith, approx, addRing, setSkillLevel, standInBlankField, ringVal, xpSpent, DAY_END, DAY_START } from './helpers.mjs';
 
 const sum = (d) => GRADE_ORDER.reduce((a, g) => a + d[g], 0);
-// Total XP spent to reach `level` (so xp + xpSpent(level) = all XP ever gained, below max level).
-const xpSpent = (level, cfg = CONFIG) => Array.from({ length: level }, (_, L) => xpToNext(L, cfg)).reduce((a, b) => a + b, 0);
 const closeDist = (a, b, eps = 1e-9) => GRADE_ORDER.every((g) => approx(a[g], b[g], eps));
 // A fixed grade table for the pure adjustDistribution tests.
 const BASE = { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 };
@@ -27,27 +26,55 @@ const PIN = {
   skills: {
     xpBase: 100, maxLevel: 10, xpPerItem: XP,
     activity: { refineTime: { perLevel: 0.5 }, cutTime: { perLevel: 0.5 } },
-    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 0.3 }, gemFail: { perLevel: 0.3 } },
+    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 10 }, gemFail: { perLevel: 0.5 } },
   },
 };
 const CFG = cfgWith(PIN);
-// CFG, plus every refine / cut lands on `grade`.
+// CFG, plus every refine / cut lands on `grade` (gems: novice and master tables both forced).
 const forced = (grade) => {
   const dist = { S: 0, A: 0, B: 0, C: 0, D: 0, F: 0, [grade]: 100 };
   const refineCfg = Object.fromEntries(BARS.map((b) => [b, { dist }]));
-  const cutCfg = Object.fromEntries(GEMS.map((g) => [g, { dist }]));
+  const cutCfg = Object.fromEntries(GEMS.map((g) => [g, { novice: dist, master: dist }]));
   return cfgWith(PIN, { refine: refineCfg, cut: cutCfg });
 };
+// A pinned gem table pair with equal failure, so blends are easy to hand-compute.
+const TABLE = {
+  novice: { F: 10, D: 50, C: 30, B: 10, A: 0, S: 0 },
+  master: { F: 10, D: 10, C: 20, B: 30, A: 20, S: 10 },
+};
+const SUCCESS = ['D', 'C', 'B', 'A', 'S'];
+// Average grade index of the successful outcomes (D = 0 .. S = 4), weighted by chance.
+const meanGrade = (d) => SUCCESS.reduce((a, g, i) => a + d[g] * i, 0) / SUCCESS.reduce((a, g) => a + d[g], 0);
 
 // --------------------------------------------------------- distributions ----
-test('config grade tables each sum to 100', () => {
+test('config grade tables each sum to 100 (bars, and the gem novice / master tables)', () => {
   for (const b of BARS) assert.equal(sum(CONFIG.refine[b].dist), 100, b);
-  for (const g of GEMS) assert.equal(sum(CONFIG.cut[g].dist), 100, g);
+  for (const g of GEMS) {
+    assert.equal(sum(CONFIG.cut[g].novice), 100, `${g} novice`);
+    assert.equal(sum(CONFIG.cut[g].master), 100, `${g} master`);
+    assert.equal(CONFIG.cut[g].dist, undefined, `${g}: the old single table is gone`);
+  }
+});
+
+test('GRADE_ORDER lists outcomes from lowest to highest: F, then the grades D..S', () => {
+  assert.deepEqual(GRADE_ORDER, ['F', ...GRADES]);
+  assert.deepEqual(GRADE_ORDER, ['F', 'D', 'C', 'B', 'A', 'S']);
+  // gear multipliers confirm GRADES runs from worst to best
+  for (let i = 1; i < GRADES.length; i++) assert.ok(CONFIG.gear.gradeMult[GRADES[i]] > CONFIG.gear.gradeMult[GRADES[i - 1]]);
+});
+
+test('repeat summarizes grades from lowest to highest', () => {
+  const s = game(1);
+  const script = ['S', 'D', 'F', 'B', 'S', 'C', 'A', 'D'];
+  let i = 0;
+  const r = repeat(s, () => (i < script.length ? { ok: true, grade: script[i++], minutes: 1, notes: [] } : { ok: false, msg: 'done' }));
+  assert.equal(r.ok, true);
+  assert.match(r.msg, /: Fx1 Dx2 Cx1 Bx1 Ax1 Sx2$/);
 });
 
 test('adjustDistribution always sums to 100 and never goes negative', () => {
   const rng = seededRng(1);
-  const bases = [...BARS.map((b) => CONFIG.refine[b].dist), ...GEMS.map((g) => CONFIG.cut[g].dist)];
+  const bases = [...BARS.map((b) => CONFIG.refine[b].dist), ...GEMS.flatMap((g) => [CONFIG.cut[g].novice, CONFIG.cut[g].master])];
   for (const base of bases) {
     for (let i = 0; i < 300; i++) {
       const failRed = rng.float(-5, 30);
@@ -91,7 +118,7 @@ test('upgrade luck: each success has u% to move up one grade (S stays S)', () =>
   assert.ok(closeDist(both, { S: 10, A: 15, B: 22.5, C: 29.5, D: 17, F: 6 }), JSON.stringify(both));
 });
 
-test('refine/cut distributions include smith rings and per-material skills', () => {
+test('refine distributions include smith rings and per-material skills (bars unchanged by v1.1)', () => {
   const s = game(1);
   assert.deepEqual(refineDistribution(s, 'iron', CFG), CFG.refine.iron.dist);
   addRing(s, 'oreGrade', 'S', true); // 6%
@@ -102,15 +129,13 @@ test('refine/cut distributions include smith rings and per-material skills', () 
   assert.ok(approx(refineDistribution(s, 'iron', CFG).F, Math.max(0, CFG.refine.iron.dist.F - 3)));
   // other bars only get the ring
   assert.ok(closeDist(refineDistribution(s, 'copper', CFG), adjustDistribution(CFG.refine.copper.dist, 0, 6)));
-  // gem luck ring + gem skills
-  addRing(s, 'gemGrade', 'D', true); // 2%
-  setSkillLevel(s, 'gemFail_ruby', 5); // 1.5
-  setSkillLevel(s, 'gemGrade_ruby', 5); // 1.5
-  assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), adjustDistribution(CFG.cut.ruby.dist, 1.5, 3.5)));
-  assert.ok(closeDist(cutDistribution(s, 'topaz', CFG), adjustDistribution(CFG.cut.topaz.dist, 0, 2)));
+  // gem luck rings and gem skills never touch bars
+  addRing(s, 'gemGrade', 'S', true);
+  setSkillLevel(s, 'gemGrade_ruby', 10);
+  assert.ok(closeDist(refineDistribution(s, 'iron', CFG), exp));
 });
 
-test('refine/cut distributions with the default CONFIG follow the same rule', () => {
+test('refine distributions with the default CONFIG follow the same rule', () => {
   const s = game(1);
   const P = CONFIG.skills.perMaterial;
   addRing(s, 'oreGrade', 'A', true);
@@ -118,11 +143,106 @@ test('refine/cut distributions with the default CONFIG follow the same rule', ()
   setSkillLevel(s, 'oreFail_steel', 4);
   const exp = adjustDistribution(CONFIG.refine.steel.dist, P.oreFail.perLevel * 4, ringVal('oreGrade', 'A') + P.oreGrade.perLevel * 7);
   assert.ok(closeDist(refineDistribution(s, 'steel'), exp));
+});
+
+// -------------------------------------------------------------- gem tables ----
+test('blendCutTable: t = 0 is the novice table, t = 1 with failRed = novice F - master F is the master table', () => {
+  for (const gem of GEMS) {
+    const c = CONFIG.cut[gem];
+    assert.ok(closeDist(blendCutTable(c, 0, 0), c.novice), `${gem} novice`);
+    assert.ok(closeDist(blendCutTable(c, 1, c.novice.F - c.master.F), c.master), `${gem} master`);
+    assert.ok(c.master.F <= c.novice.F, 'masters fail no more often');
+  }
+  assert.ok(closeDist(blendCutTable(TABLE, 0, 0), TABLE.novice));
+  assert.ok(closeDist(blendCutTable(TABLE, 1, 0), TABLE.master));
+});
+
+test('blendCutTable: D..S blend linearly and fill 100 - F; F = novice F - failRed (clamped)', () => {
+  // halfway, equal failure: a plain average
+  assert.ok(closeDist(blendCutTable(TABLE, 0.5, 0), { F: 10, D: 30, C: 25, B: 20, A: 10, S: 5 }));
+  // failure reduced by 4 points: the successes are scaled up to fill 94
+  const d = blendCutTable(TABLE, 0.5, 4);
+  assert.ok(approx(d.F, 6));
+  const k = 94 / 90;
+  assert.ok(closeDist(d, { F: 6, D: 30 * k, C: 25 * k, B: 20 * k, A: 10 * k, S: 5 * k }), JSON.stringify(d));
+  // failure cannot go below 0; t is clamped to 0..1
+  assert.equal(blendCutTable(TABLE, 0.5, 50).F, 0);
+  assert.ok(closeDist(blendCutTable(TABLE, 2, 0), TABLE.master));
+  assert.ok(closeDist(blendCutTable(TABLE, -1, 0), TABLE.novice));
+  // the input tables are not changed
+  assert.deepEqual(TABLE.novice, { F: 10, D: 50, C: 30, B: 10, A: 0, S: 0 });
+});
+
+test('blendCutTable always sums to 100, never goes negative, and shifts monotonically toward S as t rises', () => {
+  const rng = seededRng(4);
+  for (const c of [TABLE, ...GEMS.map((g) => CONFIG.cut[g])]) {
+    for (let i = 0; i < 200; i++) {
+      const d = blendCutTable(c, rng.float(0, 1), rng.float(0, c.novice.F));
+      assert.ok(approx(sum(d), 100, 1e-9), `sum ${sum(d)}`);
+      for (const g of GRADE_ORDER) assert.ok(d[g] >= -1e-12);
+    }
+    // with failure fixed, the chance of "grade X or better" never drops as t rises (for every X above D)
+    let prev = null;
+    for (let t = 0; t <= 1 + 1e-9; t += 0.05) {
+      const d = blendCutTable(c, t, 0);
+      const atLeast = SUCCESS.map((_, i) => SUCCESS.slice(i).reduce((a, g) => a + d[g], 0));
+      if (prev) for (let i = 1; i < SUCCESS.length; i++) assert.ok(atLeast[i] >= prev[i] - 1e-9, `${SUCCESS[i]}+ dropped at t=${t}`);
+      prev = atLeast;
+    }
+    assert.ok(blendCutTable(c, 1, 0).S > blendCutTable(c, 0, 0).S, 'more S at master level');
+    assert.ok(meanGrade(blendCutTable(c, 1, 0)) > meanGrade(blendCutTable(c, 0, 0)));
+  }
+});
+
+test('cutDistribution: gem grade skill blends novice -> master, cutting skill lowers failure, only gem luck RINGS upgrade', () => {
+  const s = game(1);
+  const P = CFG.skills.perMaterial;
+  const c = CFG.cut.ruby;
+  assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), c.novice), 'no skills, no rings: the novice table');
+  setSkillLevel(s, 'gemGrade_ruby', 4); // 40% of the way to master
+  setSkillLevel(s, 'gemFail_ruby', 6); // 3 points less failure
+  const b = smithBonuses(s, CFG);
+  assert.equal(b.gemBlend('ruby'), P.gemGrade.perLevel * 4);
+  assert.equal(b.gemFailRed('ruby'), P.gemFail.perLevel * 6);
+  assert.equal(b.gemUpgrade('ruby'), 0, 'the grade skill is not an upgrade chance');
+  const base = blendCutTable(c, (P.gemGrade.perLevel * 4) / 100, P.gemFail.perLevel * 6);
+  assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), base));
+  assert.ok(approx(cutDistribution(s, 'ruby', CFG).F, c.novice.F - 3));
+  // a gem luck ring upgrades on top of the blended table
+  addRing(s, 'gemGrade', 'B', true);
+  const u = ringVal('gemGrade', 'B', CFG);
+  assert.equal(smithBonuses(s, CFG).gemUpgrade('ruby'), u);
+  assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), adjustDistribution(base, 0, u)));
+  // other gems: only the ring (skills are per gem)
+  assert.ok(closeDist(cutDistribution(s, 'topaz', CFG), adjustDistribution(CFG.cut.topaz.novice, 0, u)));
+  // bar luck rings and bar skills do not affect gems
+  addRing(s, 'oreGrade', 'S', true);
+  setSkillLevel(s, 'oreGrade_copper', 10);
+  assert.ok(closeDist(cutDistribution(s, 'topaz', CFG), adjustDistribution(CFG.cut.topaz.novice, 0, u)));
+});
+
+test('cutDistribution with the default CONFIG follows the same rule', () => {
+  const s = game(1);
+  const P = CONFIG.skills.perMaterial;
   addRing(s, 'gemGrade', 'C', true);
   setSkillLevel(s, 'gemGrade_emerald', 3);
   setSkillLevel(s, 'gemFail_emerald', 9);
-  const expG = adjustDistribution(CONFIG.cut.emerald.dist, P.gemFail.perLevel * 9, ringVal('gemGrade', 'C') + P.gemGrade.perLevel * 3);
-  assert.ok(closeDist(cutDistribution(s, 'emerald'), expG));
+  const base = blendCutTable(CONFIG.cut.emerald, (P.gemGrade.perLevel * 3) / 100, P.gemFail.perLevel * 9);
+  assert.ok(closeDist(cutDistribution(s, 'emerald'), adjustDistribution(base, 0, ringVal('gemGrade', 'C'))));
+  assert.ok(approx(sum(cutDistribution(s, 'emerald')), 100));
+});
+
+test('cutDistribution: a higher gem grade skill never lowers the chance of any grade-or-better', () => {
+  const s = game(1);
+  let prev = null;
+  for (let L = 0; L <= CONFIG.skills.maxLevel; L++) {
+    setSkillLevel(s, 'gemGrade_diamond', L);
+    const d = cutDistribution(s, 'diamond');
+    assert.ok(approx(d.F, CONFIG.cut.diamond.novice.F), 'the grade skill does not change failure');
+    const atLeast = SUCCESS.map((_, i) => SUCCESS.slice(i).reduce((a, g) => a + d[g], 0));
+    if (prev) for (let i = 1; i < SUCCESS.length; i++) assert.ok(atLeast[i] >= prev[i] - 1e-9, `level ${L}: ${SUCCESS[i]}+`);
+    prev = atLeast;
+  }
 });
 
 test('rollGrade follows the distribution and never returns a 0% grade', () => {
@@ -319,6 +439,25 @@ test('cut consumes a raw gem and adds a cut gem; failure loses the gem', () => {
   s.storage.gem.diamond = 1;
   cut(s, 'diamond', forced('C'));
   assert.equal(s.skills.gemGrade_diamond.xp, XP.diamond);
+});
+
+test('cut outcomes match the blended table over many cuts (game RNG)', () => {
+  // gem skills switched off so the table stays fixed while XP piles up; a gem luck ring on top
+  const cfg = cfgWith({ skills: { perMaterial: { gemGrade: { perLevel: 0 }, gemFail: { perLevel: 0 } } } });
+  const N = 3000;
+  const s = game(10);
+  addRing(s, 'gemGrade', 'A', true);
+  s.storage.gem.sapphire = N;
+  const counts = Object.fromEntries(GRADE_ORDER.map((g) => [g, 0]));
+  for (let i = 0; i < N; i++) {
+    s.time = DAY_START;
+    counts[cut(s, 'sapphire', cfg).grade]++;
+  }
+  const dist = adjustDistribution(CONFIG.cut.sapphire.novice, 0, ringVal('gemGrade', 'A'));
+  assert.ok(closeDist(cutDistribution(s, 'sapphire', cfg), dist));
+  for (const g of GRADE_ORDER) assert.ok(Math.abs((counts[g] / N) * 100 - dist[g]) < 2, `${g}: ${(counts[g] / N) * 100}% vs ${dist[g]}%`);
+  const cutGems = GRADES.reduce((a, g) => a + s.storage.cut[`sapphire:${g}`], 0);
+  assert.equal(cutGems, N - counts.F);
 });
 
 test('cut requires camp, the work phase and enough time', () => {

@@ -216,7 +216,10 @@ export function rosterView(state, cfg = CONFIG) {
 }
 
 // ------------------------------------------------------------- save/load ----
-export const SAVE_KEY = 'smithsy-save-v1';
+// v1.1 saves use a new key so an old cached v1.0 page can never overwrite them; v1.0 saves are read
+// from the legacy key once and migrated.
+export const SAVE_KEY = 'smithsy-save-v2';
+export const LEGACY_SAVE_KEYS = ['smithsy-save-v1'];
 export const BEST_KEY = 'smithsy-best-v1';
 
 export function serialize(state) {

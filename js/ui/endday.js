@@ -473,7 +473,7 @@ function planSel(ctx) {
     for (const id of wornNow) if (!before.has(id) && !p.ringIds.includes(id) && p.ringIds.length < cfg.rings.maxWorn) p.ringIds.push(id);
     p.wornKey = sortedIds(wornNow);
   }
-  ctx.ui.plan_est ||= {};
+  ctx.ui.plan_est = ctx.ui.plan_est || {};
   p.gearIds = p.gearIds.filter((id) => s.gear.some((g) => g.id === id));
   p.ringIds = p.ringIds.filter((id) => s.rings.some((r) => r.id === id && isAdvRing(r, cfg)));
   if (p.enemyIndex != null && !s.roster.enemies[p.enemyIndex]) p.enemyIndex = null;

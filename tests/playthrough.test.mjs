@@ -2,10 +2,12 @@
 // invariants after every step. Catches crashes, NaN/negative stock, time rule violations, etc.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIG, BARS, GEMS, SLOTS, GRADES } from '../js/config.js';
+import { CONFIG, BARS, GEMS, SLOTS, GRADES, ORES } from '../js/config.js';
 import { seededRng } from '../js/core/rng.js';
 import { newGame, endDay, acknowledgeReport, confirmPlan, serialize, deserialize } from '../js/core/game.js';
-import { travel, search, clearDebris, pickUp, dropItem, atCamp, currentField } from '../js/core/map.js';
+import {
+  travel, search, setCarry, defaultCarry, moveToPile, takeFromPile, projectedLoad, returnMinutes, atCamp, currentField,
+} from '../js/core/map.js';
 import { refine, cut } from '../js/core/processing.js';
 import { craft, repair, canCraft } from '../js/core/gear.js';
 import { toggleRing, wornRings } from '../js/core/rings.js';
@@ -38,12 +40,36 @@ function checkInvariants(s, ctx, cfg = CONFIG) {
   if (s.phase === 'work' && s.day > 1) assert.ok(s.plan && s.plan.day === s.day, `missing plan ${where}`);
   if (s.phase === 'work') assert.equal(s.roster.day, s.day + 1, where);
   for (const k of Object.keys(s.skills)) assert.ok(s.skills[k].level >= 0 && s.skills[k].level <= cfg.skills.maxLevel);
+  const validItem = (t) => {
+    const [kind, type] = t.split(':');
+    return kind === 'ore' ? ORES.includes(type) : kind === 'gem' && GEMS.includes(type);
+  };
+  for (const t of s.bag) assert.ok(validItem(t), `bag item ${t} ${where}`);
   for (const f of Object.values(s.map.fields)) {
+    assert.ok(Array.isArray(f.pile), `pile ${where}`);
+    for (const t of f.pile) assert.ok(validItem(t), `pile item ${t} ${where}`);
+    assert.equal(f.cells.filter((c) => c.boulder).length, cfg.field.boulders, `boulders ${where}`);
     for (const c of f.cells) {
       assert.ok(c.searched >= 0 && c.searched <= 100, `searched ${c.searched} ${where}`);
-      assert.ok(!(c.debris && c.searched > 0), `searched debris cell ${where}`);
+      assert.ok(Number.isFinite(c.debris) && c.debris >= 0, `debris ${c.debris} ${where}`);
+      assert.ok(!(c.debris > 0 && c.searched > 0), `searched debris cell ${where}`);
+      if (c.boulder) assert.ok(c.searched === 0 && c.debris === 0 && c.items.length === 0, `boulder changed ${where}`);
     }
   }
+}
+
+// Every raw item in the world: still hidden in cells, in a pile, in the bag, or in camp storage.
+const rawTotal = (s) =>
+  Object.values(s.map.fields).reduce((a, f) => a + f.pile.length + f.cells.reduce((b, c) => b + c.items.length, 0), 0) +
+  s.bag.length + Object.values(s.storage.ore).reduce((a, b) => a + b, 0) + Object.values(s.storage.gem).reduce((a, b) => a + b, 0);
+
+// A random carry choice: some bag items and some pile items, at most the bag size (sometimes too many).
+function randomCarry(s, rng, cfg) {
+  const f = currentField(s);
+  const pick = (n) => Array.from({ length: n }, (_, i) => i).filter(() => rng.chance(50));
+  const sel = { bag: pick(s.bag.length), pile: f ? pick(f.pile.length) : [] };
+  if (!rng.chance(10)) sel.pile = sel.pile.slice(0, Math.max(0, cfg.bag.slots - sel.bag.length));
+  return sel;
 }
 
 // Highest-power gear for each slot (up to 2), for a reasonable plan.
@@ -59,15 +85,23 @@ function pickGear(s, cfg = CONFIG) {
 function playDay(s, rng, log, cfg = CONFIG) {
   const step = (name, fn) => {
     const before = s.time;
+    const items = rawTotal(s);
+    const load = projectedLoad(s, cfg);
     const r = fn();
     assert.equal(typeof r.ok, 'boolean', name);
     if (!r.ok) assert.equal(s.time, before, `${name} failed but time moved`);
-    if (r.ok && ['search', 'clear'].includes(name)) assert.ok(s.time <= cfg.time.dayEndMin + 1e-6, `${name} ended after 18:00`);
+    if (r.ok && name === 'search') {
+      assert.ok(s.time <= cfg.time.dayEndMin + 1e-6, `${name} ended after 18:00`);
+      assert.ok(s.time + returnMinutes(s, s.location, load, cfg) <= cfg.time.dayEndMin + 1e-6, 'walk home with the projected load fits');
+    }
     if (r.ok && name === 'travelOut') assert.ok(s.time <= cfg.time.dayEndMin + 1e-6);
+    if (['carry', 'toPile', 'take'].includes(name)) assert.equal(s.time, before, `${name} is free`);
+    if (!['refine', 'cut'].includes(name)) assert.equal(rawTotal(s), items, `${name} lost or made items`);
     checkInvariants(s, name, cfg);
     log.push(name + (r.ok ? '' : '!'));
     return r;
   };
+  const carryChoice = () => (rng.chance(50) ? defaultCarry(s, cfg) : randomCarry(s, rng, cfg));
   // Field trip(s)
   const trips = rng.int(0, 2);
   for (let t = 0; t < trips; t++) {
@@ -80,19 +114,25 @@ function playDay(s, rng, log, cfg = CONFIG) {
       const roll = rng.next();
       const x = rng.int(0, 7);
       const y = rng.int(0, 7);
-      if (roll < 0.65) step('search', () => search(s, x, y, cfg));
-      else if (roll < 0.8) step('clear', () => clearDebris(s, x, y, cfg));
-      else if (roll < 0.9) step('pickUp', () => pickUp(s, y * 8 + x, cfg));
-      else if (s.bag.length) step('drop', () => dropItem(s, rng.int(0, s.bag.length - 1), y * 8 + x, cfg));
+      const pile = currentField(s).pile;
+      if (roll < 0.7) step('search', () => search(s, x, y, cfg));
+      else if (roll < 0.8) step('carry', () => setCarry(s, randomCarry(s, rng, cfg), cfg));
+      else if (roll < 0.9) step('toPile', () => moveToPile(s, rng.int(-1, s.bag.length), cfg));
+      else step('take', () => takeFromPile(s, rng.int(-1, pile.length), cfg));
       if (rng.chance(10) && currentField(s)) {
         const others = fields.filter((c) => c.x !== s.location.x || c.y !== s.location.y);
         const o = rng.pick(others);
-        step('travelOut', () => travel(s, { x: o.x, y: o.y }, cfg));
+        step('travelOut', () => travel(s, { x: o.x, y: o.y }, cfg, rng.chance(70) ? carryChoice() : null));
       }
     }
-    step('return', () => travel(s, s.map.camp, cfg));
-    assert.equal(atCamp(s), true, 'return must always succeed');
+    const left = currentField(s);
+    const sel = rng.chance(80) ? carryChoice() : null;
+    let r = step('return', () => travel(s, s.map.camp, cfg, sel));
+    if (!r.ok) r = step('return', () => travel(s, s.map.camp, cfg)); // a too-big carry choice is refused
+    assert.equal(r.ok, true, `return must always succeed: ${r.msg}`);
+    assert.equal(atCamp(s), true);
     assert.equal(s.bag.length, 0, 'bag unloaded');
+    assert.ok(Array.isArray(left.pile), 'the pile stays in the field');
   }
   // Workshop
   for (const bar of BARS) for (let i = 0; i < 4; i++) step('refine', () => refine(s, bar, cfg));
@@ -130,7 +170,9 @@ function playRuns(seeds, days, cfg = CONFIG) {
       assert.equal(e.ok, true, e.msg);
       checkInvariants(s, 'endDay', cfg);
       // actions that need the work day are refused between days
-      assert.equal(pickUp(s, 0, cfg).ok, false);
+      assert.equal(setCarry(s, { bag: [], pile: [] }, cfg).ok, false);
+      assert.equal(takeFromPile(s, 0, cfg).ok, false);
+      assert.equal(search(s, 1, 1, cfg).ok, false);
       if (s.gear.length) assert.equal(scrap(s, s.gear[0].id).ok, false);
       daysPlayed++;
       if (e.report) fights++;

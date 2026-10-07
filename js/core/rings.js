@@ -18,7 +18,7 @@ export function ringLabel(ring, cfg = CONFIG) {
 // Same type sorted high->low: 1st x1, 2nd x0.5, 3rd x0.25, ... (duplicateFactor^n)
 export function ringTotals(rings, cfg = CONFIG) {
   const byType = {};
-  for (const r of rings) (byType[r.type] ||= []).push(ringValue(r, cfg));
+  for (const r of rings) (byType[r.type] = byType[r.type] || []).push(ringValue(r, cfg));
   const out = {};
   for (const [type, vals] of Object.entries(byType)) {
     vals.sort((a, b) => b - a);
@@ -30,7 +30,7 @@ export function ringTotals(rings, cfg = CONFIG) {
 // Per-ring effective contribution (for display), keyed by ring id.
 export function ringContributions(rings, cfg = CONFIG) {
   const byType = {};
-  for (const r of rings) (byType[r.type] ||= []).push(r);
+  for (const r of rings) (byType[r.type] = byType[r.type] || []).push(r);
   const out = {};
   for (const list of Object.values(byType)) {
     list

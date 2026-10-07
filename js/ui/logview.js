@@ -57,7 +57,7 @@ function activityPanel(ctx) {
 function battlesPanel(ctx) {
   const s = ctx.state;
   const battles = s.battles.slice().reverse();
-  ctx.ui.log_open ||= {};
+  ctx.ui.log_open = ctx.ui.log_open || {};
   if (!battles.length) return section('Battle history', h('p', { class: 'muted' }, 'No fights yet. The adventurer fights every day from day 2.'));
   return section(`Battle history (last ${battles.length})`,
     h('p', { class: 'adv-tight muted adv-small' }, 'Click a fight to see its full report and combat log.'),

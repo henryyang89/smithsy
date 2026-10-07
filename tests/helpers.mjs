@@ -7,6 +7,7 @@
 import { CONFIG, GRADES } from '../js/config.js';
 import { newGame } from '../js/core/game.js';
 import { seededRng } from '../js/core/rng.js';
+import { xpToNext } from '../js/core/skills.js';
 import { pathSteps, generateField, key } from '../js/core/map.js';
 
 export const DAY_START = CONFIG.time.dayStartMin;
@@ -51,18 +52,24 @@ export function game(seed = 12345, cfg = CONFIG) {
 
 export const approx = (actual, expected, eps = 1e-9) => Math.abs(actual - expected) <= eps;
 
-// A field cell with given items: [{ t, d }]
+// A field cell with given items: [{ t, d }]. debris = remaining thickness (0 = clear).
 export function cell(items = [], extra = {}) {
-  return { debris: false, searched: 0, items: items.map((i) => ({ ...i })), revealed: false, ground: [], ...extra };
+  return { debris: 0, boulder: false, searched: 0, items: items.map((i) => ({ ...i })), revealed: false, ...extra };
 }
 
-// Empty 8x8 field (no items, no debris).
+// A boulder cell (never searched or cleared).
+export const boulder = () => cell([], { boulder: true });
+
+// Empty 8x8 field (no items, no debris, no boulders, empty pile).
 export function blankField(dist = 1, cfg = CONFIG) {
   const n = cfg.field.size;
-  return { dist, cells: Array.from({ length: n * n }, () => cell()) };
+  return { dist, cells: Array.from({ length: n * n }, () => cell()), pile: [] };
 }
 
 export const idx = (x, y, cfg = CONFIG) => y * cfg.field.size + x;
+
+// The field contents at a map cell ({ x, y }).
+export const fieldOf = (state, c) => state.map.fields[key(c.x, c.y)];
 
 // Find a field map cell at the given distance from camp.
 export function fieldAt(state, dist) {
@@ -117,6 +124,16 @@ export function addRing(state, type, grade = 'D', worn = false) {
 export function fullSet(state, material = 'mythril', grade = 'S') {
   return ['sword', 'chest', 'helmet', 'gloves', 'boots'].map((s) => addGear(state, s, material, grade));
 }
+
+// Total XP spent to reach `level` (so xp + xpSpent(level) = all XP ever gained, below max level).
+export function xpSpent(level, cfg = CONFIG) {
+  let t = 0;
+  for (let L = 0; L < level; L++) t += xpToNext(L, cfg);
+  return t;
+}
+
+// All XP a skill has gained (below max level).
+export const totalXp = (state, k, cfg = CONFIG) => state.skills[k].xp + xpSpent(state.skills[k].level, cfg);
 
 export function setSkillLevel(state, k, level) {
   state.skills[k].level = level;

@@ -4,18 +4,18 @@ import { CONFIG, BARS, GEMS } from '../js/config.js';
 import { skillDefs, newSkills, xpToNext, addXp, skillBonus, itemXp } from '../js/core/skills.js';
 import { newIntel, gainForPoint, intelChanceFor, intelChance, nextIntelGain, spendIntel } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
-import { debrisMinutesPerCell, searchMinutes, searchEfficiency, returnMinutes } from '../js/core/map.js';
-import { refineDistribution, cutDistribution, refineMinutes, cutMinutes } from '../js/core/processing.js';
-import { game, approx, addRing, setSkillLevel, cfgWith, ringVal, fieldAt } from './helpers.mjs';
+import { debrisClearMult, searchMinutes, searchEfficiency, returnMinutes, search } from '../js/core/map.js';
+import { refineDistribution, cutDistribution, blendCutTable, refineMinutes, cutMinutes, GRADE_ORDER } from '../js/core/processing.js';
+import { game, approx, addRing, setSkillLevel, cfgWith, ringVal, fieldAt, standInBlankField, cell, idx } from './helpers.mjs';
 
 // Pinned skill / intel numbers: the hand-computed expectations below hold whatever CONFIG says.
 const SK = cfgWith({
   skills: {
     xpBase: 100, maxLevel: 10,
     activity: { returnTravel: { perLevel: 0.5 }, searchEff: { perLevel: 1 }, debris: { perLevel: 2 }, refineTime: { perLevel: 0.5 }, cutTime: { perLevel: 0.5 } },
-    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 0.3 }, gemFail: { perLevel: 0.3 } },
+    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 10 }, gemFail: { perLevel: 0.3 } },
   },
-  rings: { types: { processTime: { values: [5, 6, 7, 8, 10] }, oreGrade: { values: [2, 3, 4, 5, 6] } } },
+  rings: { types: { processTime: { values: [5, 6, 7, 8, 10] }, oreGrade: { values: [2, 3, 4, 5, 6] }, gemGrade: { values: [2, 3, 4, 5, 6] } } },
 });
 const INTEL = cfgWith({
   intel: {
@@ -141,13 +141,15 @@ test('per-material skill descriptions show that material\'s XP', () => {
 
 // ---------------------------------------------------- spec rules (real config) ----
 // A level-10 (max level) skill is at least as strong as a C-grade ring of the same kind. Skills with
-// no ring: debris clearing is substantial (at least -40% time), failure skills at least -5 points.
+// no ring: debris clearing at least +100% debris per search, failure skills at least -5 points.
+// The gem grade skill is not an upgrade chance any more: at max level it reaches the master cut table.
 const MAX = CONFIG.skills.maxLevel;
 const allSkillsMax = () => {
   const s = game(1);
   for (const k of Object.keys(s.skills)) setSkillLevel(s, k, MAX);
   return s;
 };
+const closeTo = (a, b, eps = 1e-9) => GRADE_ORDER.every((g) => approx(a[g], b[g], eps));
 
 test('spec: every max-level skill with a matching smith ring is at least that ring\'s C value', () => {
   const A = CONFIG.skills.activity;
@@ -159,7 +161,6 @@ test('spec: every max-level skill with a matching smith ring is at least that ri
     ['refineTime', A.refineTime.perLevel, 'processTime'],
     ['cutTime', A.cutTime.perLevel, 'processTime'],
     ['oreGrade', P.oreGrade.perLevel, 'oreGrade'],
-    ['gemGrade', P.gemGrade.perLevel, 'gemGrade'],
   ];
   for (const [skill, perLevel, ring] of pairs) {
     assert.equal(CONFIG.rings.types[ring].owner, 'smith', ring);
@@ -180,7 +181,17 @@ test('spec: in play, max-level skills give at least what worn C-grade smith ring
   ge(a.refineTimePct, b.refineTimePct, 'refine time');
   ge(a.cutTimePct, b.cutTimePct, 'cut time');
   for (const bar of BARS) ge(a.oreUpgrade(bar), b.oreUpgrade(bar), `${bar} bar grade`);
-  for (const gem of GEMS) ge(a.gemUpgrade(gem), b.gemUpgrade(gem), `${gem} grade`);
+  // gems: the master table (max skills) beats the novice table with a C gem luck ring, grade for grade
+  for (const gem of GEMS) {
+    const dSk = cutDistribution(sk, gem);
+    const dRg = cutDistribution(rg, gem);
+    assert.ok(dSk.F <= dRg.F + 1e-9, `${gem} failure`);
+    const succ = GRADE_ORDER.filter((g) => g !== 'F');
+    for (let i = 1; i < succ.length; i++) {
+      const atLeast = (d) => succ.slice(i).reduce((x, g) => x + d[g], 0);
+      ge(atLeast(dSk), atLeast(dRg), `${gem} ${succ[i]} or better`);
+    }
+  }
   // and the actual times / efficiency the player sees
   assert.ok(searchMinutes(sk) <= searchMinutes(rg) + 1e-9);
   assert.ok(searchEfficiency(sk) >= searchEfficiency(rg) - 1e-9);
@@ -190,14 +201,54 @@ test('spec: in play, max-level skills give at least what worn C-grade smith ring
   assert.ok(returnMinutes(sk, far, 0) <= returnMinutes(rg, far, 0) + 1e-9, 'walk home');
 });
 
-test('spec: debris clearing at max level is substantial (at least 40% less time)', () => {
+test('spec: debris clearing at max level clears at least twice the debris per search (+100%)', () => {
   const bonus = CONFIG.skills.activity.debris.perLevel * MAX;
-  assert.ok(bonus >= 40, `debris skill at level ${MAX}: ${bonus}%`);
+  assert.ok(bonus >= 100, `debris skill at level ${MAX}: ${bonus}%`);
   const s = game(1);
   setSkillLevel(s, 'debris', MAX);
-  // the time cap does not eat the bonus (rounded to 0.1 minutes)
-  assert.ok(debrisMinutesPerCell(s) <= CONFIG.field.debrisClearMin * 0.6 + 0.05, `${debrisMinutesPerCell(s)} min per cell`);
   assert.ok(approx(smithBonuses(s).debrisPct, bonus));
+  assert.ok(debrisClearMult(s) >= 2 - 1e-9, `x${debrisClearMult(s)}`);
+  // in play (real rules, rolls fixed): a cell with two searches' worth of debris clears in one search
+  const cfg = cfgWith({ field: { searchRandomness: 0 } });
+  for (const [lv, searches] of [[0, 2], [MAX, 1]]) {
+    const t = game(2);
+    setSkillLevel(t, 'debris', lv);
+    const f = standInBlankField(t, 1);
+    f.cells[idx(3, 3)] = cell([], { debris: 2 * searchEfficiency(t, cfg) });
+    let n = 0;
+    while (f.cells[idx(3, 3)].debris > 0 && n < 5) {
+      setSkillLevel(t, 'debris', lv);
+      assert.equal(search(t, 3, 3, cfg).ok, true);
+      n++;
+    }
+    assert.equal(n, searches, `debris level ${lv}`);
+  }
+});
+
+test('spec: the gem grade skill at max level reaches the master cut table', () => {
+  const P = CONFIG.skills.perMaterial;
+  assert.ok(P.gemGrade.perLevel * MAX >= 100 - 1e-9, `gem grade at level ${MAX}: ${P.gemGrade.perLevel * MAX}% of the way`);
+  const s = allSkillsMax();
+  for (const gem of GEMS) {
+    const c = CONFIG.cut[gem];
+    const d = cutDistribution(s, gem);
+    // grades D..S in the master table's proportions
+    const succ = ['D', 'C', 'B', 'A', 'S'];
+    const tot = (x) => succ.reduce((a, g) => a + x[g], 0);
+    for (const g of succ) assert.ok(approx(d[g] / tot(d), c.master[g] / tot(c.master), 1e-9), `${gem} ${g}`);
+    // and the max cutting skill brings failure down to (at least) the master failure
+    assert.ok(d.F <= c.master.F + 1e-9, `${gem} failure ${d.F} > master ${c.master.F}`);
+    assert.ok(approx(d.F, Math.max(0, c.novice.F - P.gemFail.perLevel * MAX)));
+    assert.ok(closeTo(d, blendCutTable(c, 1, P.gemFail.perLevel * MAX)));
+  }
+  // with today's numbers that is exactly the master table
+  for (const gem of GEMS) {
+    const c = CONFIG.cut[gem];
+    if (Math.abs(c.novice.F - P.gemFail.perLevel * MAX - c.master.F) < 1e-9) assert.ok(closeTo(cutDistribution(s, gem), c.master), gem);
+  }
+  // level 0 = the novice table
+  const n = game(1);
+  for (const gem of GEMS) assert.ok(closeTo(cutDistribution(n, gem), CONFIG.cut[gem].novice), gem);
 });
 
 test('spec: max-level refining / cutting skills cut the failure chance by at least 5 points', () => {
@@ -224,7 +275,15 @@ test('smithBonuses combines rings, skills and intel', () => {
   addRing(s, 'oreGrade', 'A', true); // 5
   setSkillLevel(s, 'oreGrade_copper', 5); // 1.5
   setSkillLevel(s, 'gemFail_diamond', 3); // 0.9
+  setSkillLevel(s, 'gemGrade_topaz', 4); // 40% of the way to the master table
+  setSkillLevel(s, 'debris', 3); // +6% debris per search
+  addRing(s, 'gemGrade', 'C', true); // 3
   const b = smithBonuses(s, SK);
+  assert.equal(b.gemBlend('topaz'), 40);
+  assert.equal(b.gemBlend('ruby'), 0);
+  assert.equal(b.gemUpgrade('topaz'), 3, 'gem upgrade luck is rings only');
+  assert.equal(b.gemUpgrade('ruby'), 3);
+  assert.equal(b.debrisPct, 6);
   assert.equal(b.refineTimePct, 8);
   assert.equal(b.cutTimePct, 9);
   assert.equal(b.oreUpgrade('copper'), 6.5);
@@ -242,6 +301,9 @@ test('smithBonuses combines rings, skills and intel', () => {
   assert.ok(approx(d.oreUpgrade('copper'), ringVal('oreGrade', 'A') + P.oreGrade.perLevel * 5));
   assert.ok(approx(d.oreUpgrade('iron'), ringVal('oreGrade', 'A')));
   assert.ok(approx(d.gemFailRed('diamond'), P.gemFail.perLevel * 3));
+  assert.ok(approx(d.gemBlend('topaz'), P.gemGrade.perLevel * 4));
+  assert.ok(approx(d.gemUpgrade('topaz'), ringVal('gemGrade', 'C')));
+  assert.ok(approx(d.debrisPct, CONFIG.skills.activity.debris.perLevel * 3));
   assert.equal(d.revealPct, CONFIG.intel.tracks.oreSight.base);
 });
 

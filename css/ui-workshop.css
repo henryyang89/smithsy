@@ -120,3 +120,14 @@
 .rp-item { padding: 4px 0; border-bottom: 1px dotted var(--border); }
 .rp-item:last-of-type { border-bottom: none; }
 .rp-item .rp-line { margin-top: 2px; }
+
+/* gem rows: label column (Now / Novice / Master) + the same aligned numbers */
+.ws-dist.ws-dist-l { width: 262px; }
+.ws-dist-row { display: flex; align-items: center; }
+.ws-dist-row > .ws-dist-bar, .ws-dist-row > .ws-dist-nums { flex: 1 1 0; min-width: 0; }
+.ws-dist-row > .ws-dist-bar { margin: 1px 0 2px; }
+.ws-dist-lab { flex: 0 0 52px; font-size: 11px; color: var(--muted); }
+.ws-dist-ref .ws-dist-nums { color: var(--muted); font-size: 10px; }
+@media (max-width: 640px) {
+  .ws-process .ws-dist.ws-dist-l { width: 100%; }
+}

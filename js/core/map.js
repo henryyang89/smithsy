@@ -204,7 +204,9 @@ export function travel(state, to, cfg = CONFIG, carry = null) {
   const target = mapCell(state.map, to.x, to.y);
   if (!target || target.type === 'blocked') return { ok: false, msg: 'Cannot travel there.' };
   if (sameLoc(state.location, to)) return { ok: false, msg: 'Already there.' };
-  const items = carry ? carry.bag.length + carry.pile.length : state.bag.length;
+  const field = currentField(state);
+  const sel = carry && field ? carrySelection(state, field, carry) : null; // at camp there is nothing to choose
+  const items = sel ? sel.bag.length + sel.pile.length : state.bag.length;
   const minutes = travelMinutes(state, state.location, to, items, cfg);
   if (!Number.isFinite(minutes)) return { ok: false, msg: 'No path.' };
   const toCamp = target.type === 'camp';
@@ -214,8 +216,8 @@ export function travel(state, to, cfg = CONFIG, carry = null) {
       return { ok: false, msg: `Not enough time: ${round1(minutes)}m there + ${round1(back)}m back would pass ${endClock(cfg)}.` };
     }
   }
-  if (carry) {
-    const res = setCarry(state, carry, cfg);
+  if (sel) {
+    const res = setCarry(state, sel, cfg);
     if (!res.ok) return res;
   }
   const notes = [];
@@ -333,14 +335,21 @@ export function defaultCarry(state, cfg = CONFIG) {
   return { bag, pile };
 }
 
+// A carry selection with invalid and repeated indexes removed.
+function carrySelection(state, f, sel) {
+  return {
+    bag: [...new Set(sel.bag || [])].filter((i) => Number.isInteger(i) && i >= 0 && i < state.bag.length),
+    pile: [...new Set(sel.pile || [])].filter((i) => Number.isInteger(i) && i >= 0 && i < f.pile.length),
+  };
+}
+
 // Choose what to carry from the bag and this field's pile (free). Unchosen items go to the pile.
 export function setCarry(state, sel, cfg = CONFIG) {
   const err = requireWork(state);
   if (err) return err;
   const f = currentField(state);
   if (!f) return { ok: false, msg: 'You are at camp: your load was unloaded into storage.' };
-  const bagSel = [...new Set(sel.bag || [])].filter((i) => i >= 0 && i < state.bag.length);
-  const pileSel = [...new Set(sel.pile || [])].filter((i) => i >= 0 && i < f.pile.length);
+  const { bag: bagSel, pile: pileSel } = carrySelection(state, f, sel);
   if (bagSel.length + pileSel.length > cfg.bag.slots) return { ok: false, msg: `You can carry at most ${cfg.bag.slots} items.` };
   const newBag = [...bagSel.map((i) => state.bag[i]), ...pileSel.map((i) => f.pile[i])];
   const newPile = [...f.pile.filter((_, i) => !pileSel.includes(i)), ...state.bag.filter((_, i) => !bagSel.includes(i))];
