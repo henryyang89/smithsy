@@ -16,7 +16,11 @@ const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds,
 // Fight outcomes fixed by config, so these tests check the day flow, not the balance.
 const WIN = cfgWith(WEAK_ENEMIES);
 const LOSE = cfgWith(DEADLY_ENEMIES);
-const { min: LOSS_MIN, max: LOSS_MAX } = CONFIG.gear.durabilityLoss;
+// Durability loss per used item in a fight against a normal enemy with no Gear care: the roll x the tier multiplier, rounded, at least 1.
+const { min: ROLL_MIN, max: ROLL_MAX } = CONFIG.gear.durabilityLoss;
+const NORMAL_MULT = CONFIG.gear.durabilityLoss.tierMult?.normal ?? 1;
+const LOSS_MIN = Math.max(1, Math.round(ROLL_MIN * NORMAL_MULT));
+const LOSS_MAX = Math.max(1, Math.round(ROLL_MAX * NORMAL_MULT));
 const rosterSize = Object.values(CONFIG.enemies.tiers).reduce((a, t) => a + t.count, 0);
 
 // Day 1 -> plan -> confirm. Returns the state on day 2 (adventurer away).
@@ -212,15 +216,15 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
 test('gear at 0% durability is destroyed after the fight', () => {
   const s = game(11);
   const set = fullSet(s, 'mythril', 'S');
-  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: LOSS_MIN });
-  for (const g of set) g.durability = LOSS_MIN; // every fight costs at least durabilityLoss.min
+  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: 1 });
+  for (const g of set) g.durability = 1; // every fight costs every used item at least 1%
   toDay2(s, (st) => plan(tierIndex(st, 'normal'), [...set.map((g) => g.id), spare.id]), WIN);
   const rep = endDay(s, WIN).report;
   assert.equal(rep.win, true);
   assert.equal(rep.destroyed.length, 5);
   for (const g of set) assert.ok(!s.gear.includes(g), `${g.slot} should be gone`);
   assert.ok(s.gear.includes(spare), 'unused item survives');
-  assert.equal(spare.durability, LOSS_MIN);
+  assert.equal(spare.durability, 1);
   for (const w of rep.wear) assert.equal(w.left, 0);
 });
 
@@ -450,7 +454,7 @@ test('deserialize rejects other save versions and junk', () => {
 test('versions: the game version is exported; saves are version 2 (v1.1 field model)', () => {
   assert.equal(typeof VERSION, 'string');
   assert.match(VERSION, /^\d+\.\d+$/);
-  assert.ok(Number(VERSION) >= 1.1, VERSION);
+  assert.equal(VERSION, '1.2');
   assert.ok(SAVE_VERSION >= 2);
   assert.equal(newGame(1).version, SAVE_VERSION);
 });

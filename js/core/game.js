@@ -3,8 +3,9 @@
 import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../config.js';
 import { rngFor, seededRng, mixSeed } from './rng.js';
 import { generateMap, atCamp, regrowFields } from './map.js';
-import { newSkills } from './skills.js';
+import { newSkills, skillDefs, addXp } from './skills.js';
 import { newIntel } from './intel.js';
+import { smithBonuses } from './bonuses.js';
 import { generateRoster, enemyCombatant, knownLevels } from './enemies.js';
 import { ringTotals, ringDef, wornRings, ringLabel } from './rings.js';
 import { adventurerCombatant, fight } from './combat.js';
@@ -156,13 +157,20 @@ export function resolveBattle(state, cfg = CONFIG) {
   const result = fight(adv, enemyC, rng.next, true, cfg);
   state.stats.fights += 1;
 
-  // durability loss on the items actually used
+  // durability loss on the items actually used: roll x enemy tier multiplier x (1 - Gear care %)
+  const dl = cfg.gear.durabilityLoss;
+  const tierMult = (dl.tierMult && dl.tierMult[e.tier]) || 1;
+  const skillRed = Math.min(100, smithBonuses(state, cfg).gearCarePct); // % less loss from the Gear care skill
   const wear = [];
   for (const g of used) {
-    const loss = rng.int(cfg.gear.durabilityLoss.min, cfg.gear.durabilityLoss.max);
+    const base = rng.int(dl.min, dl.max);
+    const loss = Math.max(1, Math.round(base * tierMult * (1 - skillRed / 100)));
     g.durability = Math.max(0, g.durability - loss);
-    wear.push({ id: g.id, name: gearName(g), loss, left: g.durability });
+    wear.push({ id: g.id, name: gearName(g), loss, base, tierMult, skillRed, left: g.durability });
   }
+  // Gear care XP for every fight the adventurer survives (win or draw)
+  const notes = [];
+  if (result.win || result.draw) addXp(state, 'gearCare', cfg.skills.gearCareXpPerFight, notes, cfg);
   const destroyed = state.gear.filter((g) => g.durability <= 0).map(gearName);
   state.gear = state.gear.filter((g) => g.durability > 0);
   for (const g of state.gear) g.packed = false;
@@ -189,6 +197,7 @@ export function resolveBattle(state, cfg = CONFIG) {
     usedIds: used.map((g) => g.id),
     usedNames: used.map(gearName),
     wear,
+    notes,
     destroyed,
     ring: ring ? { ...ring } : null,
     ringText: ring ? ringLabel(ring, cfg) : null,
@@ -206,6 +215,7 @@ export function resolveBattle(state, cfg = CONFIG) {
       ? `The fight with ${e.name} was called off after ${result.time.toFixed(1)}s: a draw (the adventurer survives, no ring).`
       : `The adventurer fell to ${e.name} after ${result.time.toFixed(1)}s.`);
   if (destroyed.length) addLog(state, `Destroyed (0% durability): ${destroyed.join(', ')}.`);
+  for (const n of notes) addLog(state, n);
   state.plan = null;
   return report;
 }
@@ -226,11 +236,22 @@ export function serialize(state) {
   return JSON.stringify(state);
 }
 
-export function deserialize(text) {
+export function deserialize(text, cfg = CONFIG) {
   const s = JSON.parse(text);
   if (!s || typeof s.version !== 'number') throw new Error('Incompatible save');
   if (s.version === 1) migrateV1(s);
   if (s.version !== SAVE_VERSION) throw new Error('Incompatible save');
+  addMissingKeys(s, cfg);
+  return s;
+}
+
+// Saves from an older version lack skills / intel tracks added since (v1.2: Gear care, Battle simulation).
+export function addMissingKeys(s, cfg = CONFIG) {
+  if (s.skills) for (const d of skillDefs(cfg)) if (!s.skills[d.key]) s.skills[d.key] = { xp: 0, level: 0 };
+  if (s.intel) {
+    if (!s.intel.spent) s.intel.spent = {};
+    for (const k of Object.keys(cfg.intel.tracks)) if (typeof s.intel.spent[k] !== 'number') s.intel.spent[k] = 0;
+  }
   return s;
 }
 

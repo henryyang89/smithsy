@@ -7,7 +7,7 @@ import { adventurerRingTotals } from '../core/game.js';
 import { wornRings, ringContributions, ringDef, ringValue } from '../core/rings.js';
 import { intelChance } from '../core/intel.js';
 import { cap } from '../core/util.js';
-import { enemyCard, gearNameNode, gearCell, durabilityNode, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
+import { enemyCard, rosterTable, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
 
 const f2 = (v) => String(Math.round(v * 100) / 100);
 
@@ -58,6 +58,7 @@ function gearPanel(ctx) {
       h('p', { class: 'muted' }, 'No gear yet. Smith some in the Workshop: the adventurer fights unarmed without it.'),
       h('button', { class: 'small', onclick: () => ctx.setTab('workshop') }, 'Go to Workshop'));
   }
+  const wear = wearRange(s, cfg);
   const rows = [];
   for (const slot of SLOTS) {
     const items = s.gear
@@ -67,12 +68,13 @@ function gearPanel(ctx) {
     for (const g of items) {
       rows.push(h('tr', {},
         h('td', {}, gearCell(g, cfg)),
-        h('td', {}, durabilityNode(g, cfg)),
+        h('td', {}, durabilityNode(g, cfg, wear)),
         h('td', { class: 'adv-where' }, g.packed ? h('span', { class: 'warn', title: 'Away with the adventurer today: cannot be repaired until it returns' }, 'Packed (away)') : h('span', { class: 'ok' }, 'Home'))));
     }
   }
   const packed = s.gear.filter((g) => g.packed).length;
   return section(`Gear (${s.gear.length} items${packed ? `, ${packed} packed` : ''})`,
+    h('p', { class: 'adv-tight muted adv-small' }, `Wear: each item the adventurer uses loses ${wearText(s, cfg)}. The Gear care skill reduces it.`),
     h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-geartable' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Item and stats'), h('th', {}, 'Durability'), h('th', {}, 'Where'))),
       h('tbody', {}, rows))));
@@ -126,6 +128,8 @@ function rosterPanel(ctx) {
     h('p', { class: 'adv-tight muted adv-small' },
       'You choose one of these enemies when you end the day. Scouting: each attribute visible ', chance('enemySight'),
       ', ring type ', chance('ringTypeSight'), ', ring grade ', chance('ringGradeSight'),
-      '. Green = Low (weaker), red = High (stronger), ? = hidden. Hover an attribute for what it does.'),
-    h('div', { class: 'adv-roster' }, r.enemies.map((e) => enemyCard(ctx, e))));
+      '. Each column is one enemy, so a row compares one attribute across all of them. ',
+      h('span', { class: 'attr-low' }, 'Green = Low'), ' (weaker), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. Hover a row name for what it does. ',
+      'The win-chance estimate is on the plan screen at the end of the day.'),
+    rosterTable(ctx, r.enemies, { day: r.day }));
 }

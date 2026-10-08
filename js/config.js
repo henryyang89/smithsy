@@ -36,6 +36,7 @@ export const CONFIG = {
   field: {
     size: 8, // each map field is an 8x8 grid
     searchMin: 30, // minutes per 3x3 search
+    freshCellMin: 2, // +minutes per never-searched cell in the 3x3 (a cell is "touched" once a search works on it)
     searchEfficiency: 35, // % of each cell searched per search, before bonuses (about 3 searches finish a cell)
     searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (35 -> 30..40)
     debrisChance: 15, // % of cells covered by debris (must be cleared before the cell can be searched)
@@ -92,7 +93,7 @@ export const CONFIG = {
     materialMult: { copper: 1.0, iron: 1.5, steel: 2.0, mythril: 3.0 },
     gradeMult: { D: 1.0, C: 1.1, B: 1.2, A: 1.3, S: 1.5 },
     slots: {
-      sword: { bars: 2, stats: { damage: 10, accuracy: 10 } },
+      sword: { bars: 2, stats: { damage: 16, accuracy: 10 } },
       chest: { bars: 3, stats: { defense: 6 } },
       helmet: { bars: 2, stats: { defense: 4 } },
       gloves: { bars: 2, stats: { defense: 2, accuracy: 10 } },
@@ -101,7 +102,9 @@ export const CONFIG = {
     smithMinPerBar: 15, // minutes of smithing per bar used
     infuseMin: 10, // extra minutes to infuse a cut gem
     gemArmorMult: { chest: 1.25, helmet: 1.1, gloves: 1.0, boots: 1.0 }, // armor gem effect multiplier
-    durabilityLoss: { min: 3, max: 7 }, // % durability each USED item loses per fight (whole numbers)
+    // % durability each USED item loses per fight: a whole-number roll min..max (avg 10), x the enemy tier's
+    // multiplier, x (1 - Gear care skill %), rounded, at least 1. Packed-but-unused gear does not wear.
+    durabilityLoss: { min: 8, max: 12, tierMult: { normal: 1.0, elite: 1.1, champion: 1.2 } },
     repair: {
       materialFraction: 35, // full 0->100% repair costs 35% of the original bars (+ gem); scales with % repaired
       timeFraction: 50, // full repair takes 50% of the original smithing time; scales with % repaired
@@ -116,7 +119,7 @@ export const CONFIG = {
       armor: { magicRes: [4, 6, 8, 10, 12] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [10, 12, 15, 18, 20], stunDur: [1, 1, 1.2, 1.4, 1.5] }, // % per hit, seconds
+      weapon: { stunChance: [12, 15, 19, 23, 27], stunDur: [1, 1, 1.2, 1.4, 1.5] }, // % per hit, seconds
       armor: { stunChanceRed: [4, 6, 8, 10, 12], stunDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     emerald: {
@@ -124,19 +127,19 @@ export const CONFIG = {
       armor: { dodge: [4, 6, 8, 10, 12] }, // dodge rating
     },
     sapphire: {
-      weapon: { slowPct: [10, 15, 20, 25, 30], slowDur: [1, 1.5, 2, 2.5, 3] }, // % slower attacks, seconds
+      weapon: { slowPct: [10, 14, 19, 24, 28], slowDur: [1, 1.5, 1.5, 2, 2.5] }, // % slower attacks, seconds
       armor: { slowRed: [4, 6, 8, 10, 12], slowDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     diamond: {
-      weapon: { pierce: [20, 30, 40, 50, 60] }, // % of enemy defense ignored
-      armor: { pierceRes: [4, 6, 8, 10, 12] }, // % of enemy piercing ignored
+      weapon: { pierce: [12, 20, 30, 40, 50] }, // % of enemy defense ignored
+      armor: { pierceRes: [6, 9, 12, 15, 18] }, // % of enemy piercing ignored
     },
   },
 
   // --------------------------------------------------------- ADVENTURER ----
   adventurer: {
     hp: 100,
-    unarmedDamage: 4, // damage per hit with no sword
+    unarmedDamage: 11, // damage per hit with no sword
     attackInterval: 2.0, // seconds between attacks at 0% speed
     accuracy: 100,
     dodge: 100,
@@ -159,29 +162,29 @@ export const CONFIG = {
   // ------------------------------------------------------------ ENEMIES ----
   enemies: {
     attackInterval: 2.0,
-    stunDuration: 1.0, // seconds, when an enemy with Stunning lands a stun
-    slowDuration: 2.0, // seconds, when an enemy with Chilling hits
+    stunDuration: 1.5, // seconds, when an enemy with Stunning lands a stun
+    slowDuration: 2.5, // seconds, when an enemy with Chilling hits
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1)
-    growthPerDay: { hpDamage: 3, ratings: 1 }, // HP & damage +3%/day, accuracy & dodge +1%/day
+    growthPerDay: { hpDamage: 3.5, ratings: 1 }, // HP & damage +3.5%/day, accuracy & dodge +1%/day
     // All tiers share the same base HP / damage / defense: tiers differ only by attribute levels
     // (normal: 6 low, elite: 3 low / 3 high, champion: 6 high) and by their score and ring rewards.
     tiers: {
-      normal: { count: 2, hp: 80, damage: 8, defense: 20, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 80, damage: 8, defense: 20, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 80, damage: 8, defense: 20, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      normal: { count: 2, hp: 80, damage: 8, defense: 25, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
+      elite: { count: 3, hp: 80, damage: 8, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 80, damage: 8, defense: 25, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
     attributes: {
-      piercing: { name: 'Piercing', side: 'O', values: { low: 5, normal: 15, high: 25 }, desc: '% of your defense ignored' },
+      piercing: { name: 'Piercing', side: 'O', values: { low: 10, normal: 25, high: 60 }, desc: '% of your defense ignored' },
       pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% of your piercing ignored' },
       magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 20, high: 30 }, desc: 'extra magic damage, % of its damage' },
       magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 15, high: 30 }, desc: '% magic damage reduction' },
-      stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 10, high: 15 }, desc: '% stun chance per hit' },
-      stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 25, high: 50 }, desc: '% less stun chance and duration' },
+      stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 15, high: 35 }, desc: '% stun chance per hit' },
+      stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less stun chance and duration' },
       accurate: { name: 'Accurate', side: 'O', values: { low: 80, normal: 100, high: 120 }, desc: 'accuracy rating (before daily growth)' },
       evasion: { name: 'Evasion', side: 'D', values: { low: 80, normal: 100, high: 120 }, desc: 'dodge rating (before daily growth)' },
-      chilling: { name: 'Chilling', side: 'O', values: { low: 10, normal: 20, high: 30 }, desc: '% slower attacks for 2s on hit' },
-      slowRes: { name: 'Slow resistance', side: 'D', values: { low: 0, normal: 25, high: 50 }, desc: '% less slow strength and duration' },
+      chilling: { name: 'Chilling', side: 'O', values: { low: 10, normal: 20, high: 40 }, desc: '% slower attacks for 2.5s on hit' },
+      slowRes: { name: 'Slow resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less slow strength and duration' },
       fast: { name: 'Fast', side: 'O', values: { low: -5, normal: 0, high: 5 }, desc: '% attack speed' },
       hp: { name: 'HP', side: 'D', values: { low: 90, normal: 100, high: 110 }, desc: '% of base HP' },
     },
@@ -219,14 +222,15 @@ export const CONFIG = {
       processTime: { owner: 'smith', name: 'Refining', values: [5, 6, 7, 8, 10], desc: '% less refining and cutting time' },
       oreGrade: { owner: 'smith', name: 'Bar luck', values: [2, 3, 4, 5, 6], desc: '% chance a bar is upgraded one grade' },
       gemGrade: { owner: 'smith', name: 'Gem luck', values: [2, 3, 4, 5, 6], desc: '% chance a gem is upgraded one grade' },
-      pierce: { owner: 'adventurer', name: 'Piercing', values: [3, 4, 5, 6, 7], desc: '% of enemy defense ignored' },
-      pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [5, 6, 7, 8, 10], desc: '% of enemy piercing ignored' },
+      foresight: { owner: 'smith', name: 'Foresight', values: [2, 3, 4, 5, 6], desc: 'more guesses and test fights in the win-chance estimate' },
+      pierce: { owner: 'adventurer', name: 'Piercing', values: [5, 8, 10, 12, 14], desc: '% of enemy defense ignored' },
+      pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [6, 9, 12, 15, 18], desc: '% of enemy piercing ignored' },
       magicDmg: { owner: 'adventurer', name: 'Magic damage', values: [3, 4, 5, 6, 7], desc: '% of weapon damage added as magic' },
-      magicRes: { owner: 'adventurer', name: 'Magic resistance', values: [3, 4, 5, 6, 7], desc: '% magic damage reduction' },
+      magicRes: { owner: 'adventurer', name: 'Magic resistance', values: [4, 6, 8, 10, 12], desc: '% magic damage reduction' },
       stunRes: { owner: 'adventurer', name: 'Stun resistance', values: [5, 6, 7, 8, 10], desc: '% less stun chance and duration' },
       accuracy: { owner: 'adventurer', name: 'Accuracy', values: [6, 7, 8, 9, 10], desc: 'accuracy rating' },
       dodge: { owner: 'adventurer', name: 'Dodge', values: [6, 7, 8, 9, 10], desc: 'dodge rating' },
-      slowRes: { owner: 'adventurer', name: 'Slow resistance', values: [5, 6, 7, 8, 10], desc: '% less slow strength and duration' },
+      slowRes: { owner: 'adventurer', name: 'Slow resistance', values: [6, 8, 10, 12, 15], desc: '% less slow strength and duration' },
       speed: { owner: 'adventurer', name: 'Speed', values: [2, 2.5, 3, 3.5, 4], desc: '% attack speed' },
       health: { owner: 'adventurer', name: 'Health', values: [3, 4, 5, 6, 7], desc: '% max HP' },
     },
@@ -235,11 +239,13 @@ export const CONFIG = {
   // ------------------------------------------------------------- SKILLS ----
   // Skills level up automatically from doing the activity. A level-10 skill (lots of activity) equals a
   // C-grade ring of the same kind. Skills without a ring: debris clearing +100% (twice as fast), failure
-  // -5 points, gem grade (blends the novice table into the master table).
+  // -5 points, gem grade (blends the novice table into the master table), Gear care (-10% durability loss
+  // per fight; XP from fights the adventurer survives, not from time).
   // XP needed to go from level L to L+1 = xpBase * (L + 1). Level 10 = 5,500 total XP.
   skills: {
     maxLevel: 10,
     xpBase: 100,
+    gearCareXpPerFight: 100, // Gear care XP for each fight the adventurer survives (win or draw)
     // XP per bar refined / gem cut (failures count), for the per-material skills. Rarer = more XP.
     xpPerItem: { copper: 25, iron: 25, steel: 30, mythril: 50, ruby: 25, topaz: 25, sapphire: 30, emerald: 40, diamond: 50 },
     // Activity skills: XP = minutes spent on the activity. Bonus = perLevel x level.
@@ -250,6 +256,7 @@ export const CONFIG = {
       debris: { name: 'Debris clearing', perLevel: 10, desc: '% more debris cleared per search', xpFrom: 'debris cleared (1 XP per point)' },
       refineTime: { name: 'Refining speed', perLevel: 0.6, desc: '% less refining time', xpFrom: 'minutes refining' },
       cutTime: { name: 'Cutting speed', perLevel: 0.6, desc: '% less cutting time', xpFrom: 'minutes cutting' },
+      gearCare: { name: 'Gear care', perLevel: 1, desc: '% less durability loss in fights', xpFrom: 'fights the adventurer survives' },
     },
     // Per-material skills (one per bar type / gem type). XP = xpPerItem per item processed of that type.
     perMaterial: {
@@ -271,13 +278,18 @@ export const CONFIG = {
       enemySight: { name: 'Enemy scouting', base: 10, desc: 'chance to see each enemy attribute' },
       ringTypeSight: { name: 'Ring type scouting', base: 25, desc: 'chance to see each reward ring type' },
       ringGradeSight: { name: 'Ring grade scouting', base: 25, desc: 'chance to see each reward ring grade' },
+      // Not a chance: the value is the number of EXTRA guesses and extra test fights per enemy (gainsPerPoint).
+      simDepth: { name: 'Battle simulation', base: 0, desc: 'extra guesses and test fights per enemy in the win-chance estimate' },
     },
   },
 
   // ---------------------------------------------------------------- SIM ----
+  // Base sizes of the win-chance estimate (one button estimates every enemy). Each count is raised by
+  // the Battle simulation intel track and Foresight rings (see simCounts in js/core/sim.js). Kept small
+  // on purpose: with 10 x 10 = 100 test fights the estimate is noisy, which is a little risk to plan with.
   sim: {
-    samples: 40, // random guesses of the hidden enemy attributes
-    fightsPerLoadout: 30, // fights per gear combination when picking the best gear for a guess
-    evalFights: 30, // fresh fights with the chosen gear per guess (the reported win %)
+    samples: 10, // random guesses of the hidden enemy attributes per enemy
+    evalFights: 10, // fresh fights with the chosen gear per guess (the reported win %)
+    fightsPerLoadout: 10, // fights per gear combination when picking the best gear for a guess
   },
 };

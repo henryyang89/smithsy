@@ -1,20 +1,22 @@
 // End-of-day screens: battle report (phase 'report'), plan tomorrow's fight (phase 'plan'),
 // game over (phase 'over').
-// Also exports widgets reused by the Adventurer tab and the Log tab: enemyCard, renderBattleReport,
-// renderCombatLog, combatStatsTable and small gear/ring helpers.
+// Also exports widgets reused by the Adventurer tab and the Log tab: rosterTable (one enemy per column),
+// enemyCard (a single enemy), renderBattleReport, renderCombatLog, combatStatsTable and small gear/ring helpers.
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.plan*.
 import { h, section, bar, num } from './dom.js';
-import { SLOTS, GRADES, LEVELS } from '../config.js';
+import { SLOTS, GRADES, LEVELS, TIERS } from '../config.js';
 import * as Game from '../core/game.js';
 import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisible } from '../core/enemies.js';
-import { estimateWinChance, loadouts } from '../core/sim.js';
+import { estimateWinChance, loadouts, simCounts } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
 import { gearStats, isNight } from '../core/gear.js';
-import { spendIntel, intelChance, nextIntelGain } from '../core/intel.js';
+import { smithBonuses } from '../core/bonuses.js';
+import { intelChance, nextIntelGain } from '../core/intel.js';
 import { mixSeed } from '../core/rng.js';
 import { cap } from '../core/util.js';
 import { repairLine, repairAllButton } from './repairui.js';
+import { trackValueText, spendIntelAction } from './skillsview.js';
 
 // ------------------------------------------------------------------ format ----
 const f1 = (v) => num(v, 1);
@@ -23,6 +25,7 @@ const pctf = (v, d = 1) => `${num(v, d)}%`;
 const signedPct = (v) => `${v > 0 ? '+' : ''}${num(v, 1)}%`;
 const LV = { low: 'Low', normal: 'Normal', high: 'High' };
 const SCOUT_TRACKS = ['enemySight', 'ringTypeSight', 'ringGradeSight'];
+const PLAN_TRACKS = [...SCOUT_TRACKS, 'simDepth']; // intel the plan screen offers: scouting + Battle simulation
 
 // "25%", "120", "+5%" — the attribute's value with its unit (pierce resistance is a % of your piercing ignored).
 export function attrValueText(key, level, cfg) {
@@ -86,12 +89,36 @@ export function gearNameNode(g) {
     g.gem ? h('span', { class: 'adv-gem' }, ` +${cap(g.gem.type)} `, h('span', { class: `grade-${g.gem.grade}` }, g.gem.grade)) : null);
 }
 
-export function durabilityNode(g, cfg) {
+// What one fight can cost a used item, mirroring resolveBattle in core/game.js:
+// round(roll min..max x the enemy tier's multiplier x (1 - Gear care %)), at least 1.
+// With tier = null the range covers every tier (lowest multiplier .. highest).
+export function wearRange(state, cfg, tier = null) {
+  const dl = cfg.gear.durabilityLoss;
+  const tm = dl.tierMult || {};
+  const mults = tier ? [tm[tier] || 1] : TIERS.map((t) => tm[t] || 1);
+  const red = Math.min(100, smithBonuses(state, cfg).gearCarePct || 0);
+  const at = (roll, m) => Math.max(1, Math.round(roll * m * (1 - red / 100)));
+  return { min: at(dl.min, Math.min(...mults)), max: at(dl.max, Math.max(...mults)), red };
+}
+
+// "8-14% per fight (more against tougher enemies: x1 / x1.1 / x1.2 ...; 5% less from Gear care)" for notes and tooltips.
+export function wearText(state, cfg, tier = null) {
+  const w = wearRange(state, cfg, tier);
+  const dl = cfg.gear.durabilityLoss;
+  const extra = [];
+  if (!tier && dl.tierMult) extra.push(`more against tougher enemies: x${TIERS.map((t) => dl.tierMult[t] || 1).join(' / x')} for ${TIERS.join(' / ')}`);
+  if (tier && dl.tierMult && (dl.tierMult[tier] || 1) !== 1) extra.push(`x${dl.tierMult[tier]} against a ${tier} enemy`);
+  if (w.red > 0) extra.push(`${num(w.red, 1)}% less from Gear care`);
+  return `${w.min}-${w.max}% per fight${extra.length ? ` (${extra.join('; ')})` : ''}`;
+}
+
+// wear: { min, max } from wearRange (defaults to the raw config range).
+export function durabilityNode(g, cfg, wear) {
   const d = g.durability;
-  const { min, max } = cfg.gear.durabilityLoss;
+  const { min, max } = wear || cfg.gear.durabilityLoss;
   const risky = d <= max;
   const cls = risky ? 'adv-dur-low' : d < 50 ? 'adv-dur-mid' : '';
-  return h('div', { class: 'adv-dur', title: risky ? `Could break in its next fight (each fight costs ${min}-${max}%; 0% = destroyed)` : `Each fight costs a used item ${min}-${max}% durability` },
+  return h('div', { class: 'adv-dur', title: risky ? `Could break in its next fight (a used item loses ${min}-${max}% per fight; 0% = destroyed)` : `A used item loses ${min}-${max}% durability per fight` },
     bar(d, cls), h('span', { class: risky ? 'err' : '' }, `${f1(d)}%`));
 }
 
@@ -135,6 +162,47 @@ export function combatStatsTable(cols) {
       cols.map((col) => h('td', { class: 'num' }, r.fmt(val(r, col.c))))))));
 }
 
+// ------------------------------------------------------------ enemy views ----
+// What the player knows about one enemy: known levels, the tier mix still hidden, base numbers, HP text.
+// opts: { reveal (all levels known), day }
+function enemyView(ctx, enemy, opts = {}) {
+  const { state, cfg } = ctx;
+  const A = cfg.enemies.attributes;
+  const tierCfg = cfg.enemies.tiers[enemy.tier];
+  const day = opts.day ?? enemy.day ?? state.day;
+  const base = enemyBase(enemy.tier, day, cfg);
+  const known = opts.reveal ? { ...enemy.levels } : knownLevels(state, enemy, cfg);
+  const hidden = Object.keys(A).length - Object.keys(known).length;
+  const rem = { ...tierCfg.levels };
+  for (const lv of Object.values(known)) rem[lv] -= 1;
+  const possible = LEVELS.filter((lv) => rem[lv] > 0);
+  // HP after the HP attribute (a range while it is hidden)
+  let hpText;
+  if ('hp' in known) hpText = f1((base.hp * A.hp.values[known.hp]) / 100);
+  else {
+    const vals = (possible.length ? possible : ['normal']).map((lv) => (base.hp * A.hp.values[lv]) / 100);
+    const lo = Math.min(...vals);
+    const hi = Math.max(...vals);
+    hpText = lo === hi ? f1(lo) : `${f1(lo)}-${f1(hi)}`;
+  }
+  return { A, tierCfg, day, base, known, hidden, rem, possible, hpText };
+}
+
+// "Normal · 15%" chip, or "?" while the level is hidden.
+function levelChip(cfg, key, lv) {
+  return lv
+    ? h('span', { class: `adv-lv attr-${lv}` }, `${LV[lv]} · ${attrValueText(key, lv, cfg)}`)
+    : h('span', { class: 'adv-lv attr-unknown' }, '?');
+}
+
+// Tooltip for an attribute: what it does and the value at each level.
+function attrTitle(cfg, key) {
+  const a = cfg.enemies.attributes[key];
+  return `${a.name}: ${a.desc}. ${LEVELS.map((l) => `${LV[l]} ${attrValueText(key, l, cfg)}`).join(' / ')}`;
+}
+
+const remText = (rem) => LEVELS.filter((l) => rem[l] > 0).map((l) => `${rem[l]} ${l}`).join(' · ');
+
 // -------------------------------------------------------------- enemy card ----
 function ringRewardNode(ctx, enemy) {
   const { state, cfg } = ctx;
@@ -146,10 +214,10 @@ function ringRewardNode(ctx, enemy) {
   const nTypes = Object.keys(cfg.rings.types).length;
   const odds = Object.entries(weights).map(([g, w]) => `${g} ${w}%`).join(', ');
   let detail = null;
-  if (tv && gv) detail = `${ringValue(enemy.ring, cfg)} ${def.desc}`;
+  if (tv && gv) detail = ringEffectText(def, ringValue(enemy.ring, cfg));
   else if (tv) {
     const vals = Object.keys(weights).map((g) => def.values[GRADES.indexOf(g)]);
-    detail = `${Math.min(...vals)}-${Math.max(...vals)} ${def.desc}`;
+    detail = ringEffectText(def, `${Math.min(...vals)}-${Math.max(...vals)}`);
   }
   return h('div', { class: 'adv-ring' },
     h('span', { class: 'muted' }, 'Ring reward: '),
@@ -162,29 +230,16 @@ function ringRewardNode(ctx, enemy) {
     tv ? h('span', { class: def.owner === 'adventurer' ? 'adv-owner' : 'adv-owner muted' }, ` · ${def.owner} ring`) : null);
 }
 
-// One enemy: name, tier, base numbers, 12 attributes in offense|defense pairs, tier mix, ring reward.
-// opts: { reveal (show all levels), ring (default true), day, selected, onSelect, estimate (win % badge) }
-export function enemyCard(ctx, enemy, opts = {}) {
-  const { state, cfg } = ctx;
-  const A = cfg.enemies.attributes;
-  const tierCfg = cfg.enemies.tiers[enemy.tier];
-  const day = opts.day ?? enemy.day ?? state.day;
-  const base = enemyBase(enemy.tier, day, cfg);
-  const known = opts.reveal ? { ...enemy.levels } : knownLevels(state, enemy, cfg);
-  const hidden = Object.keys(A).length - Object.keys(known).length;
-  const rem = { ...tierCfg.levels };
-  for (const lv of Object.values(known)) rem[lv] -= 1;
-  const possible = LEVELS.filter((lv) => rem[lv] > 0);
+// "6% less travel time" / "6 more guesses ..." (value + the ring type's description)
+const ringEffectText = (def, v) => (def.desc.startsWith('%') ? `${v}${def.desc}` : `${v} ${def.desc}`);
 
-  // HP after the HP attribute (a range while it is hidden)
-  let hpText;
-  if ('hp' in known) hpText = f1((base.hp * A.hp.values[known.hp]) / 100);
-  else {
-    const vals = (possible.length ? possible : ['normal']).map((lv) => (base.hp * A.hp.values[lv]) / 100);
-    const lo = Math.min(...vals);
-    const hi = Math.max(...vals);
-    hpText = lo === hi ? f1(lo) : `${f1(lo)}-${f1(hi)}`;
-  }
+// One enemy: name, tier, base numbers, 12 attributes in offense|defense pairs, tier mix, ring reward.
+// Used for a single enemy (today's opponent, the battle report); rosters use rosterTable.
+// opts: { reveal (show all levels), ring (default true), day }
+export function enemyCard(ctx, enemy, opts = {}) {
+  const { cfg } = ctx;
+  const v = enemyView(ctx, enemy, opts);
+  const { A, tierCfg, day, base, known, hidden, rem, hpText } = v;
   const stat = (label, value, title) => h('span', { class: 'adv-bstat', title }, h('span', { class: 'muted' }, `${label} `), h('b', {}, value));
   const growthPct = Math.round((base.ratingMult - 1) * 100);
   const baseLine = h('div', { class: 'adv-base' },
@@ -193,15 +248,7 @@ export function enemyCard(ctx, enemy, opts = {}) {
     stat('Defense', `${base.defense}%`, 'Reduces your physical damage (piercing ignores part of it)'),
     stat('Ratings', `x${f2(base.ratingMult)}`, `Accurate and Evasion values are multiplied by ${f2(base.ratingMult)} (+${growthPct}% daily growth)`));
 
-  const cell = (k) => {
-    const a = A[k];
-    const lv = known[k];
-    const range = LEVELS.map((l) => `${LV[l]} ${attrValueText(k, l, cfg)}`).join(' / ');
-    const chip = lv
-      ? h('span', { class: `adv-lv attr-${lv}` }, `${LV[lv]} · ${attrValueText(k, lv, cfg)}`)
-      : h('span', { class: 'adv-lv attr-unknown' }, '?');
-    return h('div', { class: 'adv-attr', title: `${a.name}: ${a.desc}. ${range}` }, h('span', { class: 'adv-an' }, a.name), chip);
-  };
+  const cell = (k) => h('div', { class: 'adv-attr', title: attrTitle(cfg, k) }, h('span', { class: 'adv-an' }, A[k].name), levelChip(cfg, k, known[k]));
   const pairs = h('div', { class: 'adv-pairs' },
     h('div', { class: 'adv-ph' }, 'Offense'), h('div', { class: 'adv-ph' }, 'Defense'),
     cfg.enemies.pairs.flatMap(([o, d]) => [cell(o), cell(d)]));
@@ -209,30 +256,119 @@ export function enemyCard(ctx, enemy, opts = {}) {
   const mix = h('div', { class: 'adv-mix' }, `Tier mix: ${mixText(tierCfg.levels)}`,
     opts.reveal ? null : hidden > 0 ? h('span', {}, ` — ${hidden} hidden, among them: `, h('b', {}, mixText(rem))) : ' — all known');
 
-  const est = opts.estimate;
   const head = h('div', { class: 'adv-ehead' },
-    opts.onSelect ? h('input', { type: 'radio', name: 'adv-enemy', checked: !!opts.selected, tabindex: -1, 'aria-label': `Choose ${enemy.name}` }) : null,
     h('span', { class: 'adv-ename' }, enemy.name),
     h('span', { class: `adv-tier tier-${enemy.tier}` }, cap(enemy.tier)),
-    h('span', { class: 'muted' }, `+${tierCfg.score} pts`),
-    est ? h('span', { class: `adv-badge ${winClass(est.winPct)}`, title: 'Estimated win chance with the current gear and ring selection' }, `win ≈ ${f1(est.winPct)}%`) : null);
+    h('span', { class: 'muted' }, `+${tierCfg.score} pts`));
 
-  const cls = ['enemy-card', 'adv-ecard', opts.onSelect ? 'adv-pick' : '', opts.selected ? 'selected' : ''].filter(Boolean).join(' ');
-  return h('div', {
-    class: cls,
-    tabindex: opts.onSelect ? 0 : null,
-    role: opts.onSelect ? 'button' : null,
-    onclick: opts.onSelect || null,
-    onkeydown: opts.onSelect ? (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        ev.preventDefault();
-        opts.onSelect();
-      }
-    } : null,
-  }, head, baseLine, pairs, mix, opts.ring === false ? null : ringRewardNode(ctx, enemy));
+  return h('div', { class: 'enemy-card adv-ecard' }, head, baseLine, pairs, mix, opts.ring === false ? null : ringRewardNode(ctx, enemy));
+}
+
+// ----------------------------------------------------------- roster table ----
+// All enemies of a roster side by side, ONE ENEMY PER COLUMN, so every row compares the same thing:
+// name, tier, base numbers, ring reward, (win estimate), then the 6 offensive attributes, a divider,
+// the 6 defensive ones. Cells show Low / Normal / High + value, "?" while hidden.
+// opts: { day, selected (column index), onSelect(i) (columns become choosable), estimates: [result|null] per
+//         column (adds the "Win estimate" row), running (an estimate run is in progress) }
+export function rosterTable(ctx, enemies, opts = {}) {
+  const { cfg } = ctx;
+  const A = cfg.enemies.attributes;
+  const views = enemies.map((e) => enemyView(ctx, e, { day: opts.day }));
+  const sel = opts.selected ?? null;
+  const pick = opts.onSelect || null;
+  const nCols = enemies.length;
+
+  const colCls = (i, extra = '') => `rt-c${i === sel ? ' rt-sel' : ''}${pick ? ' rt-pick' : ''}${extra ? ` ${extra}` : ''}`;
+  const colAttrs = (i, extra) => ({ class: colCls(i, extra), 'data-col': i, onclick: pick ? () => pick(i) : null });
+  const rowHead = (label, title) => h('th', { class: 'rt-row', scope: 'row', title }, label);
+  const row = (label, title, fn, cls = '') => h('tr', { class: cls }, rowHead(label, title), enemies.map((e, i) => h('td', colAttrs(i), fn(e, views[i], i))));
+
+  const names = h('tr', { class: 'rt-names' },
+    h('th', { class: 'rt-row rt-corner' }, pick ? 'Choose' : 'Enemy'),
+    enemies.map((e, i) => h('th', { ...colAttrs(i, 'rt-head'), scope: 'col' },
+      h('div', { class: 'rt-hd' },
+        pick ? h('input', {
+          type: 'radio',
+          name: 'adv-enemy',
+          checked: i === sel,
+          'data-enemy': i,
+          'aria-label': `Choose ${e.name}`,
+          onclick: (ev) => ev.stopPropagation(), // the radio's own change event picks the column (and keeps its focus)
+          onchange: () => pick(i, true),
+        }) : null,
+        h('span', { class: 'rt-name' }, e.name)))));
+
+  const tier = row('Tier', 'Tier and the score for a win', (e, v) => [
+    h('div', { class: `adv-tier tier-${e.tier}`, title: `Tier mix: ${mixText(v.tierCfg.levels)}` }, cap(e.tier)),
+    h('div', { class: 'muted rt-sm' }, `+${v.tierCfg.score} pts`)]);
+  const baseHp = row('Base HP', 'Base HP on the fight day, before the HP attribute (see the HP row below)', (e, v) => f1(v.base.hp));
+  const baseDmg = row('Damage', 'Damage per hit before magic, defense and piercing', (e, v) => f1(v.base.damage));
+  const baseDef = row('Defense', 'Reduces your physical damage (piercing ignores part of it)', (e, v) => `${v.base.defense}%`);
+  const growth = row('Rating growth', 'Accurate and Evasion values below are multiplied by this (daily growth)', (e, v) => `x${f2(v.base.ratingMult)}`);
+  const ring = row('Ring reward', 'The ring a win drops (hidden until your ring scouting reveals it)', (e) => ringRewardCell(ctx, e));
+  const hiddenRow = row('Hidden attributes', 'How many of the 12 attributes you cannot see yet, and the Low / Normal / High levels they can still have', (e, v) => (v.hidden > 0
+    ? [h('b', {}, String(v.hidden)), h('div', { class: 'muted rt-sm' }, remText(v.rem))]
+    : h('span', { class: 'muted' }, 'none')));
+
+  const rows = [tier, baseHp, baseDmg, baseDef, growth, ring, hiddenRow];
+  if (opts.estimates) {
+    rows.push(h('tr', { class: 'rt-est' }, rowHead('Win estimate', 'Estimated win chance with the current gear and ring selection (press Estimate all)'),
+      enemies.map((e, i) => h('td', { ...colAttrs(i), 'data-est': i }, estimateCell(opts.estimates[i], opts.running)))));
+  }
+
+  const sectionRow = (label, sub) => h('tr', { class: 'rt-sect' }, h('th', { class: 'rt-row', scope: 'rowgroup' }, label), h('td', { colspan: nCols }, h('span', { class: 'rt-sect-sub' }, sub)));
+  const attrRow = (key, last) => row(A[key].name, attrTitle(cfg, key), (e, v) => {
+    const chip = levelChip(cfg, key, v.known[key]);
+    if (key !== 'hp') return chip;
+    return [chip, h('div', { class: 'muted rt-sm', title: `HP = base ${f1(v.base.hp)} x the HP attribute` }, `= ${v.hpText} HP`)];
+  }, last ? 'rt-last' : '');
+  const offense = cfg.enemies.pairs.map(([o]) => o);
+  const defense = cfg.enemies.pairs.map(([, d]) => d);
+
+  const table = h('table', { class: 'rt', style: { width: `calc(var(--rt-label) + ${nCols} * var(--rt-col))` } },
+    h('thead', {}, names),
+    h('tbody', {},
+      rows,
+      sectionRow('Offense', 'what it does to you'),
+      offense.map((k) => attrRow(k)),
+      sectionRow('Defense', 'against your attacks'),
+      defense.map((k, i) => attrRow(k, i === defense.length - 1))));
+  return h('div', { class: 'adv-scroll rt-scroll', 'data-rt': '1' }, table);
+}
+
+// Compact ring reward for a table column: "Ore sight B" + "smith ring", or "? type ? grade" while hidden.
+function ringRewardCell(ctx, enemy) {
+  const { state, cfg } = ctx;
+  if (!enemy.ring) return h('span', { class: 'muted' }, 'none');
+  const tv = ringTypeVisible(state, enemy, cfg);
+  const gv = ringGradeVisible(state, enemy, cfg);
+  const weights = cfg.rings.gradeWeights[enemy.tier];
+  const odds = Object.entries(weights).map(([g, w]) => `${g} ${w}%`).join(', ');
+  const def = tv ? ringDef(enemy.ring.type, cfg) : null;
+  const nTypes = Object.keys(cfg.rings.types).length;
+  let title;
+  if (tv && gv) title = `${def.name} ${enemy.ring.grade}: ${ringEffectText(def, ringValue(enemy.ring, cfg))}`;
+  else if (tv) {
+    const vals = Object.keys(weights).map((g) => def.values[GRADES.indexOf(g)]);
+    title = `${def.name}, grade hidden (${cap(enemy.tier)} odds: ${odds}): ${ringEffectText(def, `${Math.min(...vals)}-${Math.max(...vals)}`)}`;
+  } else title = `Type hidden (any of ${nTypes} types, equally likely). ${gv ? `Grade ${enemy.ring.grade}.` : `Grade hidden (${cap(enemy.tier)} odds: ${odds}).`}`;
+  return h('div', { class: 'rt-ring', title },
+    h('div', {},
+      tv ? h('b', {}, def.name) : h('span', { class: 'adv-lv attr-unknown' }, '? type'),
+      ' ',
+      gv ? h('span', { class: `adv-lv grade-${enemy.ring.grade}` }, enemy.ring.grade) : h('span', { class: 'adv-lv attr-unknown' }, '? grade')),
+    tv ? h('div', { class: 'muted rt-sm' }, `${def.owner} ring`) : null);
+}
+
+// A cell of the "Win estimate" row: the win % (colour by chance), "…" while that estimate runs, "—" if none.
+function estimateCell(res, running) {
+  if (res) return h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${res.fights} simulated fights` }, winText(res.winPct));
+  if (running) return h('span', { class: 'muted', title: 'Simulating…' }, '…');
+  return h('span', { class: 'muted', title: 'Not estimated yet for this selection: press Estimate all' }, '—');
 }
 
 const winClass = (p) => (p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'err');
+const winText = (v) => `${Math.round(v)}%`;
 
 // -------------------------------------------------------------- combat log ----
 // Backpack-Battles style log lines. Returns a DOM node.
@@ -327,10 +463,23 @@ export function renderBattleReport(report, ctx, opts = {}) {
       hpRow(en, report.enemyHp, report.enemyMaxHp, 'adv-hp-e')));
 
   const destroyed = report.destroyed || [];
+  // how much wear each item took: the roll, x the enemy tier's multiplier, x (1 - Gear care) (older reports lack the detail)
+  const wearDetail = (w) => {
+    if (w.base == null) return null;
+    const bits = [`rolled ${w.base}%`];
+    if (w.tierMult && w.tierMult !== 1) bits.push(`x ${f2(w.tierMult)} (${tier} enemy)`);
+    if (w.skillRed > 0) bits.push(`x ${f2(1 - w.skillRed / 100)} (Gear care -${num(w.skillRed, 1)}%)`);
+    return bits.join(' ');
+  };
   const wearRows = (report.wear || []).map((w) => h('tr', {},
-    h('td', {}, w.name),
+    h('td', {}, w.name, wearDetail(w) ? h('div', { class: 'muted adv-small' }, wearDetail(w)) : null),
     h('td', { class: 'num err' }, `-${w.loss}%`),
     h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${f1(w.left)}% left`)));
+  const survived = report.win || report.draw;
+  const gearCareNode = survived && Array.isArray(report.notes) && cfg.skills.gearCareXpPerFight && cfg.skills.activity.gearCare
+    ? h('p', { class: 'adv-tight muted adv-small' }, `${cfg.skills.activity.gearCare.name}: +${cfg.skills.gearCareXpPerFight} XP for surviving the fight.`,
+      report.notes.map((n) => [' ', h('b', { class: 'ok' }, n)]))
+    : null;
   // Packed but unused (report.packedIds; older saves may not have it). Unused items do not wear.
   const usedIds = report.usedIds || [];
   const unusedIds = Array.isArray(report.packedIds) ? report.packedIds.filter((id) => !usedIds.includes(id)) : [];
@@ -347,6 +496,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
       : h('p', { class: 'adv-tight muted' }, Array.isArray(report.packedIds) && report.packedIds.length ? 'No gear used — fought unarmed.' : 'No gear — fought unarmed.'),
     unusedNode,
     wearRows.length ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)) : null,
+    gearCareNode,
     destroyed.length ? h('p', { class: 'err' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
     opts.repair && isNight(ctx.state) ? reportRepair(ctx, report) : null,
     h('h4', { class: 'adv-h4' }, 'Reward'),
@@ -482,9 +632,11 @@ function planSel(ctx) {
 
 const sortedIds = (ids) => [...ids].sort((a, b) => a - b).join(',');
 
-// Cache key for an estimate: everything that changes the result.
-function estKey(state, p, enemyIndex = p.enemyIndex) {
-  return [p.seed, p.rosterDay, enemyIndex, sortedIds(p.gearIds), sortedIds(p.ringIds), intelChance(state, 'enemySight')].join('|');
+// Cache key for one enemy's estimate: everything that changes the result (the selection, what the
+// player can see of the enemy, and the size of the simulation).
+function estKey(ctx, p, enemyIndex, counts = simCounts(ctx.state, ctx.cfg)) {
+  return [p.seed, p.rosterDay, enemyIndex, sortedIds(p.gearIds), sortedIds(p.ringIds), intelChance(ctx.state, 'enemySight', ctx.cfg),
+    counts.samples, counts.evalFights, counts.fightsPerLoadout].join('|');
 }
 
 // UI-only selection change. Cached estimates are keyed by the full selection, so a changed
@@ -510,38 +662,57 @@ function estimateParams(ctx, enemyIndex) {
   };
 }
 
-function setProgress(f) {
-  const fill = document.getElementById('adv-est-fill');
-  if (fill) fill.style.width = `${Math.round(f * 100)}%`;
-  for (const id of ['adv-est-text', 'adv-est-btn']) {
-    const el = document.getElementById(id);
-    if (el) el.textContent = `Simulating… ${Math.round(f * 100)}%`;
-  }
+// Update the progress widgets in place (the run can outlive several re-renders).
+function setProgress(run) {
+  const pct = Math.round(run.progress * 100);
+  const text = `Simulating ${run.name} (${Math.min(run.index + 1, run.total)} of ${run.total})… ${pct}%`;
+  for (const fill of document.querySelectorAll('.adv-est-fill')) fill.style.width = `${pct}%`;
+  for (const el of document.querySelectorAll('.adv-est-text')) el.textContent = text;
+  const btn = document.getElementById('adv-est-btn');
+  if (btn) btn.textContent = `Simulating… ${pct}%`;
 }
 
-function startEstimate(ctx) {
+// Put one finished estimate into its table cell without re-rendering the screen.
+function paintEstimate(i, res, running) {
+  const td = document.querySelector(`.rt td[data-est="${i}"]`);
+  if (td) td.replaceChildren(estimateCell(res, running));
+}
+
+// ONE button for the whole roster: estimate every enemy, one after the other, with the current gear and
+// ring selection (snapshotted now, so changing the selection mid-run cannot mix up the results).
+function startEstimateAll(ctx) {
   const p = ctx.ui.plan;
-  if (ctx.ui.plan_run || !p || p.enemyIndex == null) return;
-  const key = estKey(ctx.state, p);
-  const params = estimateParams(ctx, p.enemyIndex);
-  const run = { key, progress: 0 };
+  if (ctx.ui.plan_run || !p) return;
+  const enemies = ctx.state.roster.enemies;
+  const counts = simCounts(ctx.state, ctx.cfg);
+  const opts = { samples: counts.samples, evalFights: counts.evalFights, fightsPerLoadout: counts.fightsPerLoadout };
+  const est = ctx.ui.plan_est;
+  const jobs = enemies.map((e, i) => ({ i, name: e.name, key: estKey(ctx, p, i, counts), params: estimateParams(ctx, i) })).filter((j) => !est[j.key]);
+  if (!jobs.length) return;
+  const run = { jobs, total: jobs.length, index: 0, progress: 0, name: jobs[0].name };
   ctx.ui.plan_run = run;
   ctx.rerender();
-  estimateWinChance(params, {}, (f) => {
-    run.progress = f;
-    setProgress(f);
-  })
-    .then((res) => {
-      if (ctx.ui.plan_est) ctx.ui.plan_est[key] = res;
-    })
-    .catch((e) => {
+  (async () => {
+    try {
+      for (let n = 0; n < jobs.length; n++) {
+        const job = jobs[n];
+        run.index = n;
+        run.name = job.name;
+        const res = await estimateWinChance(job.params, opts, (f) => {
+          run.progress = (n + f) / jobs.length;
+          setProgress(run);
+        });
+        est[job.key] = { ...res, counts };
+        paintEstimate(job.i, est[job.key], true);
+      }
+    } catch (e) {
       console.error(e);
       ctx.toast(`Estimate failed: ${e.message}`, 'err');
-    })
-    .finally(() => {
+    } finally {
       if (ctx.ui.plan_run === run) ctx.ui.plan_run = null;
       ctx.rerender();
-    });
+    }
+  })();
 }
 
 export function renderPlan(root, ctx) {
@@ -552,11 +723,20 @@ export function renderPlan(root, ctx) {
   const selGear = s.gear.filter((g) => p.gearIds.includes(g.id));
   const advRings = s.rings.filter((r) => isAdvRing(r, cfg));
   const selRings = advRings.filter((r) => p.ringIds.includes(r.id));
-  const key = sel ? estKey(s, p) : null;
-  const est = key ? ctx.ui.plan_est[key] || null : null;
+  const counts = simCounts(s, cfg);
+  const estimates = s.roster.enemies.map((e, i) => ctx.ui.plan_est[estKey(ctx, p, i, counts)] || null);
+  const est = p.enemyIndex != null ? estimates[p.enemyIndex] : null;
   const running = ctx.ui.plan_run;
   const plan = { enemyIndex: p.enemyIndex, gearIds: [...p.gearIds], ringIds: [...p.ringIds] };
   const err = Game.validatePlan(s, plan, cfg);
+
+  const select = (i, fromKeyboard) => {
+    if (fromKeyboard) ctx.ui.plan_focus = i; // the radio group (arrow keys, space): keep the focus after the re-render
+    if (p.enemyIndex === i) return;
+    changeSel(ctx, (pl) => {
+      pl.enemyIndex = i;
+    });
+  };
 
   root.append(h('div', { class: 'adv-plan' },
     h('section', { class: 'panel' },
@@ -566,19 +746,36 @@ export function renderPlan(root, ctx) {
         h('b', {}, 'A lost fight ends the game.'))),
     intelPanel(ctx),
     section('1. Choose an enemy',
-      h('div', { class: 'adv-roster' }, s.roster.enemies.map((e, i) => {
-        const k = estKey(s, p, i);
-        return enemyCard(ctx, e, {
-          selected: p.enemyIndex === i,
-          estimate: ctx.ui.plan_est[k] || null,
-          onSelect: () => changeSel(ctx, (pl) => {
-            pl.enemyIndex = i;
-          }),
-        });
-      }))),
-    h('div', { class: 'cols' }, gearStep(ctx, p, selGear), ringStep(ctx, p, advRings, selRings)),
-    estimatePanel(ctx, p, sel, selGear, selRings, est, running, key),
-    confirmBar(ctx, p, sel, selGear, selRings, est, running, key, err)));
+      h('p', { class: 'adv-tight muted adv-small' }, 'Click a column to choose that enemy. Each row compares one attribute across the roster: ',
+        h('span', { class: 'attr-low' }, 'green = Low'), ' (weaker enemy), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. ',
+        'Offense = what it does to you, defense = how well it resists your attacks. Press ', h('b', {}, 'Estimate all'), ` (bottom bar) to fill the win-estimate row: ${counts.samples} guesses x ${counts.evalFights} test fights per enemy (raise with Battle simulation intel and Foresight rings).`),
+      running ? progressBlock(running) : null,
+      rosterTable(ctx, s.roster.enemies, { day: s.roster.day, selected: p.enemyIndex, onSelect: select, estimates, running: !!running })),
+    h('div', { class: 'cols' }, gearStep(ctx, p, selGear, sel), ringStep(ctx, p, advRings, selRings)),
+    estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts),
+    confirmBar(ctx, p, sel, selGear, selRings, est, running, err, estimates)));
+
+  // restore what a re-render would otherwise reset: the table's horizontal scroll and the radio focus
+  const scroller = root.querySelector('.rt-scroll');
+  if (scroller) {
+    if (ctx.ui.plan_scroll) scroller.scrollLeft = ctx.ui.plan_scroll;
+    scroller.addEventListener('scroll', () => {
+      ctx.ui.plan_scroll = scroller.scrollLeft;
+    }, { passive: true });
+  }
+  if (ctx.ui.plan_focus != null) {
+    const radio = root.querySelector(`input[data-enemy="${ctx.ui.plan_focus}"]`);
+    if (radio) radio.focus({ preventScroll: true });
+    ctx.ui.plan_focus = null;
+  }
+}
+
+// Overall progress of an Estimate all run.
+function progressBlock(run) {
+  const pct = Math.round(run.progress * 100);
+  return h('div', { class: 'adv-estrun' },
+    h('div', { class: 'bar adv-progress' }, h('div', { class: 'bar-fill adv-est-fill', style: { width: `${pct}%` } })),
+    h('div', { class: 'adv-est-text muted adv-small' }, `Simulating ${run.name} (${Math.min(run.index + 1, run.total)} of ${run.total})… ${pct}%`));
 }
 
 function intelPanel(ctx) {
@@ -589,35 +786,36 @@ function intelPanel(ctx) {
   const nextDay = (Math.floor(s.day / per) + 1) * per;
   if (pts <= 0) {
     return h('section', { class: 'panel adv-intel' },
-      h('span', { class: 'muted' }, 'Scouting: '),
-      SCOUT_TRACKS.map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, `${intelChance(s, t, cfg)}%`)]),
+      h('span', { class: 'muted' }, 'Intel: '),
+      PLAN_TRACKS.map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, trackValueText(t, intelChance(s, t, cfg)))]),
       h('span', { class: 'muted' }, ` — no intel points (next one at the end of day ${nextDay}).`));
   }
   return section(`Intel: ${pts} point${pts > 1 ? 's' : ''} to spend`,
-    h('p', { class: 'adv-tight muted' }, 'Spending a point reveals more of this roster right away (each attribute / ring type / ring grade has a fixed hidden roll; a higher chance uncovers more of them).'),
+    h('p', { class: 'adv-tight muted' }, 'Spending a point on scouting reveals more of this roster right away (each attribute / ring type / ring grade has a fixed hidden roll; a higher chance uncovers more of them). Battle simulation adds guesses and test fights to the win-chance estimate.'),
     h('table', { class: 'adv-stats' },
-      h('tbody', {}, SCOUT_TRACKS.map((t) => {
+      h('tbody', {}, PLAN_TRACKS.map((t) => {
         const tr = cfg.intel.tracks[t];
         const cur = intelChance(s, t, cfg);
         const gain = nextIntelGain(s, t, cfg);
         return h('tr', {},
           h('td', {}, h('b', {}, tr.name), h('div', { class: 'muted adv-small' }, tr.desc)),
-          h('td', { class: 'num' }, `${cur}%`),
+          h('td', { class: 'num' }, trackValueText(t, cur)),
           h('td', { class: 'num' }, gain > 0
             ? h('button', {
               class: 'small',
-              onclick: () => ctx.act(() => spendIntel(ctx.state, t, ctx.cfg), { toast: true }),
-            }, `Spend 1 point: ${cur}% → ${cur + gain}%`)
+              onclick: () => ctx.act(() => spendIntelAction(ctx, t), { toast: true }),
+            }, `Spend 1 point: ${trackValueText(t, cur)} → ${trackValueText(t, cur + gain)}`)
             : h('span', { class: 'muted' }, 'maxed')));
       }))));
 }
 
-function gearStep(ctx, p, selGear) {
+function gearStep(ctx, p, selGear, sel) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   const counts = {};
   for (const g of selGear) counts[g.slot] = (counts[g.slot] || 0) + 1;
-  const maxLoss = cfg.gear.durabilityLoss.max;
+  const wear = wearRange(s, cfg, sel ? sel.tier : null); // the chosen enemy's tier, else any tier
+  const maxLoss = wear.max;
   const rows = [];
   for (const slot of SLOTS) {
     const items = s.gear
@@ -644,7 +842,7 @@ function gearStep(ctx, p, selGear) {
           }),
         })),
         h('td', {}, gearCell(g, cfg)),
-        h('td', {}, durabilityNode(g, cfg))));
+        h('td', {}, durabilityNode(g, cfg, wear))));
       // free of time tonight: repair right here before packing
       if (needsRepair) rows.push(h('tr', { class: `adv-repairrow${on ? ' adv-on' : ''}` }, h('td', {}), h('td', { colspan: 2 }, repairLine(ctx, g))));
     }
@@ -660,7 +858,8 @@ function gearStep(ctx, p, selGear) {
         ? [` ${worn.length} item${worn.length === 1 ? '' : 's'} below 100%: use the Repair buttons below. `, repairAllButton(ctx, worn)]
         : ' All your gear is at 100%.') : null,
     h('p', { class: 'adv-tight muted' }, 'Packed gear is away with the adventurer all day tomorrow: it ',
-      h('b', {}, 'can\'t be repaired'), ' until it comes back in the evening, so repair it tonight. Only the items actually used lose durability.'),
+      h('b', {}, 'can\'t be repaired'), ' until it comes back in the evening, so repair it tonight. Only the items actually used lose durability: ',
+      wearText(s, cfg, sel ? sel.tier : null), '.'),
     h('div', { class: 'row adv-tight' },
       h('button', { class: 'small', onclick: () => changeSel(ctx, (pl) => { pl.gearIds = defaultGearIds(ctx.state, ctx.cfg); }) }, 'Best 2 per slot'),
       h('button', { class: 'small', onclick: () => changeSel(ctx, (pl) => { pl.gearIds = []; }) }, 'Pack nothing'),
@@ -670,7 +869,7 @@ function gearStep(ctx, p, selGear) {
         h('thead', {}, h('tr', {}, h('th', {}, 'Pack'), h('th', {}, 'Item and stats'), h('th', {}, 'Durability'))),
         h('tbody', {}, rows)))
       : h('p', { class: 'warn' }, 'You own no gear: the adventurer fights unarmed with no armor.'),
-    risky.length ? h('p', { class: 'err adv-small' }, `At ${maxLoss}% or less, could be destroyed if used: ${risky.map((g) => `${g.grade} ${cap(g.material)} ${cap(g.slot)} (${f1(g.durability)}%)`).join(', ')}.`) : null);
+    risky.length ? h('p', { class: 'err adv-small' }, `At ${maxLoss}% or less, could be destroyed if used${sel ? ` against ${sel.name}` : ''}: ${risky.map((g) => `${g.grade} ${cap(g.material)} ${cap(g.slot)} (${f1(g.durability)}%)`).join(', ')}.`) : null);
 }
 
 function ringStep(ctx, p, advRings, selRings) {
@@ -783,7 +982,25 @@ function matchupTable(ctx, sel, preview) {
     h('p', { class: 'adv-tight muted adv-small' }, 'Uses the preview gear above. Ranges cover the levels hidden attributes could still have. Ignores stuns, slows and damage rolls — run the estimate for the full picture.'));
 }
 
-function estimatePanel(ctx, p, sel, selGear, selRings, est, running, key) {
+// "10 guesses x 10 test fights per enemy" and how to raise it. counts = simCounts(state).
+function estimateHow(ctx, sel, counts) {
+  const { state, cfg } = ctx;
+  const known = sel ? knownLevels(state, sel, cfg) : null;
+  const nHidden = known ? Object.keys(cfg.enemies.attributes).length - Object.keys(known).length : null;
+  const intelPart = intelChance(state, 'simDepth', cfg);
+  const ringPart = counts.extra - intelPart;
+  const o = cfg.sim;
+  return h('div', { class: 'adv-how' },
+    h('p', { class: 'muted adv-small' },
+      h('b', {}, `${counts.samples} guesses x ${counts.evalFights} test fights per enemy`),
+      ` (base ${o.samples} x ${o.evalFights}${counts.extra ? `, +${intelPart} from Battle simulation intel${ringPart ? ` and +${ringPart} from Foresight rings` : ''}` : ''}). `,
+      `For each guess of the hidden attributes${nHidden != null ? ` (${nHidden} hidden for ${sel.name})` : ''}, consistent with the tier mix, the adventurer picks the best packed gear (${counts.fightsPerLoadout} test fights per combination), then fights ${counts.evalFights} fresh fights: ${counts.samples * counts.evalFights} fights per enemy. A draw (safety time cap) counts as survival.`),
+    h('p', { class: 'muted adv-small' },
+      'A small simulation is noisy: treat the number as a rough guide (it can be off by several points), and a risk you take on. To make it steadier, spend intel on ',
+      h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear ', h('b', {}, cfg.rings.types.foresight.name), ' smith rings (Rings tab). Both add guesses and test fights, and make the run slower.'));
+}
+
+function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   const preview = adventurerCombatant(bestPerSlot(selGear, 1, cfg), ringTotals(selRings, cfg), cfg);
@@ -794,65 +1011,56 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, key) {
     sel ? matchupTable(ctx, sel, preview) : null);
 
   let right;
+  const how = estimateHow(ctx, sel, counts);
   if (!sel) {
-    right = h('p', { class: 'muted' }, 'Pick an enemy to estimate your win chance.');
+    right = h('div', {}, h('p', { class: 'muted' }, 'Pick an enemy to see the details of its estimate. ', h('b', {}, 'Estimate all'), ' (bottom bar) simulates every enemy of the roster at once.'), how);
+  } else if (running) {
+    right = h('div', {}, h('p', { class: 'muted' }, 'Simulating the roster… (progress in the bar above and at the bottom)'), how);
+  } else if (est) {
+    const c = est.counts || counts;
+    const name = (id) => {
+      const g = s.gear.find((x) => x.id === id);
+      return g ? gearNameNode(g) : `#${id}`;
+    };
+    right = h('div', {},
+      h('div', { class: 'adv-bignums' },
+        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}` }, winText(est.winPct)), h('div', { class: 'muted' }, 'win chance')),
+        h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
+        h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),
+      h('p', { class: 'adv-small muted' }, `${est.fights} simulated fights vs ${sel.name} (${c.samples} guesses x ${c.evalFights}).`),
+      h('h4', { class: 'adv-h4' }, 'Gear the adventurer would use'),
+      est.usage.length && est.usage[0].items.length
+        ? h('table', { class: 'adv-stats' },
+          h('thead', {}, h('tr', {}, h('th', { class: 'num' }, 'Guesses'), h('th', {}, 'Items'))),
+          h('tbody', {}, est.usage.slice(0, 6).map((u) => h('tr', {},
+            h('td', { class: 'num' }, `${Math.round((u.count / c.samples) * 100)}%`),
+            h('td', {}, u.items.map((id, i) => [i ? ', ' : '', name(id)]))))))
+        : h('p', { class: 'muted' }, 'No gear packed (unarmed).'),
+      est.usage.length > 6 ? h('p', { class: 'muted adv-small' }, `… and ${est.usage.length - 6} more combinations.`) : null,
+      how);
   } else {
-    const known = knownLevels(s, sel, cfg);
-    const nHidden = Object.keys(cfg.enemies.attributes).length - Object.keys(known).length;
-    const o = cfg.sim;
-    const how = h('p', { class: 'muted adv-small' },
-      `${o.samples} guesses of the ${nHidden} hidden attribute${nHidden === 1 ? '' : 's'} (consistent with the tier mix). For each guess the adventurer picks the best packed gear (${o.fightsPerLoadout} test fights per combination), then fights ${o.evalFights} fresh fights: ${o.samples * o.evalFights} fights in total. A draw (safety time cap) counts as survival.`);
-    if (running && running.key === key) {
-      right = h('div', {},
-        h('div', { class: 'bar adv-progress' }, h('div', { id: 'adv-est-fill', class: 'bar-fill', style: { width: `${Math.round(running.progress * 100)}%` } })),
-        h('p', { id: 'adv-est-text', class: 'muted' }, `Simulating… ${Math.round(running.progress * 100)}%`),
-        how);
-    } else if (est) {
-      const name = (id) => {
-        const g = s.gear.find((x) => x.id === id);
-        return g ? gearNameNode(g) : `#${id}`;
-      };
-      right = h('div', {},
-        h('div', { class: 'adv-bignums' },
-          h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}` }, `${f1(est.winPct)}%`), h('div', { class: 'muted' }, 'win chance')),
-          h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
-          h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),
-        h('p', { class: 'adv-small muted' }, `${est.fights} simulated fights vs ${sel.name}.`),
-        h('h4', { class: 'adv-h4' }, 'Gear the adventurer would use'),
-        est.usage.length && est.usage[0].items.length
-          ? h('table', { class: 'adv-stats' },
-            h('thead', {}, h('tr', {}, h('th', { class: 'num' }, 'Guesses'), h('th', {}, 'Items'))),
-            h('tbody', {}, est.usage.slice(0, 6).map((u) => h('tr', {},
-              h('td', { class: 'num' }, `${Math.round((u.count / o.samples) * 100)}%`),
-              h('td', {}, u.items.map((id, i) => [i ? ', ' : '', name(id)]))))))
-          : h('p', { class: 'muted' }, 'No gear packed (unarmed).'),
-        est.usage.length > 6 ? h('p', { class: 'muted adv-small' }, `… and ${est.usage.length - 6} more combinations.`) : null,
-        how);
-    } else {
-      right = h('div', {},
-        h('p', {}, 'Not estimated for this selection yet. ', h('button', { class: 'small', disabled: !!running, onclick: () => startEstimate(ctx) }, 'Estimate win chance')),
-        how);
-    }
+    right = h('div', {}, h('p', {}, `${sel.name} is not estimated for this selection yet. Press `, h('b', {}, 'Estimate all'), ' (bottom bar): it simulates every enemy of the roster.'), how);
   }
   return section(sel ? `Win chance vs ${sel.name}` : 'Win chance', h('div', { class: 'cols' }, left, h('div', {}, h('h4', { class: 'adv-h4' }, 'Estimate'), right)));
 }
 
-function confirmBar(ctx, p, sel, selGear, selRings, est, running, key, err) {
+function confirmBar(ctx, p, sel, selGear, selRings, est, running, err, estimates) {
   const s = ctx.state;
   const cfg = ctx.cfg;
-  const isRunningHere = running && running.key === key;
-  const estLabel = isRunningHere ? `Simulating… ${Math.round(running.progress * 100)}%` : running ? 'Simulating…' : est ? 'Estimated' : 'Estimate win chance';
+  const allDone = estimates.every(Boolean);
+  const estLabel = running ? `Simulating… ${Math.round(running.progress * 100)}%` : allDone ? 'Estimated' : 'Estimate all';
   return h('div', { class: 'adv-bar' },
     h('div', { class: 'adv-bar-info' },
       sel ? [h('b', {}, sel.name), ' ', h('span', { class: `tier-${sel.tier}` }, `(${sel.tier}, +${cfg.enemies.tiers[sel.tier].score} pts)`)] : h('span', { class: 'warn' }, 'No enemy chosen'),
       h('span', { class: 'muted' }, ` · ${selGear.length} gear packed · ${selRings.length}/${cfg.rings.maxWorn} rings`),
-      est ? h('span', {}, ' · win ≈ ', h('b', { class: winClass(est.winPct) }, `${f1(est.winPct)}%`)) : null,
-      err ? h('div', { class: 'warn adv-small' }, err) : null),
+      est ? h('span', {}, ' · win ≈ ', h('b', { class: winClass(est.winPct) }, winText(est.winPct))) : sel ? h('span', { class: 'muted' }, ' · not estimated') : null,
+      err ? h('div', { class: 'warn adv-small' }, err) : null,
+      running ? progressBlock(running) : null),
     h('button', {
       id: 'adv-est-btn',
-      disabled: !sel || !!running || !!est,
-      title: !sel ? 'Pick an enemy first' : est ? 'Already estimated for this selection' : 'Simulate many fights with this selection',
-      onclick: () => startEstimate(ctx),
+      disabled: !!running || allDone,
+      title: running ? 'Simulating the roster…' : allDone ? 'Every enemy is already estimated for this selection (the same selection always gives the same result)' : 'Simulate every enemy of the roster with the current gear and ring selection',
+      onclick: () => startEstimateAll(ctx),
     }, estLabel),
     h('button', {
       class: 'primary',
@@ -871,8 +1079,8 @@ function confirmBar(ctx, p, sel, selGear, selRings, est, running, key, err) {
         for (const slot of SLOTS) {
           if (st.gear.some((g) => g.slot === slot) && !plan.gearIds.some((id) => st.gear.find((g) => g.id === id)?.slot === slot)) warn.push(`No ${slot} packed, though you own one.`);
         }
-        const est = ctx.ui.plan_est && ctx.ui.plan_est[estKey(st, p)];
-        if (est && est.winPct < 50) warn.push(`Estimated win chance is only ${f1(est.winPct)}%.`);
+        const chosen = ctx.ui.plan_est && ctx.ui.plan_est[estKey(ctx, p, p.enemyIndex)];
+        if (chosen && chosen.winPct < 50) warn.push(`Estimated win chance is only ${winText(chosen.winPct)}.`);
         if (warn.length && !confirm(`${warn.join('\n')}\n\nA lost fight ends the game. Confirm anyway?`)) return;
         const res = ctx.act(() => Game.confirmPlan(ctx.state, plan, ctx.cfg));
         if (res && res.ok) {

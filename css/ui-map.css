@@ -185,3 +185,10 @@ details.mv-legend-box:not([open]) > summary { margin-bottom: 0; }
 .mv-sw-big .mv-wm-p { font-size: 12px; }
 .mv-sw-big .mv-wm-d, .mv-sw-big .mv-wm-t { font-size: 9px; }
 .mv-sw-pair { display: flex; gap: 3px; flex: none; }
+
+/* fresh cells (never searched): a small dot in the corner; the search costs a little extra time for each */
+.mv-root .grid .cell.mv-fresh::before {
+  content: ''; position: absolute; left: 3px; top: 3px; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent); opacity: 0.6; z-index: 3; pointer-events: none;
+}
+.mv-root .grid .cell.debris.mv-fresh::before { background: #fff; opacity: 0.75; }

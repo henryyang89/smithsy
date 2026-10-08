@@ -14,7 +14,7 @@ import { game, cfgWith, customMap, blankField, cell, idx, fieldAt, fieldOf, DAY_
 const CFG = cfgWith({
   map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
   bag: { slots: 20 },
-  field: { size: 8, searchMin: 30, searchEfficiency: 25, searchRandomness: 0 },
+  field: { size: 8, searchMin: 30, freshCellMin: 0, searchEfficiency: 25, searchRandomness: 0 }, // freshCellMin 0: these tests are about the base search time
   processing: { maxTimeReduction: 75 },
   intel: { tracks: { oreSight: { base: 0 } } },
 });

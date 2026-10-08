@@ -180,10 +180,12 @@ function ownerPanel(ctx, owner) {
   const totalRows = typeKeys.map((type) => {
     const def = ringDef(type, cfg);
     const parts = worn.filter((r) => r.type === type).map((r) => contrib[r.id]).sort((a, b) => b.effective - a.effective);
+    // Foresight counts whole guesses / test fights: the total is rounded down
+    const rounded = type === 'foresight' ? h('div', { class: 'mi-note ok' }, `counts as +${Math.floor(totals[type] + 1e-9)} in the estimate (rounded down)`) : null;
     return [
       h('span', {}, def.name, h('div', { class: 'mi-note' }, parts.map((p) => num(p.effective, 2)).join(' + '))),
       { v: String(parts.length), cls: 'num' },
-      h('b', {}, effectText(totals[type], def.desc)),
+      h('div', {}, h('b', {}, effectText(totals[type], def.desc)), rounded),
     ];
   });
   const totalsBody = totalRows.length

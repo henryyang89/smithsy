@@ -20,10 +20,10 @@ const RC = cfgWith({
   },
 });
 
-test('17 ring types, 7 smith + 10 adventurer, 5 values each, increasing with grade', () => {
+test('18 ring types, 8 smith + 10 adventurer, 5 values each, increasing with grade', () => {
   const types = Object.entries(CONFIG.rings.types);
-  assert.equal(types.length, 17);
-  assert.equal(types.filter(([, d]) => d.owner === 'smith').length, 7);
+  assert.equal(types.length, 18);
+  assert.equal(types.filter(([, d]) => d.owner === 'smith').length, 8);
   assert.equal(types.filter(([, d]) => d.owner === 'adventurer').length, 10);
   for (const [k, d] of types) {
     assert.equal(d.values.length, 5, k);
@@ -163,4 +163,24 @@ test('toggleRing: max worn per owner, independently for smith and adventurer', (
     assert.equal(wornRings(s, 'smith').length, max);
     assert.equal(toggleRing(s, 424242, cfg).ok, false);
   }
+});
+
+test('Foresight: a smith ring (more guesses and test fights in the win-chance estimate), 5 whole-number values', () => {
+  const d = CONFIG.rings.types.foresight;
+  assert.equal(d.owner, 'smith');
+  assert.equal(d.values.length, 5);
+  assert.ok(d.name && d.desc);
+  assert.match(ringLabel({ type: 'foresight', grade: 'S' }), new RegExp(`^${d.name} S \\(${d.values[4]} `));
+  // worn smith rings: it shows up in the smith totals, stacking like any smith ring
+  const s = game(1);
+  addRing(s, 'foresight', 'S', true);
+  addRing(s, 'foresight', 'D', true);
+  addRing(s, 'health', 'S', true); // adventurer ring: not in the smith totals
+  assert.ok(Math.abs(smithRingTotals(s).foresight - (d.values[4] + d.values[0] * CONFIG.rings.duplicateFactor)) < 1e-9);
+  assert.equal(smithRingTotals(s).health, undefined);
+  // enemies can drop it
+  const rng = seededRng(11);
+  const seen = new Set();
+  for (let i = 0; i < 3000; i++) seen.add(rollRing(rng, 'normal').type);
+  assert.deepEqual([...seen].sort(), Object.keys(CONFIG.rings.types).sort());
 });

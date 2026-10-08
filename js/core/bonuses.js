@@ -16,6 +16,7 @@ export function smithBonuses(state, cfg = CONFIG) {
     searchEffPct: rv('searchEff') + sk('searchEff'),
     revealPct: intelChance(state, 'oreSight', cfg) + rv('reveal'),
     debrisPct: sk('debris'),
+    gearCarePct: sk('gearCare'), // % less durability loss per used item in a fight
     refineTimePct: rv('processTime') + sk('refineTime'),
     cutTimePct: rv('processTime') + sk('cutTime'),
     oreUpgrade: (bar) => rv('oreGrade') + sk(`oreGrade_${bar}`),

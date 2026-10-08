@@ -6,7 +6,7 @@
 import { h, section, bar, clear } from './dom.js';
 import {
   travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes,
-  searchEfficiency, searchEfficiencyRange, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen,
+  searchEfficiency, searchEfficiencyRange, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
   fieldProgress, areaCells, atCamp, currentField, mapCell, itemKind, itemType, key, timeLeft, sameLoc,
 } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
@@ -30,6 +30,18 @@ const pctText = (v) => `${v > 0 && v < 10 ? round1(v) : Math.floor(v + 1e-6)}%`;
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 // Remaining debris thickness, rounded up (0.3 left still reads as 1, never as 0).
 const dn = (v) => String(Math.max(0, Math.ceil(v - 1e-6)));
+
+// Minutes one never-searched ("fresh") cell adds to a search, after the search-time reductions.
+const freshCost = (state, cfg) => round1(cfg.field.freshCellMin * (1 - clamp(smithBonuses(state, cfg).searchTimePct, 0, cfg.processing.maxTimeReduction) / 100));
+
+// "34m (30 + 2 x 2 fresh cells)": the area's search time with the fresh-cell surcharge spelled out.
+function searchTimeText(state, cfg, minutes, fresh) {
+  const f = cfg.field;
+  if (!(f.freshCellMin > 0)) return dur(minutes);
+  const red = clamp(smithBonuses(state, cfg).searchTimePct, 0, cfg.processing.maxTimeReduction);
+  if (fresh === 0) return `${dur(minutes)} (${f.searchMin}${red > EPS ? `, -${round1(red)}% bonuses` : ''}; no fresh cells)`;
+  return `${dur(minutes)} (${f.searchMin} + ${f.freshCellMin} x ${plural(fresh, 'fresh cell')}${red > EPS ? `, -${round1(red)}% bonuses` : ''})`;
+}
 
 // Search depth per search: each cell rolls its own amount in [lo, hi] around the average.
 // Returns { eff, lo, hi, range: '30–40%', avg: '35%', finish: '3–4' (searches to finish a cell) }.
@@ -340,9 +352,10 @@ function campHint(ctx) {
       h('span', { class: 'muted' }, 'Walking'), h('span', {}, `${cfg.map.travelMinPerStep}m per step, +${cfg.map.loadPenaltyPerItem}% per item carried${b.travelPct ? `, -${round1(b.travelPct)}% (rings)` : ''}${b.returnPct ? `, -${round1(b.returnPct)}% more on the way home (skill)` : ''}`),
       h('span', { class: 'muted' }, 'Searching'), h('span', {}, (() => {
         const sd = searchDepth(state, cfg);
+        const fresh = f.freshCellMin > 0 ? `, plus ${dur(freshCost(state, cfg))} for each never-searched (fresh) cell in it` : '';
         return sd.random
-          ? `${dur(searchMinutes(state, cfg))} per 3x3 area; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so ${sd.finish} searches finish a cell`
-          : `${dur(searchMinutes(state, cfg))} per 3x3 area; each search digs ${sd.avg} deeper into every cell, so ${sd.finish} searches finish a cell`;
+          ? `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so ${sd.finish} searches finish a cell`
+          : `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.avg} deeper into every cell, so ${sd.finish} searches finish a cell`;
       })()),
       h('span', { class: 'muted' }, 'Debris'), h('span', {}, `about ${f.debrisChance}% of cells, ${f.debrisAmount.min}-${f.debrisAmount.max} thick (number on the cell). Searching clears it first: ${pw.range} per cell per search${pw.skillPct > EPS ? ` (Debris clearing skill +${round1(pw.skillPct)}%)` : ''}; leftover effort searches the cell.${boulders ? ` ${plural(boulders, 'boulder')} per field can never be searched.` : ''}`),
       h('span', { class: 'muted' }, 'Carrying'), h('span', {}, `Found items go to that field's pile (no limit). When you leave a field you choose up to ${cfg.bag.slots} to carry; the rest waits in the pile.`),
@@ -429,16 +442,17 @@ function fieldPanel(ctx, field, fkey, sel) {
   const boulders = field.cells.filter((c) => c.boulder).length;
   const done = field.cells.filter(isDone).length;
   const revealed = field.cells.filter((c) => c.revealed && !c.boulder).length;
+  const freshTotal = field.cells.filter(cellFresh).length;
   const pileN = pileOf(field).length;
   const d = field.dist;
   const loot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (d - 1));
   return section(`Field (${state.location.x + 1},${state.location.y + 1}) · distance ${d} from camp`,
     h('div', { class: 'row mv-prog' }, bar(prog), h('b', {}, `${pctText(prog)} searched`)),
     h('div', { class: 'muted mv-stats' },
-      `${plural(done, 'cell')} fully searched · ${debrisLeft} under debris · ${plural(boulders, 'boulder')} · ${revealed} revealed · ${plural(pileN, 'item')} in the pile`),
+      `${plural(done, 'cell')} fully searched · ${debrisLeft} under debris · ${plural(boulders, 'boulder')} · ${revealed} revealed${f.freshCellMin > 0 ? ` · ${freshTotal} fresh (never searched)` : ''} · ${plural(pileN, 'item')} in the pile`),
     grid,
     h('p', { class: 'muted mv-note' },
-      `Click a cell to centre the 3x3 search area on it (selected: ${cellLabel(sel, n)}). At distance ${d}, about ${loot}% of cells hold items (${Math.min(100, loot + f.debrisLootBonus)}% under debris). Contents stay hidden until found or revealed by ore sight. Numbers on brown striped cells are the debris left to clear. Boulders (dark rocks) can never be searched.`));
+      `Click a cell to centre the 3x3 search area on it (selected: ${cellLabel(sel, n)}). At distance ${d}, about ${loot}% of cells hold items (${Math.min(100, loot + f.debrisLootBonus)}% under debris). Contents stay hidden until found or revealed by ore sight. Numbers on brown striped cells are the debris left to clear. Boulders (dark rocks) can never be searched.${f.freshCellMin > 0 ? ` A small dot marks a fresh cell, one nothing has worked on yet: each fresh cell in the 3x3 area adds ${f.freshCellMin}m to that search, so thoroughly finishing an area is cheaper than skipping around.` : ''}`));
 }
 
 function fieldCell(ctx, fkey, cell, i, selected, inArea) {
@@ -467,6 +481,8 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
   if (done) cls.push('mv-done');
   if (partial) cls.push('mv-partial');
   if (cell.revealed && !done) cls.push('mv-revealed');
+  const fresh = cellFresh(cell);
+  if (fresh && ctx.cfg.field.freshCellMin > 0) cls.push('mv-fresh');
   if (selected) cls.push('sel');
   if (inArea) cls.push('area');
 
@@ -482,6 +498,7 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
     debris ? `Debris: ${dn(cell.debris)} left. Searching clears debris first; leftover effort searches the cell.` : null,
     cell.revealed && !done ? `Revealed: ${cell.items.length ? cell.items.map((it) => itemName(it.t)).join(', ') : 'nothing left'}` : null,
     done ? 'Fully searched: nothing hidden left.' : null,
+    fresh && ctx.cfg.field.freshCellMin > 0 ? `Fresh: never searched. A search that includes it takes ${ctx.cfg.field.freshCellMin}m longer, once.` : null,
   ].filter(Boolean).join('\n');
 
   return h('div', { class: cls.join(' '), title, 'data-idx': i, onclick: select },
@@ -499,7 +516,8 @@ function actionsPanel(ctx, field, sel) {
   const clearCells = open.length - debrisCells.length;
   const boulders = cells.filter((c) => c.boulder).length;
   const done = cells.filter(isDone).length;
-  const sMin = searchMinutes(state, cfg);
+  const freshN = freshCellCount(field, sel % n, Math.floor(sel / n), cfg);
+  const sMin = searchMinutes(state, cfg, sel % n, Math.floor(sel / n));
   const sd = searchDepth(state, cfg);
   const pw = clearPower(state, cfg);
   const bagN = state.bag.length;
@@ -525,13 +543,14 @@ function actionsPanel(ctx, field, sel) {
   const forecast = [sure ? `${sure} will be clear` : null, maybe ? `${maybe} may be clear` : null, more ? `${more} need${more === 1 ? 's' : ''} more searches` : null].filter(Boolean).join(', ');
   const skipped = [boulders ? plural(boulders, 'boulder') : null, done ? `${done} already done` : null].filter(Boolean).join(', ');
   const sInfo = h('div', {},
-    h('div', {}, `${dur(sMin)} · done at ${clock(state.time + sMin)} · ${open.length} of ${cells.length} cells to work on`),
+    h('div', {}, `${searchTimeText(state, cfg, sMin, freshN)} · done at ${clock(state.time + sMin)} · ${open.length} of ${cells.length} cells to work on`),
+    freshN && cfg.field.freshCellMin > 0 ? h('div', { class: 'muted' }, `${plural(freshN, 'fresh cell')} (small dot on the grid) ${freshN === 1 ? 'has' : 'have'} never been searched: each adds ${dur(freshCost(state, cfg))} the first time. Finish the area before moving on and it stays cheap.`) : null,
     clearCells ? h('div', {}, `${plural(clearCells, 'clear cell')}: +${sd.range} searched each${sd.random ? ` (${sd.avg} avg)` : ''}`) : null,
     debrisCells.length ? h('div', {}, `${debrisCells.length} under debris (${debrisCells.map((c) => dn(c.debris)).join(', ')} left): clears ${pw.range} debris each first, leftover effort searches the cell. ${forecast}.`) : null,
     skipped ? h('div', { class: 'muted' }, `Skipped: ${skipped}.`) : null);
   const sWhy = !open.length ? 'Nothing left to search in this area.' : !sFits ? lateMsg(sMin) : null;
   const bonusBits = [];
-  if (sMin < cfg.field.searchMin - EPS) bonusBits.push(`time ${cfg.field.searchMin}m -${round1(b.searchTimePct)}%`);
+  if (b.searchTimePct > EPS) bonusBits.push(`time -${round1(Math.min(b.searchTimePct, cfg.processing.maxTimeReduction))}% (also on the fresh-cell time)`);
   if (sd.eff > cfg.field.searchEfficiency + EPS) bonusBits.push(`depth ${cfg.field.searchEfficiency}% avg +${round1(b.searchEffPct)}% = ${sd.avg} avg`);
   const sExtra = `Debris clearing power: effort ${sd.range.replace('%', '')} × ${round1(pw.mult * 100) / 100} (Debris clearing skill +${round1(pw.skillPct)}%) = ${pw.range} debris per cell per search. Ore sight: ${round1(b.revealPct)}% chance per searched cell to reveal everything still in it.${bonusBits.length ? ` Bonuses: ${bonusBits.join(', ')}.` : ''}`;
 
@@ -601,6 +620,8 @@ function cellPanel(ctx, field, sel) {
         ? h('span', {}, h('b', {}, `${dn(cell.debris)} left`), ` · each search clears ${pw.range} (about ${Number.isFinite(searchesToClear) ? plural(searchesToClear, 'search') : 'never'}), leftover effort searches the cell`)
         : h('span', {}, 'none'),
       h('span', { class: 'muted' }, 'Contents'), contents,
+      cfg.field.freshCellMin > 0 ? h('span', { class: 'muted' }, 'Fresh') : null,
+      cfg.field.freshCellMin > 0 ? (cellFresh(cell) ? h('span', {}, `Yes, never searched: a search that includes it takes ${cfg.field.freshCellMin}m longer (once)`) : h('span', {}, 'No, already worked on: no extra time')) : null,
       h('span', { class: 'muted' }, '3x3 area'), h('span', {}, areaText)));
 }
 
@@ -813,6 +834,7 @@ function legend(ctx) {
   h('div', { class: 'mv-leg-title muted' }, 'Field cells'),
   h('div', { class: 'mv-legend mv-field' },
     item(swatch('', ''), 'Not searched yet'),
+    cfg.field.freshCellMin > 0 ? item(swatch('mv-fresh', ''), `Small dot = fresh: no search has worked on this cell yet. A search that includes it takes ${cfg.field.freshCellMin}m longer (once per cell), so finish an area before moving on.`) : null,
     item(swatch('mv-partial', h('span', { class: 'mv-pct' }, `${Math.round(cfg.field.searchEfficiency)}%`), { fill: cfg.field.searchEfficiency }), 'Partly searched: the fill rises with % searched'),
     item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), (cfg.field.regrowPctPerDay || 0) > 0 ? 'Fully searched: nothing hidden left (until it regrows overnight)' : 'Fully searched: nothing hidden left'),
     item(swatch('debris', h('span', { class: 'mv-debris-n' }, String(Math.round((da.min + da.max) / 2)))), `Debris (brown stripes): the number is the debris left (${da.min}-${da.max} at first). Searching clears it first, then searches with the leftover effort. A bit richer.`),
