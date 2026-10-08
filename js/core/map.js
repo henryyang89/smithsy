@@ -175,13 +175,20 @@ export function timeLeft(state, cfg = CONFIG) {
   return cfg.time.dayEndMin - state.time;
 }
 
+// The extra travel time (%) each carried item adds: the base penalty less the Carrying skill's share.
+export function loadPenaltyPct(state, cfg = CONFIG) {
+  return cfg.map.loadPenaltyPerItem * (1 - smithBonuses(state, cfg).loadPenaltyRed / 100);
+}
+
+// Minutes to walk from `from` to `to` carrying `items` items: steps x minutes per step x (1 + load penalty x items),
+// less the travel reductions (Travel ring and skill).
 export function travelMinutes(state, from, to, items, cfg = CONFIG) {
   const steps = pathSteps(state.map, from, to);
   if (!Number.isFinite(steps)) return Infinity;
   const b = smithBonuses(state, cfg);
-  const toCamp = sameLoc(to, state.map.camp);
-  const base = steps * cfg.map.travelMinPerStep * (1 + (cfg.map.loadPenaltyPerItem * items) / 100);
-  return round1(reduced(base, b.travelPct + (toCamp ? b.returnPct : 0), cfg.processing.maxTimeReduction));
+  const penalty = cfg.map.loadPenaltyPerItem * (1 - b.loadPenaltyRed / 100);
+  const base = steps * cfg.map.travelMinPerStep * (1 + (penalty * items) / 100);
+  return round1(reduced(base, b.travelPct, cfg.processing.maxTimeReduction));
 }
 
 export function returnMinutes(state, from = state.location, items = state.bag.length, cfg = CONFIG) {
@@ -305,10 +312,13 @@ export function travel(state, to, cfg = CONFIG, carry = null) {
     if (!res.ok) return res;
   }
   const notes = [];
+  const steps = pathSteps(state.map, state.location, to);
   state.time += minutes;
   state.location = { x: to.x, y: to.y };
+  // every trip: Travel XP per map step, Carrying XP per carried item per step (nothing when empty-handed)
+  addXp(state, 'travel', steps * cfg.skills.activity.travel.xp, notes, cfg);
+  addXp(state, 'carrying', items * steps * cfg.skills.activity.carrying.xp, notes, cfg);
   if (toCamp) {
-    addXp(state, 'returnTravel', minutes, notes, cfg);
     const unloaded = unloadBag(state);
     return { ok: true, msg: `Returned to camp (${round1(minutes)}m).${unloaded ? ` Unloaded ${unloaded} items.` : ''}`, notes, minutes };
   }

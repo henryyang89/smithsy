@@ -25,8 +25,8 @@ const PIN = {
   rings: { types: { processTime: { values: [5, 6, 7, 8, 10] }, oreGrade: { values: [2, 3, 4, 5, 6] }, gemGrade: { values: [2, 3, 4, 5, 6] } } },
   skills: {
     xpBase: 100, maxLevel: 10, xpPerItem: XP,
-    activity: { refineTime: { perLevel: 0.5 }, cutTime: { perLevel: 0.5 } },
-    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 10 }, gemFail: { perLevel: 0.5 } },
+    activity: { refineTime: { effects: { refineTime: 0.5, refineFail: 0.1 } }, cutTime: { effects: { cutTime: 0.5, cutBlend: 1 } } },
+    perMaterial: { oreGrade: { effects: { refineUpgrade: 0.3 } }, oreFail: { effects: { refineFail: 0.3 } }, gemGrade: { effects: { cutBlend: 10 } }, gemFail: { effects: { cutFail: 0.5 } } },
   },
 };
 const CFG = cfgWith(PIN);
@@ -141,8 +141,54 @@ test('refine distributions with the default CONFIG follow the same rule', () => 
   addRing(s, 'oreGrade', 'A', true);
   setSkillLevel(s, 'oreGrade_steel', 7);
   setSkillLevel(s, 'oreFail_steel', 4);
-  const exp = adjustDistribution(CONFIG.refine.steel.dist, P.oreFail.perLevel * 4, ringVal('oreGrade', 'A') + P.oreGrade.perLevel * 7);
+  const exp = adjustDistribution(CONFIG.refine.steel.dist, P.oreFail.effects.refineFail * 4, ringVal('oreGrade', 'A') + P.oreGrade.effects.refineUpgrade * 7);
   assert.ok(closeDist(refineDistribution(s, 'steel'), exp));
+});
+
+test('General refining removes failure chance for every bar type, on top of the bar\'s own refining skill', () => {
+  const s = game(1);
+  const per = CFG.skills.activity.refineTime.effects.refineFail; // pinned 0.1 per level
+  setSkillLevel(s, 'refineTime', 7);
+  const b = smithBonuses(s, CFG);
+  for (const bar of BARS) {
+    assert.ok(approx(b.oreFailRed(bar), per * 7), bar);
+    assert.ok(closeDist(refineDistribution(s, bar, CFG), adjustDistribution(CFG.refine[bar].dist, per * 7, 0)), bar);
+  }
+  // with the bar's own skill: both add (iron only)
+  setSkillLevel(s, 'oreFail_iron', 4);
+  const own = CFG.skills.perMaterial.oreFail.effects.refineFail;
+  assert.ok(approx(smithBonuses(s, CFG).oreFailRed('iron'), per * 7 + own * 4));
+  assert.ok(approx(smithBonuses(s, CFG).oreFailRed('copper'), per * 7));
+  assert.ok(approx(refineDistribution(s, 'iron', CFG).F, Math.max(0, CFG.refine.iron.dist.F - (per * 7 + own * 4))));
+  // it never lowers failure below 0
+  setSkillLevel(s, 'refineTime', 10);
+  const huge = cfgWith(CFG, { skills: { activity: { refineTime: { effects: { refineFail: 50 } } } } });
+  assert.equal(refineDistribution(s, 'copper', huge).F, 0);
+  assert.ok(approx(sum(refineDistribution(s, 'copper', huge)), 100));
+});
+
+test('General cutting adds to the blend toward the master table for every gem (capped at 100%)', () => {
+  const s = game(1);
+  const per = CFG.skills.activity.cutTime.effects.cutBlend; // pinned 1% per level
+  setSkillLevel(s, 'cutTime', 6);
+  for (const gem of GEMS) {
+    assert.equal(smithBonuses(s, CFG).gemBlend(gem), per * 6, gem);
+    assert.ok(closeDist(cutDistribution(s, gem, CFG), blendCutTable(CFG.cut[gem], (per * 6) / 100, 0)), gem);
+  }
+  // with a gem's own grade skill: both add (ruby only)
+  setSkillLevel(s, 'gemGrade_ruby', 4);
+  const own = CFG.skills.perMaterial.gemGrade.effects.cutBlend;
+  assert.equal(smithBonuses(s, CFG).gemBlend('ruby'), per * 6 + own * 4);
+  assert.equal(smithBonuses(s, CFG).gemBlend('topaz'), per * 6);
+  assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), blendCutTable(CFG.cut.ruby, (per * 6 + own * 4) / 100, 0)));
+  // capped: more than 100% of the way is the master table, not beyond
+  setSkillLevel(s, 'gemGrade_ruby', 10);
+  setSkillLevel(s, 'cutTime', 10);
+  const big = cfgWith(CFG, { skills: { activity: { cutTime: { effects: { cutBlend: 30 } } } } });
+  assert.equal(smithBonuses(s, big).gemBlend('ruby'), 100);
+  assert.ok(closeDist(cutDistribution(s, 'ruby', big), blendCutTable(CFG.cut.ruby, 1, 0)));
+  // General cutting does not touch failure
+  assert.ok(approx(cutDistribution(s, 'topaz', CFG).F, CFG.cut.topaz.novice.F), 'General cutting at its top level still leaves failure alone');
 });
 
 // -------------------------------------------------------------- gem tables ----
@@ -202,10 +248,10 @@ test('cutDistribution: gem grade skill blends novice -> master, cutting skill lo
   setSkillLevel(s, 'gemGrade_ruby', 4); // 40% of the way to master
   setSkillLevel(s, 'gemFail_ruby', 6); // 3 points less failure
   const b = smithBonuses(s, CFG);
-  assert.equal(b.gemBlend('ruby'), P.gemGrade.perLevel * 4);
-  assert.equal(b.gemFailRed('ruby'), P.gemFail.perLevel * 6);
+  assert.equal(b.gemBlend('ruby'), P.gemGrade.effects.cutBlend * 4);
+  assert.equal(b.gemFailRed('ruby'), P.gemFail.effects.cutFail * 6);
   assert.equal(b.gemUpgrade('ruby'), 0, 'the grade skill is not an upgrade chance');
-  const base = blendCutTable(c, (P.gemGrade.perLevel * 4) / 100, P.gemFail.perLevel * 6);
+  const base = blendCutTable(c, (P.gemGrade.effects.cutBlend * 4) / 100, P.gemFail.effects.cutFail * 6);
   assert.ok(closeDist(cutDistribution(s, 'ruby', CFG), base));
   assert.ok(approx(cutDistribution(s, 'ruby', CFG).F, c.novice.F - 3));
   // a gem luck ring upgrades on top of the blended table
@@ -227,7 +273,7 @@ test('cutDistribution with the default CONFIG follows the same rule', () => {
   addRing(s, 'gemGrade', 'C', true);
   setSkillLevel(s, 'gemGrade_emerald', 3);
   setSkillLevel(s, 'gemFail_emerald', 9);
-  const base = blendCutTable(CONFIG.cut.emerald, (P.gemGrade.perLevel * 3) / 100, P.gemFail.perLevel * 9);
+  const base = blendCutTable(CONFIG.cut.emerald, (P.gemGrade.effects.cutBlend * 3) / 100, P.gemFail.effects.cutFail * 9);
   assert.ok(closeDist(cutDistribution(s, 'emerald'), adjustDistribution(base, 0, ringVal('gemGrade', 'C'))));
   assert.ok(approx(sum(cutDistribution(s, 'emerald')), 100));
 });
@@ -265,7 +311,7 @@ test('refine / cut minutes default to the config; better ores take (at least) as
   // default config: rings + skills reduce the time
   addRing(s, 'processTime', 'B', true);
   setSkillLevel(s, 'refineTime', 6);
-  const pct = ringVal('processTime', 'B') + CONFIG.skills.activity.refineTime.perLevel * 6;
+  const pct = ringVal('processTime', 'B') + CONFIG.skills.activity.refineTime.effects.refineTime * 6;
   assert.equal(refineMinutes(s, 'iron'), round1(CONFIG.refine.iron.minutes * (1 - pct / 100)));
 });
 
@@ -281,7 +327,7 @@ test('refine / cut minutes: rings and skills reduce time (rounded to 0.1)', () =
 });
 
 test('processing time reduction is capped at maxTimeReduction', () => {
-  const cfg = cfgWith(PIN, { skills: { activity: { refineTime: { perLevel: 50 } } } });
+  const cfg = cfgWith(PIN, { skills: { activity: { refineTime: { effects: { refineTime: 50 } } } } });
   const s = game(1);
   setSkillLevel(s, 'refineTime', 10);
   assert.equal(refineMinutes(s, 'mythril', cfg), 5);
@@ -393,7 +439,7 @@ test('refine requires camp, the work phase, a known bar and enough time', () => 
 
 test('refine outcomes match the table over many refines (game RNG)', () => {
   // per-material skill bonuses switched off so the table stays fixed while XP piles up
-  const cfg = cfgWith({ skills: { perMaterial: { oreGrade: { perLevel: 0 }, oreFail: { perLevel: 0 } } } });
+  const cfg = cfgWith({ skills: { activity: { refineTime: { effects: { refineFail: 0 } } }, perMaterial: { oreGrade: { effects: { refineUpgrade: 0 } }, oreFail: { effects: { refineFail: 0 } } } } });
   const N = 3000;
   const s = game(9);
   s.storage.ore.copper = N;
@@ -442,8 +488,8 @@ test('cut consumes a raw gem and adds a cut gem; failure loses the gem', () => {
 });
 
 test('cut outcomes match the blended table over many cuts (game RNG)', () => {
-  // gem skills switched off so the table stays fixed while XP piles up; a gem luck ring on top
-  const cfg = cfgWith({ skills: { perMaterial: { gemGrade: { perLevel: 0 }, gemFail: { perLevel: 0 } } } });
+  // gem skills (and General cutting's blend) switched off so the table stays fixed while XP piles up; a gem luck ring on top
+  const cfg = cfgWith({ skills: { activity: { cutTime: { effects: { cutBlend: 0 } } }, perMaterial: { gemGrade: { effects: { cutBlend: 0 } }, gemFail: { effects: { cutFail: 0 } } } } });
   const N = 3000;
   const s = game(10);
   addRing(s, 'gemGrade', 'A', true);

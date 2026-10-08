@@ -5,7 +5,7 @@
 // map_leave (open carry step: { from, to, bag: [bag idx], pile: [pile idx] }), map_legend (legend open).
 import { h, section, bar, clear } from './dom.js';
 import {
-  travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes,
+  travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes, loadPenaltyPct,
   searchEfficiency, searchEfficiencyRange, expectedSearches, searchesText, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
   fieldProgress, areaCells, atCamp, currentField, mapCell, itemKind, itemType, key, timeLeft, sameLoc,
   distanceRow, sightValue, sightRange, sightShare, seenItems,
@@ -307,7 +307,7 @@ function renderFieldView(wrap, ctx) {
     h('div', {}, actionsPanel(ctx, field, sel), pilePanel(ctx, field, fkey), bagPanel(ctx), cellPanel(ctx, field, sel))));
   wrap.append(h('div', { class: 'mv-two' },
     section('World map', worldMap(ctx, true),
-      h('p', { class: 'muted mv-note' }, `Click a field to travel there directly, or the camp to go home. You choose what to carry before you leave; times assume ${plural(load, 'item')} (+${load * cfg.map.loadPenaltyPerItem}% load), the most you can carry from here.`)),
+      h('p', { class: 'muted mv-note' }, `Click a field to travel there directly, or the camp to go home. You choose what to carry before you leave; times assume ${plural(load, 'item')} (+${round1(load * loadPenaltyPct(state, cfg))}% load), the most you can carry from here.`)),
     legend(ctx)));
   const leave = validLeave(ctx, field, fkey);
   if (leave) wrap.append(carryDialog(ctx, field, leave));
@@ -407,7 +407,7 @@ function campHint(ctx) {
     h('p', {}, 'Pick a field to search. ', h('b', {}, 'Farther fields are richer'), ' (more cells hold items, rarer ores) but the walk takes longer and eats into your day.'),
     h('div', { class: 'mv-kv' },
       h('span', { class: 'muted' }, 'Now'), h('span', {}, `${clock(state.time)} - ${left > 0 ? `${dur(left)} left` : 'day over'} (day ends ${clock(cfg.time.dayEndMin)})`),
-      h('span', { class: 'muted' }, 'Walking'), h('span', {}, `${cfg.map.travelMinPerStep}m per step, +${cfg.map.loadPenaltyPerItem}% per item carried${b.travelPct ? `, -${round1(b.travelPct)}% (rings)` : ''}${b.returnPct ? `, -${round1(b.returnPct)}% more on the way home (skill)` : ''}`),
+      h('span', { class: 'muted' }, 'Walking'), h('span', {}, `${cfg.map.travelMinPerStep}m per step, +${round1(loadPenaltyPct(state, cfg))}% per item carried${b.loadPenaltyRed > EPS ? ` (${cfg.map.loadPenaltyPerItem}% before the Carrying skill)` : ''}${b.travelPct ? `, -${round1(b.travelPct)}% (Travel rings and skill)` : ''}`),
       h('span', { class: 'muted' }, 'Searching'), h('span', {}, (() => {
         const sd = searchDepth(state, cfg);
         const fresh = f.freshCellMin > 0 ? `, plus ${dur(freshCost(state, cfg))} for each never-searched (fresh) cell in it` : '';
@@ -736,7 +736,7 @@ function pilePanel(ctx, field, fkey) {
 function bagPanel(ctx) {
   const { state, cfg } = ctx;
   const items = state.bag.length;
-  const pen = cfg.map.loadPenaltyPerItem;
+  const pen = loadPenaltyPct(state, cfg);
   const inField = !atCamp(state);
   const slots = h('div', { class: 'slots mv-bag' });
   for (let i = 0; i < cfg.bag.slots; i++) {
@@ -758,7 +758,7 @@ function bagPanel(ctx) {
     slots,
     items ? h('div', { class: 'chips mv-counts' }, countChips(state.bag)) : null,
     h('p', { class: 'mv-note' },
-      `Load: ${plural(items, 'item')} × ${pen}% = `, h('b', {}, `+${items * pen}% travel time`),
+      `Load: ${plural(items, 'item')} × ${round1(pen)}% = `, h('b', {}, `+${round1(items * pen)}% travel time`),
       inField ? `. Walk home ${dur(ret)} with this bag, ${dur(retEmpty)} empty.` : '.'),
     h('p', { class: 'muted mv-note' }, inField
       ? 'Click an item to put it back in this field\'s pile (free). You choose your final load when you leave.'
@@ -785,7 +785,7 @@ function carryDialog(ctx, field, leave) {
   const { state, cfg } = ctx;
   const slots = cfg.bag.slots;
   const pile = pileOf(field);
-  const pen = cfg.map.loadPenaltyPerItem;
+  const pen = loadPenaltyPct(state, cfg);
   const toCamp = sameLoc(leave.to, state.map.camp);
   const dest = toCamp ? 'camp' : `field (${leave.to.x + 1},${leave.to.y + 1})`;
   const sel = { bag: new Set(leave.bag), pile: new Set(leave.pile) };
@@ -821,7 +821,7 @@ function carryDialog(ctx, field, leave) {
     const leftBehind = total - nSel;
     clear(summary).append(...[
       h('div', {}, h('b', { class: full ? 'warn' : '' }, `Carrying ${nSel} / ${slots}`), ` · ${plural(leftBehind, 'item')} stay${leftBehind === 1 ? 's' : ''} in this field's pile`),
-      h('div', {}, `Travel to ${dest}: `, h('b', {}, dur(there)), ` (+${nSel * pen}% load) · arrive ${clock(state.time + there)}`,
+      h('div', {}, `Travel to ${dest}: `, h('b', {}, dur(there)), ` (+${round1(nSel * pen)}% load) · arrive ${clock(state.time + there)}`,
         toCamp ? (nSel ? ` · unloads ${plural(nSel, 'item')} into storage` : '') : ` · then back to camp ${dur(back)}`),
       !fits ? h('div', { class: 'err' }, fitsEmpty
         ? `Not enough time: with this load you could not get back to camp by ${clock(cfg.time.dayEndMin)}. Carry less, or go home instead.`
@@ -866,7 +866,7 @@ function carryDialog(ctx, field, leave) {
   const quick = (label, fn, title) => h('button', { class: 'small', title, onclick: () => setSelection(fn()) }, label);
   const dialog = h('div', { class: 'panel mv-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Choose what to carry' },
     h('h3', {}, 'Choose what to carry'),
-    h('p', { class: 'mv-note' }, `Leaving field (${state.location.x + 1},${state.location.y + 1}) for ${dest}. Carry up to ${slots} raw ores or gems (+${pen}% travel time each). Whatever you leave stays in this field's pile for a later trip.`),
+    h('p', { class: 'mv-note' }, `Leaving field (${state.location.x + 1},${state.location.y + 1}) for ${dest}. Carry up to ${slots} raw ores or gems (+${round1(pen)}% travel time each). Whatever you leave stays in this field's pile for a later trip.`),
     h('div', { class: 'row mv-carry-quick' },
       quick('Rarest first', () => defaultCarry(state, cfg), 'Keep your bag and fill the free slots with the rarest items in the pile (default)'),
       quick('Keep current bag', () => ({ bag: state.bag.map((_, i) => i).slice(0, slots), pile: [] }), 'Carry only what is in your bag now'),

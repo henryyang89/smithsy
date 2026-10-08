@@ -1,5 +1,7 @@
 import { CONFIG, GRADES, SLOTS } from '../config.js';
-import { round1, round2, EPS, cap } from './util.js';
+import { round1, round2, EPS, cap, qtyText } from './util.js';
+import { smithBonuses } from './bonuses.js';
+import { addXp, itemXp } from './skills.js';
 
 // Final stats for one gear item, including its gem infusion.
 export function gearStats(item, cfg = CONFIG) {
@@ -81,8 +83,15 @@ export function barKey(material, grade) {
   return `${material}:${grade}`;
 }
 
+// Base smithing time of a new item (before skills).
 export function craftMinutes(slot, hasGem, cfg = CONFIG) {
   return cfg.gear.slots[slot].bars * cfg.gear.smithMinPerBar + (hasGem ? cfg.gear.infuseMin : 0);
+}
+
+// Smithing time after the bar type's Smithing skill (the cut is capped by processing.maxTimeReduction).
+export function smithMinutes(state, slot, material, hasGem, cfg = CONFIG) {
+  const pct = Math.min(cfg.processing.maxTimeReduction, smithBonuses(state, cfg).smithTimePct(material));
+  return round1(craftMinutes(slot, hasGem, cfg) * (1 - pct / 100));
 }
 
 // Material cost to craft (whole bars, 1 gem).
@@ -118,7 +127,7 @@ export function canCraft(state, spec, cfg = CONFIG) {
 export function craft(state, spec, cfg = CONFIG) {
   const err = campWork(state) || canCraft(state, spec, cfg);
   if (err) return { ok: false, msg: err };
-  const minutes = craftMinutes(spec.slot, !!spec.gem, cfg);
+  const minutes = smithMinutes(state, spec.slot, spec.material, !!spec.gem, cfg);
   if (state.time + minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
   const { bars, gems } = craftCost(spec, cfg);
   for (const [k, n] of Object.entries(bars)) take(state.storage.bars, k, n);
@@ -134,7 +143,9 @@ export function craft(state, spec, cfg = CONFIG) {
   };
   state.gear.push(item);
   state.time += minutes;
-  return { ok: true, item, minutes, msg: `Crafted ${gearName(item)} (${minutes}m).` };
+  const notes = [];
+  addXp(state, `smith_${spec.material}`, cfg.gear.slots[spec.slot].bars * itemXp(spec.material, cfg), notes, cfg);
+  return { ok: true, item, minutes, notes, msg: `Crafted ${gearName(item)} (${minutes}m).` };
 }
 
 // Durability one used item loses in one fight: the roll x the enemy tier's multiplier x (1 - Gear care %),
@@ -153,20 +164,22 @@ export function wornDurability(durability, loss) {
 // Round up to 0.01 (tiny tolerance for float noise). Math.max avoids returning -0 for a 0 amount.
 const ceil2 = (v) => Math.max(0, Math.ceil(v * 100 - 1e-7) / 100);
 
-// Cost and time to repair an item back to 100%.
+// Cost and base time to repair an item back to 100% (no skills): the missing % of 35% of the bars (and of the gem),
+// and the same share of the smithing time. repairMinutes() applies the repair skills.
 export function repairInfo(item, cfg = CONFIG) {
+  const r = cfg.gear.repair;
   const missing = 100 - item.durability;
   const frac = missing / 100;
-  const matFrac = cfg.gear.repair.materialFraction / 100;
-  const bars = { [barKey(item.material, item.grade)]: ceil2(cfg.gear.slots[item.slot].bars * matFrac * frac) };
-  const gems = item.gem ? { [`${item.gem.type}:${item.gem.grade}`]: ceil2(matFrac * frac) } : {};
-  const minutes = round1(craftMinutes(item.slot, !!item.gem, cfg) * (cfg.gear.repair.timeFraction / 100) * frac);
-  return { missing, bars, gems, minutes };
+  const bars = { [barKey(item.material, item.grade)]: ceil2(cfg.gear.slots[item.slot].bars * (r.materialFraction / 100) * frac) };
+  const gems = item.gem ? { [`${item.gem.type}:${item.gem.grade}`]: ceil2((r.gemFraction / 100) * frac) } : {};
+  const baseMinutes = round1(craftMinutes(item.slot, !!item.gem, cfg) * (r.timeFraction / 100) * frac);
+  return { missing, bars, gems, baseMinutes };
 }
 
-// Is it night (after the fight report, while planning)? Repairs then cost no time and need no camp visit.
-export function isNight(state) {
-  return state.phase === 'report' || state.phase === 'plan';
+// Repair time after the repair skills (3 x Repair + 1 x General repair + 0.5 x Smithing per level), capped.
+export function repairMinutes(state, item, cfg = CONFIG) {
+  const pct = Math.min(cfg.processing.maxTimeReduction, smithBonuses(state, cfg).repairTimePct(item.material));
+  return round1(repairInfo(item, cfg).baseMinutes * (1 - pct / 100));
 }
 
 // Which stock a repair will actually use: the exact grade if there is enough, otherwise the lowest
@@ -182,7 +195,7 @@ export function repairPlan(state, item, cfg = CONFIG) {
     }
     return null;
   };
-  const out = { ok: true, reason: null, bars: {}, gems: {}, substitutes: [], minutes: isNight(state) ? 0 : info.minutes, missing: info.missing };
+  const out = { ok: true, reason: null, bars: {}, gems: {}, substitutes: [], minutes: repairMinutes(state, item, cfg), missing: info.missing };
   const barQty = Object.values(info.bars)[0] || 0;
   if (barQty > 0) {
     const g = pick(state.storage.bars, item.material, item.grade, barQty);
@@ -215,40 +228,58 @@ export function substituteWarning(plan) {
   return `Uses higher grade: ${plan.substitutes.map((x) => `${x.qty} ${x.use} ${x.kind} instead of ${x.need}`).join('; ')} (no extra benefit).`;
 }
 
-// Repair to 100%. By day: at camp, costs time. At night (report/plan): free of time, anywhere.
+// Repair to 100%: by day only, at camp, on gear the adventurer does not have today. Costs bars (and gem) and time;
+// the time is cut by the repair skills. XP: 1 per durability point repaired per bar in the item, to the bar type's
+// Repair skill and to General repair.
 export function repair(state, id, cfg = CONFIG) {
-  const night = isNight(state);
-  if (!night) {
-    const err = campWork(state);
-    if (err) return { ok: false, msg: err };
-  }
+  const err = campWork(state);
+  if (err) return { ok: false, msg: err };
   const item = state.gear.find((g) => g.id === id);
   if (!item) return { ok: false, msg: 'No such gear.' };
   if (item.packed) return { ok: false, msg: 'The adventurer has this item today.' };
   if (item.durability >= 100) return { ok: false, msg: 'Already at 100%.' };
   const plan = repairPlan(state, item, cfg);
   if (!plan.ok) return { ok: false, msg: plan.reason };
-  if (!night && state.time + plan.minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
+  if (state.time + plan.minutes > cfg.time.dayEndMin + EPS) return { ok: false, msg: 'Not enough time left today.' };
   for (const [k, n] of Object.entries(plan.bars)) take(state.storage.bars, k, n);
   for (const [k, n] of Object.entries(plan.gems)) take(state.storage.cut, k, n);
   item.durability = 100;
   state.time += plan.minutes;
+  const notes = [];
+  const points = plan.missing * cfg.gear.slots[item.slot].bars;
+  addXp(state, `repair_${item.material}`, points * cfg.skills.perMaterial.repair.xp, notes, cfg);
+  addXp(state, 'repairTime', points * cfg.skills.activity.repairTime.xp, notes, cfg);
   const warn = substituteWarning(plan);
   return {
     ok: true,
     minutes: plan.minutes,
     substitutes: plan.substitutes,
-    msg: `Repaired ${gearName(item)} to 100% (${night ? 'at night, no time' : `${plan.minutes}m`}).${warn ? ` ${warn}` : ''}`,
+    notes,
+    msg: `Repaired ${gearName(item)} to 100% (${plan.minutes}m).${warn ? ` ${warn}` : ''}`,
   };
 }
 
-// Destroy (scrap) an item at home. No refund.
-export function scrap(state, id) {
+// Round down to 0.01 (tiny tolerance for float noise).
+const floor2 = (v) => Math.floor(v * 100 + 1e-7) / 100;
+
+// What scrapping an item gives back: the item's bars (material and grade) x 35% x its durability, rounded down to
+// 0.01. The gem is lost. Always at most what a repair of the same item costs, so repairing first never pays.
+export function scrapReturn(item, cfg = CONFIG) {
+  const bars = cfg.gear.slots[item.slot].bars;
+  return { key: barKey(item.material, item.grade), qty: floor2(bars * (cfg.gear.repair.materialFraction / 100) * (item.durability / 100)) };
+}
+
+// Scrap an item at home: it is destroyed and returns bars (scrapReturn). No time. The gem is lost.
+export function scrap(state, id, cfg = CONFIG) {
   const err = campWork(state);
   if (err) return { ok: false, msg: err };
   const i = state.gear.findIndex((g) => g.id === id);
   if (i < 0) return { ok: false, msg: 'No such gear.' };
   if (state.gear[i].packed) return { ok: false, msg: 'The adventurer has this item today.' };
   const [item] = state.gear.splice(i, 1);
-  return { ok: true, msg: `Scrapped ${gearName(item)}.` };
+  const back = scrapReturn(item, cfg);
+  if (back.qty > 0) state.storage.bars[back.key] = round2((state.storage.bars[back.key] || 0) + back.qty);
+  const [m, g] = back.key.split(':');
+  const got = back.qty > 0 ? `got back ${qtyText(back.qty)} ${cap(m)} ${g} ${back.qty === 1 ? 'bar' : 'bars'}` : 'nothing came back';
+  return { ok: true, back, msg: `Scrapped ${gearName({ ...item, gem: null })}: ${got}.${item.gem ? ` The ${cap(item.gem.type)} ${item.gem.grade} gem is lost.` : ''}` };
 }

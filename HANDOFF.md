@@ -494,6 +494,87 @@ what was done instead and which batch it touches.
   it before B4). Hand-checked in headless Chromium too: boot, the old-save start-up note (old key untouched), the
   7x7 map, the 9 plots, seen-item tags with sight, no console errors, no horizontal scroll at 390 px.
 
+**Batch 2 (skills, travel and carrying, smithing time, repairs by day, scrap, Skills tab, tips)**
+- **Skill hover, level 0.** The plan's template has a "Now:" line that reads "No effect yet." at level 0; the hover shows
+  just "No effect yet." in its place (no "Now:" prefix), then the "Next level:" line. A skill at its highest level shows
+  "XP: <xp> per <unit>. Highest level reached." on one line. The hover never prints a level-10 value (only the current and
+  the next level; at level 9 the next level is of course the top one).
+- **Skill defs.** `skillDefs` groups are `field`, `workshop`, `bars`, `gems` (the Skills tab sections) and each def also
+  carries `label` (the per-material config key, e.g. `smith`). Extra exports used by the UI and the tests:
+  `skillDef`, `skillEffectTotals` (one pass over the config; `smithBonuses` uses it so a dozen effects stay cheap),
+  `skillNowText`, `effectText`. `skillEffects(state, key, cfg, level?)` takes an optional level.
+- **Skills tab columns** are Skill, Level, Progress, Now as in the plan; Level is the plain number (no "/ 10", the max
+  level is not shown anywhere), a maxed skill shows "Highest level" in the Progress column, and a skill without an
+  effect yet says "no effect yet" under Now. The whole row (not only the name) carries the tip, so a tap anywhere on a
+  row opens the popover. The "Skill levels" KPI is the total of all levels with "35 skills" under it.
+- **Scrap messages.** `scrap(state, id, cfg)` names the item without its gem ("Scrapped C Copper Sword: got back 0.42
+  Copper C bars. The Ruby B gem is lost."), as the plan's example does; the Workshop confirm and tip keep the gem in
+  the name ("Scrap C Copper Sword +Ruby B? You get back ..."). Fractions are written with two decimals ("0.70", "1.05"),
+  whole numbers without ("1"): `qtyText` in `js/core/util.js`, also used by the repair widgets.
+- **`Repair all` is gone** (`repairAllButton`, `repairAllPreview`): it only existed for the night screens. The Workshop
+  gear list has one Repair button per item. The shared gear table with the inline button is B5.
+- **Workshop and Help still show the novice / master cutting tables** and the "level N" text that goes with them
+  (Workshop "Cut gems" intro and rows, Help "Refining & cutting"); the plan files that under R18 / B5. Only the numbers
+  they read were moved to the effects model (`gemGrade.effects.cutBlend`, `gemFail.effects.cutFail`; General cutting's
+  blend is mentioned). The Skills tab, the skill hovers and Help's skills tables have no level-10 value.
+- **Help** got the B2 rows (time, travel and Carrying, repair, scrap, skills tables "Skill | Per level | XP", "keep a
+  spare of each item so you can leave one home to repair it"); B5 still owns the full Help pass.
+- **Bot (tools/balance.mjs, 8.2 B2).** The personas are B6, so the careful persona's `restBelow 40 / repairBelow 60 /
+  subBelow 30` sit in `botParams` for now. "Items a champion fight could destroy" is read as `durability <=
+  wearLoss(max roll, champion multiplier, Gear care)` because `couldBreak` / `worstWear` are B3. The rest rule keeps at
+  least one item of a slot packable. `campWork` repairs the unpacked top-3 items of a slot (best first) and adds the
+  minutes to `ctx.tm.repair`. The bot section prints "Repairs: 0 at night ..." and the SUMMARY line ends its repair part
+  with "0 at night". Economy / power / benchmark sections only had the skill config paths moved.
+- **A same-version save written by the B1 tree** (25 skills) no longer passes `assertShape` (35 skills): `main.js` backs it
+  up and starts a new game. No release has shipped 2.0, so nothing is lost for players.
+- **Open notes**
+  - [minor] `tests/sim.test.mjs:307` has two unused variables (`ring`, `ringText`) from 1.2; not touched here.
+  - [minor] Help's skill table text for cutting reads "10% better cutting chances (of the way to a master cutter)" (the
+    effect text in `skills.effects.cutBlend`); the hovers phrase it "better ruby cutting chances (30% of the way to a
+    master cutter's)". Wording only.
+
+- **Batch 2 open notes**
+  - [minor] Skills tab at 390 px: the 'Now' column and the Repair matrix column are cut off. `css/ui-misc.css:67` sets `.mi-skills { min-width: 540px }`; the scroll box is 328 px wide at 390 px, so 'Now' and part of the XP number sit off-screen (Bar types matrix 355/328 cuts 'Repair'). No page overflow; tapping a row shows the same info. Plan 4.4 wants the four columns to fit (narrower Progress, or Now wrapping under the name). Screenshot: scratchpad/v2/review/skills390.png.
+  - [minor] Touch popover stays open with out-of-date text after tapping an action button. `js/main.js:278-293` `installTips` opens `#tip` on every non-mouse pointerup in `[data-tip]`, buttons included; after an enabled 'Repair' tap the popover keeps the old text next to the toast. Fix: skip enabled buttons, or close the popover when `ctx.act` re-renders.
+  - [minor] `[data-tip] { cursor: help }` (`css/style.css:106`) overrides the hand cursor on enabled buttons (`button { cursor: pointer }`, lines 74-75). Fix: `button[data-tip]:not(:disabled) { cursor: pointer; }`.
+  - [minor] `craft()` and `repair()` compute XP without `xpPerUnit` (`js/core/gear.js:147`, `252-253`), so hover/Help can disagree with XP given, and removing `repair.xp` / `repairTime.xp` from config gives NaN. Use `xpPerUnit(skillDef(key))` in both.
+  - [minor] `travelMinutes` (`js/core/map.js:189`) repeats the `loadPenaltyPct` formula (`map.js:179-181`) instead of calling it; `tests/carry.test.mjs` was not moved onto it (section 11). Make `travelMinutes` call `loadPenaltyPct`.
+  - [minor] Some new tests hard-code default CONFIG numbers (`tests/ui-render.test.mjs` Copper sword scrap `0.42 ... 35% of its 2 bars x 60%` and smith panel `Base [\d.]+m (2 bars x \d+m)`). Pin with `cfgWith` or build the text from CONFIG.
+  - [minor] Leftover single-item loop `for (const phase of ['work'])` in `tests/gear.test.mjs` ('repair consumes exactly what repairPlan chose...'); unwrap it.
+  - [minor] Deferred items still visible after B2 (FYI): (1) `js/ui/workshop.js:148,187-188` and `js/ui/help.js:323-352` still show level-10 values and novice/master tables (R18, B2/B5; deferral recorded). (2) Most hovers outside B2's new elements are `title`-only, so touch users cannot see them (mapview 20, endday 17, workshop 13, skillsview intel Spend button); for B5. (3) `README.md:69,116,132,175,226` still describes free night repairs; README is B7's job.
+
+**Tests (B2)**
+- Skills: `skills-intel.test.mjs` pins its skill numbers with the effects model (`effects: { travelTime: 0.5 }` etc.);
+  new tests for the 35 defs, `skillEffects` / `skillEffect` (activity skills count for every material, per-material
+  skills only for their own), `xpPerUnit`, the hover texts (Travel level 3, Copper repair level 0, Carrying, a gem grade
+  skill, the highest level) and `skillNowText`. Ring-matched main effects at max level reach the C ring value.
+- Map / travel (`map.test.mjs`): the Travel ring and skill apply to every trip, Carrying lowers only the per-item
+  penalty (capped at 100% of it), Travel XP = steps x xp and Carrying XP = items x steps x xp on every trip (none when
+  empty-handed or refused). `returnTravel` no longer exists.
+- Gear (`gear.test.mjs`): `smithMinutes`, craft XP, `repairInfo` (`baseMinutes`, `gemFraction`), `repairMinutes`
+  (3 x Repair + 1 x General repair + 0.5 x Smithing, capped), repair XP (points x bars to `repair_<bar>` and General
+  repair), repairs refused in the report / plan / over phases and away from camp, the real day flow (the unpacked worn
+  sword is repaired at camp the next day, the packed one is refused; the plan's "game" row lives here because the test
+  drives `endDay` / `confirmPlan` like `game.test.mjs` does), `scrapReturn` (0.42 / 0.41 / 0), scrap adds bars, loses the
+  gem, takes no time, repair-then-scrap never gains bars for any slot and durability 1..99.
+- Processing: General refining adds 0.1 failure points per level to every bar, General cutting adds 1% blend per level
+  to every gem (capped at 100). The two long "outcomes match the table" tests switch the general skills' effects off too.
+- `spec-guards.test.mjs`: no `isNight` / "free at night" / "no time tonight" / night banner in js, tools and css; the old
+  skill names (`skillBonus`, `perLevel`, `returnTravel`, `xpFrom`, ...) are gone; the Skills tab source has no "Maxed";
+  tips are wired (`#tip`, `installTips`, `pointerup`, `pointerType === 'mouse'`). The "request pins" part gained a B2
+  test (R4 0.6% / 15 XP, R5 5% / 2 XP, R34 2%, R35 3% / 1% / 0.5%, R36 5x / 10x, A4 35% and the 0.42 / 0.41 / 0 scrap
+  examples), the same documented exception to "tests never hard-code CONFIG numbers" as in B1.
+- `ui-render.test.mjs`: Skills tab (grouped tables, one hoverable row per activity skill, a "Lv N" matrix cell with a
+  hover for every per-material skill, no "Maxed", no level-10 text, in every phase), `tip()`, no night wording on any
+  screen and no repair buttons on the plan / report screens, the Workshop gear list (Repair button with the skilled
+  time, Scrap tip and confirm), a Copper sword at 60% scrapped through the real click handler gives 0.42 bars, the
+  smith panel time and its hover, the Carrying text on the Map.
+- `playthrough.test.mjs` checks that every repair at night (report and plan phases) is refused and changes nothing, and
+  counts the repairs made by day.
+- Hand-checked in headless Chromium: Skills tab at 1280 and 390 px (a tap on a row opens the popover, the next tap
+  closes it, no horizontal scroll), Workshop Repair and Scrap buttons through a real click, the plan screen's repairs
+  note, no console errors.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),

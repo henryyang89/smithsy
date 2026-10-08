@@ -1,17 +1,12 @@
-// Skills & Intel tab: skill levels/XP/bonuses (grouped) and intel point spending.
+// Skills & Intel tab: skill levels/XP (grouped) and intel point spending.
 // All game-state changes go through spendIntel() inside ctx.act(). No UI-only state needed.
-import { h, num, bar } from './dom.js';
-import { BARS, GEMS, GRADES } from '../config.js';
-import { skillDefs, xpToNext, skillBonus, itemXp } from '../core/skills.js';
+import { h, num, bar, tip } from './dom.js';
+import { BARS, GEMS } from '../config.js';
+import { skillDefs, xpToNext, skillHoverText, skillNowText } from '../core/skills.js';
 import { spendIntel, intelValue, nextIntelGain, trackValueText } from '../core/intel.js';
 import { smithRingTotals } from '../core/rings.js';
 import { simCounts } from '../core/sim.js';
-
-const GROUPS = [
-  { id: 'activity', title: 'Activity skills' },
-  { id: 'ore', title: 'Bar skills (one pair per bar type)' },
-  { id: 'gem', title: 'Gem skills (one pair per gem type)' },
-];
+import { cap } from '../core/util.js';
 
 // ------------------------------------------------------- intel track values ----
 // Each track has a unit (config intel.tracks[..].unit): '%' (a chance), 'sight' (sight points) or 'count'
@@ -29,77 +24,7 @@ export function spendIntelAction(ctx, key) {
   return res;
 }
 
-// ------------------------------------------------- skills vs smith rings ----
-// The smith ring each skill matches. Skills without a ring: debris clearing, refining / cutting failure,
-// and gem grade (it blends the cutting table from novice to master; Gem luck rings upgrade on top).
-const SKILL_RING = {
-  returnTravel: 'travelTime', searchTime: 'searchTime', searchEff: 'searchEff',
-  refineTime: 'processTime', cutTime: 'processTime', oreGrade: 'oreGrade',
-};
-
-// Which ring grade a max-level skill equals: { ring, grade, value, top, exact } or null (no ring of that kind).
-// key: a skill key ('searchEff', 'oreGrade_iron') or a config key ('oreGrade').
-export function skillRingMatch(key, cfg) {
-  const base = key.split('_')[0];
-  const ring = SKILL_RING[base] && cfg.rings.types[SKILL_RING[base]];
-  const def = cfg.skills.activity[base] || cfg.skills.perMaterial[base];
-  if (!ring || !def) return null;
-  const top = def.perLevel * cfg.skills.maxLevel;
-  let gi = -1;
-  ring.values.forEach((v, i) => {
-    if (v <= top + 1e-9) gi = i;
-  });
-  return { ring: ring.name, grade: gi >= 0 ? GRADES[gi] : null, value: gi >= 0 ? ring.values[gi] : null, top, exact: gi >= 0 && Math.abs(ring.values[gi] - top) < 1e-9 };
-}
-
-// "= C-grade Travel ring", "above a C-grade Travel ring", "below a D-grade Travel ring"
-export function skillRingText(m) {
-  if (!m) return '';
-  if (!m.grade) return `below a ${GRADES[0]}-grade ${m.ring} ring`;
-  return m.exact ? `= ${m.grade}-grade ${m.ring} ring` : `above a ${m.grade}-grade ${m.ring} ring`;
-}
-
-// The grade every ring-matched skill reaches at max level, when they all agree exactly (else null).
-export function commonSkillRingGrade(cfg) {
-  const keys = [...Object.keys(cfg.skills.activity), ...Object.keys(cfg.skills.perMaterial)];
-  const ms = keys.map((k) => skillRingMatch(k, cfg)).filter(Boolean);
-  if (!ms.length || ms.some((m) => !m.exact || m.grade !== ms[0].grade)) return null;
-  return ms[0].grade;
-}
-
-// One sentence on skills vs rings, all from config: "A level-10 skill equals a C-grade ring of the same kind. ..."
-export function skillVsRingText(cfg) {
-  const max = cfg.skills.maxLevel;
-  const grade = commonSkillRingGrade(cfg);
-  const parts = [grade
-    ? `A level-${max} skill equals a ${grade}-grade smith ring of the same kind.`
-    : `At level ${max}, skills compare with smith rings as shown in the table.`];
-  // "debris clearing +100% more debris cleared per search", "gem grade 100% of the way from ...".
-  const atMax = (d) => {
-    const { unit, text } = splitUnit(d.desc);
-    const v = num(d.perLevel * max, 2);
-    if (unit === ' pts') return `−${v} points ${text.replace(/^less /, '')}`;
-    if (unit === '%' && text.startsWith('more ')) return `+${v}% ${text.slice(5)}`;
-    if (unit === '%' && text.startsWith('less ')) return `−${v}% ${text.slice(5)}`;
-    if (unit === '%') return `${v}% ${text}`;
-    return `${v} ${text}`;
-  };
-  const noRing = [];
-  for (const [k, d] of Object.entries(cfg.skills.activity)) if (!SKILL_RING[k]) noRing.push(`${d.name.toLowerCase()} ${atMax(d)}`);
-  const perMat = Object.entries(cfg.skills.perMaterial).filter(([k]) => !SKILL_RING[k]);
-  for (const [k, d] of perMat) noRing.push(`${k.startsWith('ore') ? 'bar' : 'gem'} ${d.name} ${atMax(d)}`);
-  if (noRing.length) parts.push(`Skills with no ring, at level ${max}: ${noRing.join('; ')}.`);
-  return parts.join(' ');
-}
-
 // ------------------------------------------------------------------ helpers ----
-// Split a config description into a unit and the rest: '% less search time' -> { unit: '%', text: 'less search time' }
-function splitUnit(desc) {
-  if (desc.startsWith('%')) return { unit: '%', text: desc.slice(1).trim() };
-  if (desc.startsWith('points ')) return { unit: ' pts', text: desc.slice(7) };
-  return { unit: '', text: desc };
-}
-
 function tbl(head, rows, cls = '') {
   const cell = (tag, c) => {
     if (c && typeof c === 'object' && !(c instanceof Node) && !Array.isArray(c) && 'v' in c) {
@@ -119,95 +44,73 @@ function kpi(label, value, sub) {
   return h('div', { class: 'mi-kpi' }, h('div', { class: 'mi-kpi-label' }, label), h('div', { class: 'mi-kpi-value' }, value), sub ? h('div', { class: 'mi-kpi-sub' }, sub) : null);
 }
 
-// Material order inside the per-material groups: copper grade, copper refining, iron grade, ...
-function materialSortKey(def) {
-  const [kind, mat] = def.key.split('_');
-  const list = def.group === 'ore' ? BARS : GEMS;
-  const second = kind.endsWith('Fail') ? 1 : 0;
-  return list.indexOf(mat) * 2 + second;
-}
-
 // --------------------------------------------------------------------- main ----
 export function renderSkills(root, ctx) {
   root.append(h('div', { class: 'mi-root' }, skillsPanel(ctx), intelPanel(ctx)));
 }
 
 // ------------------------------------------------------------------- skills ----
+const GROUPS = [
+  { id: 'field', title: 'Travel and fields' },
+  { id: 'workshop', title: 'Workshop' },
+];
+
 function skillsPanel(ctx) {
   const { state, cfg } = ctx;
   const defs = skillDefs(cfg);
-  const max = cfg.skills.maxLevel;
-  let totalXp = 0;
-  for (let l = 0; l < max; l++) totalXp += xpToNext(l, cfg);
   const levels = defs.reduce((a, d) => a + ((state.skills[d.key] && state.skills[d.key].level) || 0), 0);
-  const maxed = defs.filter((d) => state.skills[d.key] && state.skills[d.key].level >= max).length;
 
-  const groups = GROUPS.map((g) => {
-    let list = defs.filter((d) => d.group === g.id);
-    if (g.id !== 'activity') list = list.slice().sort((a, b) => materialSortKey(a) - materialSortKey(b));
-    const mats = g.id === 'ore' ? BARS : GEMS;
-    const xpList = mats.map((m) => `${m} ${num(itemXp(m, cfg))}`).join(', ');
-    const pm = cfg.skills.perMaterial;
-    const debris = cfg.skills.activity.debris;
-    const masterLv = Math.min(max, Math.ceil(100 / Math.max(pm.gemGrade.perLevel, 1e-9) - 1e-9));
-    let note;
-    if (g.id === 'activity') {
-      // activity skills earn XP from minutes spent, except the ones whose XP comes from something else
-      const others = Object.values(cfg.skills.activity).filter((d) => !d.xpFrom.startsWith('minutes'));
-      const gc = cfg.skills.activity.gearCare;
-      note = `XP = minutes spent on the activity${others.length ? `, except ${others.map((d) => `${d.name}: ${d.xpFrom}`).join('; ')}` : ''}. `
-        + `${debris ? `${debris.name} adds ${num(debris.perLevel, 2)}% debris cleared per search per level (+${num(debris.perLevel * max, 2)}% at level ${max}); debris is cleared by searching. ` : ''}`
-        + `${gc ? `${gc.name} gives ${num(gc.perLevel, 2)}% less durability loss per level (${num(gc.perLevel * max, 2)}% at level ${max}); it earns ${cfg.skills.gearCareXpPerFight} XP for each fight the adventurer survives (win or draw).` : ''}`;
-    } else if (g.id === 'ore') {
-      note = `XP per bar refined of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" raises the chance to upgrade the bar one grade (${num(pm.oreGrade.perLevel, 2)}% per level); "refining" moves failure chance into grade D (${num(pm.oreFail.perLevel, 2)} points per level).`;
-    } else {
-      note = `XP per gem cut of that type (rarer = more): ${xpList}. Failed attempts count too. "Grade" blends that gem's cutting table from the novice table to the master table: ${num(pm.gemGrade.perLevel, 2)}% of the way per level, master at level ${masterLv} (the Workshop shows all three tables). "Cutting" lowers failure by ${num(pm.gemFail.perLevel, 2)} points per level. Gem luck rings add upgrade chances on top.`;
-    }
-    return h('div', { class: 'mi-group' },
-      h('h4', {}, g.title),
-      h('p', { class: 'mi-note mi-intro' }, note),
-      tbl(['Skill', { v: 'Level', cls: 'num' }, 'Progress to next level', { v: 'Bonus now', cls: 'num' }, { v: 'Next level', cls: 'num' }, 'How to earn XP'],
-        list.map((d) => skillRow(state, cfg, d)), 'mi-skills'));
-  });
+  const groups = GROUPS.map((g) => h('div', { class: 'mi-group' },
+    h('h4', {}, g.title),
+    tbl(['Skill', { v: 'Level', cls: 'num' }, 'Progress', 'Now'],
+      defs.filter((d) => d.group === g.id).map((d) => skillRow(state, cfg, d)), 'mi-skills')));
+  groups.push(matrix(state, cfg, 'Bar types', 'Bar type', BARS, 'bars'));
+  groups.push(matrix(state, cfg, 'Gem types', 'Gem type', GEMS, 'gems'));
 
   return h('section', { class: 'panel' },
     h('h3', {}, 'Skills'),
-    h('div', { class: 'mi-kpis' },
-      kpi('Skill levels', `${levels} / ${defs.length * max}`, `${defs.length} skills, max level ${max}`),
-      kpi('Maxed', String(maxed), `of ${defs.length}`)),
-    h('p', { class: 'mi-note' },
-      `Skills level up automatically while you work. Level L to L+1 needs ${cfg.skills.xpBase} x (L+1) XP, so level ${max} takes ${totalXp.toLocaleString('en-US')} XP in total. `,
-      'Skill bonuses add to the matching smith ring bonuses (time reductions are capped at ',
-      `${cfg.processing.maxTimeReduction}% in total). `, skillVsRingText(cfg)),
+    h('div', { class: 'mi-kpis' }, kpi('Skill levels', String(levels), `${defs.length} skills`)),
+    h('p', { class: 'mi-note' }, 'Skills level up by themselves as you work. Hover or tap a skill for what it does and how to earn XP. ',
+      `Skills add to the matching smith rings (time reductions are capped at ${cfg.processing.maxTimeReduction}% in total).`),
     groups);
+}
+
+// "Lv 3" and a thin progress bar for the next level (or the highest level).
+function xpPct(state, cfg, d) {
+  const sk = state.skills[d.key] || { xp: 0, level: 0 };
+  return sk.level >= cfg.skills.maxLevel ? 100 : (sk.xp / xpToNext(sk.level, cfg)) * 100;
 }
 
 function skillRow(state, cfg, d) {
   const sk = state.skills[d.key] || { xp: 0, level: 0 };
-  const max = cfg.skills.maxLevel;
-  const atMax = sk.level >= max;
-  const need = xpToNext(sk.level, cfg);
-  const now = skillBonus(state, d.key, cfg);
-  const { unit, text } = splitUnit(d.desc);
-  const next = atMax ? null : d.perLevel * (sk.level + 1);
-  const ring = skillRingMatch(d.key, cfg);
+  const atMax = sk.level >= cfg.skills.maxLevel;
   const progress = atMax
-    ? h('span', { class: 'ok' }, 'Max level')
-    : h('div', { class: 'mi-xp' },
-      bar((sk.xp / need) * 100, 'mi-xpbar'),
-      h('span', { class: 'mi-xpnum' }, `${num(sk.xp)} / ${need} XP`));
+    ? h('span', { class: 'ok' }, 'Highest level')
+    : h('div', { class: 'mi-xp' }, bar(xpPct(state, cfg, d), 'mi-xpbar'), h('span', { class: 'mi-xpnum' }, `${num(sk.xp)}/${xpToNext(sk.level, cfg)}`));
+  const now = skillNowText(state, d.key, cfg);
   return {
-    attrs: { class: sk.level > 0 ? '' : 'mi-dim' },
-    cells: [
-      h('div', {}, h('b', {}, d.name), h('div', { class: 'mi-note' }, `${text} · +${num(d.perLevel, 2)}${unit} per level`,
-        ring ? ` · level ${max} ${skillRingText(ring)}` : ` · level ${max}: ${num(d.perLevel * max, 2)}${unit} (no ring)`)),
-      { v: `${sk.level} / ${max}`, cls: 'num' },
-      progress,
-      { v: h('b', {}, `${num(now, 2)}${unit}`), cls: 'num' },
-      { v: next === null ? '·' : `${num(next, 2)}${unit}`, cls: next === null ? 'num muted' : 'num' },
-      h('span', { class: 'muted' }, d.xpFrom),
-    ],
+    attrs: { class: sk.level > 0 ? '' : 'mi-dim', ...tip(skillHoverText(state, d.key, cfg)) },
+    cells: [h('b', {}, d.name), { v: String(sk.level), cls: 'num' }, progress, now ? h('span', {}, now) : h('span', { class: 'muted' }, 'no effect yet')],
   };
+}
+
+// Bar types / gem types: one row per material, one column per skill kind. Each cell is "Lv 3" + a thin XP bar.
+function matrix(state, cfg, title, firstHead, materials, kind) {
+  const prefixes = Object.entries(cfg.skills.perMaterial).filter(([, d]) => d.materials === kind);
+  const defs = skillDefs(cfg);
+  const head = [firstHead, ...prefixes.map(([, d]) => ({ v: cap(d.label.replace(/^bar /, '')), cls: 'mi-c' }))];
+  const rows = materials.map((m) => [
+    h('b', {}, cap(m)),
+    ...prefixes.map(([prefix]) => {
+      const d = defs.find((x) => x.key === `${prefix}_${m}`);
+      const sk = state.skills[d.key] || { xp: 0, level: 0 };
+      return {
+        v: h('div', { class: `mi-lv${sk.level > 0 ? '' : ' mi-dim'}`, ...tip(skillHoverText(state, d.key, cfg)) }, `Lv ${sk.level}`, bar(xpPct(state, cfg, d), 'mi-thin')),
+        cls: 'mi-c',
+      };
+    }),
+  ]);
+  return h('div', { class: 'mi-group' }, h('h4', {}, title), tbl(head, rows, 'mi-matrix'));
 }
 
 // -------------------------------------------------------------------- intel ----

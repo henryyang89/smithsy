@@ -11,8 +11,6 @@
 .adv-stats tr.adv-off td { opacity: 0.55; }
 .adv-gstats { font-size: 12px; color: var(--muted); line-height: 1.25; margin-top: 1px; }
 .adv-geartable td { padding-top: 4px; padding-bottom: 4px; }
-.adv-geartable tr.adv-hasrepair td { border-bottom: none; padding-bottom: 1px; }
-.adv-geartable tr.adv-repairrow td { padding-top: 0; padding-bottom: 6px; }
 .adv-totals { margin-top: 6px; }
 .adv-gname { white-space: nowrap; }
 .adv-where { white-space: nowrap; }

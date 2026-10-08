@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG, BARS, GEMS } from '../js/config.js';
-import { skillDefs, newSkills, xpToNext, addXp, skillBonus, itemXp } from '../js/core/skills.js';
+import {
+  skillDefs, skillDef, newSkills, xpToNext, addXp, itemXp, xpPerUnit, skillEffects, skillEffect, skillHoverText, skillNowText, effectText,
+} from '../js/core/skills.js';
 import { newIntel, gainForPoint, intelValueFor, intelValue, nextIntelGain, spendIntel, trackValueText, canSpendIntel } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { debrisClearMult, searchMinutes, searchEfficiency, returnMinutes, search } from '../js/core/map.js';
@@ -12,8 +14,23 @@ import { game, approx, addRing, setSkillLevel, cfgWith, ringVal, fieldAt, standI
 const SK = cfgWith({
   skills: {
     xpBase: 100, maxLevel: 10,
-    activity: { returnTravel: { perLevel: 0.5 }, searchEff: { perLevel: 1 }, debris: { perLevel: 2 }, refineTime: { perLevel: 0.5 }, cutTime: { perLevel: 0.5 } },
-    perMaterial: { oreGrade: { perLevel: 0.3 }, oreFail: { perLevel: 0.3 }, gemGrade: { perLevel: 10 }, gemFail: { perLevel: 0.3 } },
+    activity: {
+      travel: { effects: { travelTime: 0.5 } },
+      carrying: { effects: { loadPenalty: 5 } },
+      searchEff: { effects: { searchEff: 1 } },
+      debris: { effects: { debrisClear: 2 } },
+      refineTime: { effects: { refineTime: 0.5, refineFail: 0.1 } },
+      cutTime: { effects: { cutTime: 0.5, cutBlend: 1 } },
+      repairTime: { effects: { repairTime: 1 } },
+    },
+    perMaterial: {
+      oreGrade: { effects: { refineUpgrade: 0.3 } },
+      oreFail: { effects: { refineFail: 0.3 } },
+      smith: { effects: { smithTime: 2, repairTime: 0.5 } },
+      repair: { effects: { repairTime: 3 } },
+      gemGrade: { effects: { cutBlend: 10 } },
+      gemFail: { effects: { cutFail: 0.3 } },
+    },
   },
   rings: { types: { processTime: { values: [5, 6, 7, 8, 10] }, oreGrade: { values: [2, 3, 4, 5, 6] }, gemGrade: { values: [2, 3, 4, 5, 6] } } },
 });
@@ -29,15 +46,39 @@ const INTEL = cfgWith({
 });
 
 // ---------------------------------------------------------------- skills ----
-test('skill list: 7 activity skills (incl. Gear care) + grade/fail per bar and per gem', () => {
+test('skill list: 35 skills = 9 activity skills + 4 per bar type + 2 per gem type; no return-travel skill', () => {
   const defs = skillDefs();
-  assert.equal(defs.length, 7 + 2 * BARS.length + 2 * GEMS.length);
+  assert.equal(defs.length, 9 + 4 * BARS.length + 2 * GEMS.length);
+  assert.equal(defs.length, 35);
   const keys = defs.map((d) => d.key);
-  assert.equal(defs.filter((d) => d.group === 'activity').length, 7);
-  assert.ok(keys.includes('gearCare'));
   assert.equal(new Set(keys).size, keys.length);
-  for (const b of BARS) assert.ok(keys.includes(`oreGrade_${b}`) && keys.includes(`oreFail_${b}`));
-  for (const g of GEMS) assert.ok(keys.includes(`gemGrade_${g}`) && keys.includes(`gemFail_${g}`));
+  assert.equal(defs.filter((d) => !d.material).length, 9, 'activity skills have no material');
+  for (const k of ['travel', 'carrying', 'searchTime', 'searchEff', 'debris', 'refineTime', 'cutTime', 'repairTime', 'gearCare']) {
+    assert.ok(keys.includes(k), k);
+    assert.equal(skillDef(k).material, null, k);
+  }
+  assert.equal(keys.includes('returnTravel'), false);
+  for (const b of BARS) for (const p of ['oreGrade', 'oreFail', 'smith', 'repair']) assert.ok(keys.includes(`${p}_${b}`), `${p}_${b}`);
+  for (const g of GEMS) for (const p of ['gemGrade', 'gemFail']) assert.ok(keys.includes(`${p}_${g}`), `${p}_${g}`);
+  // groups: where the Skills tab lists them
+  assert.deepEqual([...new Set(defs.map((d) => d.group))].sort(), ['bars', 'field', 'gems', 'workshop']);
+  assert.deepEqual(defs.filter((d) => d.group === 'field').map((d) => d.key), ['travel', 'carrying', 'searchTime', 'searchEff', 'debris']);
+  assert.deepEqual(defs.filter((d) => d.group === 'workshop').map((d) => d.key), ['refineTime', 'cutTime', 'repairTime', 'gearCare']);
+  // names and effects
+  const byKey = Object.fromEntries(defs.map((d) => [d.key, d]));
+  assert.equal(byKey.refineTime.name, 'General refining');
+  assert.equal(byKey.cutTime.name, 'General cutting');
+  assert.equal(byKey.repairTime.name, 'General repair');
+  assert.equal(byKey.oreGrade_copper.name, 'Copper bar grade');
+  assert.equal(byKey.smith_mythril.name, 'Mythril smithing');
+  assert.equal(byKey.repair_iron.name, 'Iron repair');
+  assert.equal(byKey.gemGrade_ruby.name, 'Ruby grade');
+  assert.equal(byKey.gemFail_diamond.name, 'Diamond cutting');
+  for (const d of defs) {
+    assert.ok(Object.keys(d.effects).length >= 1, d.key);
+    for (const e of Object.keys(d.effects)) assert.ok(CONFIG.skills.effects[e], `${d.key}: effect ${e} is explained in skills.effects`);
+    assert.ok(d.xpUnit, d.key);
+  }
   const s = newSkills();
   assert.deepEqual(Object.keys(s).sort(), [...keys].sort());
   for (const v of Object.values(s)) assert.deepEqual(v, { xp: 0, level: 0 });
@@ -96,27 +137,56 @@ test('addXp ignores unknown skills and non-positive amounts; writes level-up not
   assert.deepEqual(notes, ['Skill up: Steel bar grade is now level 2.']);
 });
 
-test('skillBonus = perLevel x level', () => {
+test('skillEffects = amount per level x level, for each effect of the skill', () => {
   const s = game(1);
-  assert.equal(skillBonus(s, 'returnTravel', SK), 0);
-  setSkillLevel(s, 'returnTravel', 4);
-  assert.equal(skillBonus(s, 'returnTravel', SK), 2);
-  setSkillLevel(s, 'debris', 10);
-  assert.equal(skillBonus(s, 'debris', SK), 20);
-  setSkillLevel(s, 'oreFail_mythril', 10);
-  assert.ok(approx(skillBonus(s, 'oreFail_mythril', SK), 3));
-  setSkillLevel(s, 'searchEff', 7);
-  assert.equal(skillBonus(s, 'searchEff', SK), 7);
-  assert.equal(skillBonus(s, 'unknown', SK), 0);
+  assert.deepEqual(skillEffects(s, 'refineTime', SK), { refineTime: 0, refineFail: 0 });
+  setSkillLevel(s, 'travel', 4);
+  assert.deepEqual(skillEffects(s, 'travel', SK), { travelTime: 2 });
+  setSkillLevel(s, 'refineTime', 5);
+  const e = skillEffects(s, 'refineTime', SK);
+  assert.ok(approx(e.refineTime, 2.5) && approx(e.refineFail, 0.5), JSON.stringify(e));
+  setSkillLevel(s, 'smith_iron', 3);
+  const sm = skillEffects(s, 'smith_iron', SK);
+  assert.ok(approx(sm.smithTime, 6) && approx(sm.repairTime, 1.5), JSON.stringify(sm));
+  assert.deepEqual(skillEffects(s, 'unknown', SK), {});
   // default config
   const A = CONFIG.skills.activity;
+  assert.ok(approx(skillEffects(s, 'refineTime').refineFail, A.refineTime.effects.refineFail * 5));
+});
+
+test('skillEffect: an activity skill counts for every material, a per-material skill only for its own', () => {
+  const s = game(1);
+  setSkillLevel(s, 'refineTime', 10); // General refining: 0.1 failure points per level (pinned) for every bar
+  setSkillLevel(s, 'oreFail_iron', 10); // Iron refining: 0.3 per level, iron only
+  assert.ok(approx(skillEffect(s, 'refineFail', null, SK), 1), 'no material: the general skills only');
+  assert.ok(approx(skillEffect(s, 'refineFail', 'copper', SK), 1), 'copper: general only');
+  assert.ok(approx(skillEffect(s, 'refineFail', 'iron', SK), 1 + 3), 'iron: general + its own');
+  assert.ok(approx(skillEffect(s, 'refineFail', 'steel', SK), 1));
+  assert.equal(skillEffect(s, 'refineTime', 'iron', SK), 5);
+  assert.equal(skillEffect(s, 'smithTime', 'iron', SK), 0);
+  setSkillLevel(s, 'smith_iron', 5);
+  setSkillLevel(s, 'repair_iron', 2);
+  setSkillLevel(s, 'repairTime', 4);
+  // repair time of iron gear = 3 x Iron repair + 1 x General repair + 0.5 x Iron smithing, per level
+  assert.equal(skillEffect(s, 'repairTime', 'iron', SK), 3 * 2 + 1 * 4 + 0.5 * 5);
+  assert.equal(skillEffect(s, 'repairTime', 'copper', SK), 4, 'copper gear: only General repair');
+  assert.equal(skillEffect(s, 'smithTime', 'iron', SK), 2 * 5);
+  assert.equal(skillEffect(s, 'smithTime', 'copper', SK), 0);
+  // a gem skill never leaks into bars and the other way round
+  setSkillLevel(s, 'gemGrade_ruby', 3);
+  assert.equal(skillEffect(s, 'cutBlend', 'ruby', SK), 30);
+  assert.equal(skillEffect(s, 'cutBlend', 'topaz', SK), 0);
+  assert.equal(skillEffect(s, 'cutBlend', 'iron', SK), 0);
+  // a save without a skill reads as level 0
+  delete s.skills.gemGrade_ruby;
+  assert.equal(skillEffect(s, 'cutBlend', 'ruby', SK), 0);
+});
+
+test('General refining and General cutting are weaker than the own-material skills (failure 1:5, blend 1:10)', () => {
+  const A = CONFIG.skills.activity;
   const P = CONFIG.skills.perMaterial;
-  assert.ok(approx(skillBonus(s, 'returnTravel'), A.returnTravel.perLevel * 4));
-  assert.ok(approx(skillBonus(s, 'debris'), A.debris.perLevel * 10));
-  assert.ok(approx(skillBonus(s, 'searchEff'), A.searchEff.perLevel * 7));
-  assert.ok(approx(skillBonus(s, 'oreFail_mythril'), P.oreFail.perLevel * 10));
-  setSkillLevel(s, 'gemGrade_topaz', 6);
-  assert.ok(approx(skillBonus(s, 'gemGrade_topaz'), P.gemGrade.perLevel * 6));
+  assert.ok(approx(P.oreFail.effects.refineFail / A.refineTime.effects.refineFail, 5));
+  assert.ok(approx(P.gemGrade.effects.cutBlend / A.cutTime.effects.cutBlend, 10));
 });
 
 test('itemXp: per-material XP from the xpPerItem table', () => {
@@ -135,14 +205,86 @@ test('itemXp: per-material XP from the xpPerItem table', () => {
   assert.equal(itemXp('ruby', flat), 12);
 });
 
-test('per-material skill descriptions show that material\'s XP', () => {
+test('xpPerUnit: a skill\'s own xp, else its material\'s xpPerItem (Smithing and the grade / cutting skills)', () => {
   const cfg = cfgWith({ skills: { xpPerItem: { copper: 7, iron: 8, steel: 9, mythril: 10, ruby: 11, topaz: 12, sapphire: 13, emerald: 14, diamond: 15 } } });
   const defs = Object.fromEntries(skillDefs(cfg).map((d) => [d.key, d]));
-  assert.equal(defs.oreGrade_mythril.xpFrom, '10 XP per mythril bar refined');
-  assert.equal(defs.oreFail_copper.xpFrom, '7 XP per copper bar refined');
-  assert.equal(defs.gemGrade_diamond.xpFrom, '15 XP per diamond cut');
-  assert.equal(defs.gemFail_ruby.xpFrom, '11 XP per ruby cut');
-  for (const d of skillDefs()) if (d.group !== 'activity') assert.match(d.xpFrom, /^\d+(\.\d+)? XP per /, d.key);
+  assert.equal(xpPerUnit(defs.oreGrade_mythril, cfg), 10);
+  assert.equal(xpPerUnit(defs.oreFail_copper, cfg), 7);
+  assert.equal(xpPerUnit(defs.smith_steel, cfg), 9);
+  assert.equal(xpPerUnit(defs.gemGrade_diamond, cfg), 15);
+  assert.equal(xpPerUnit(defs.gemFail_ruby, cfg), 11);
+  // the skills with their own xp
+  assert.equal(xpPerUnit(defs.travel, cfg), cfg.skills.activity.travel.xp);
+  assert.equal(xpPerUnit(defs.carrying, cfg), cfg.skills.activity.carrying.xp);
+  assert.equal(xpPerUnit(defs.repair_iron, cfg), cfg.skills.perMaterial.repair.xp);
+  assert.equal(xpPerUnit(defs.gearCare, cfg), cfg.skills.activity.gearCare.xp);
+  assert.equal(xpPerUnit(defs.refineTime, cfg), cfg.skills.activity.refineTime.xp);
+});
+
+// ----------------------------------------------------------- hover texts ----
+test('skillHoverText: Travel at level 3 says name, now, next, the XP and nothing about level 10', () => {
+  const s = game(1);
+  setSkillLevel(s, 'travel', 3);
+  s.skills.travel.xp = 40;
+  const per = CONFIG.skills.activity.travel.effects.travelTime;
+  const t = skillHoverText(s, 'travel');
+  const lines = t.split('\n');
+  assert.equal(lines[0], 'Travel: level 3.');
+  assert.equal(lines[1], `Now: ${Math.round(per * 3 * 100) / 100}% less travel time.`);
+  assert.equal(lines[2], `Next level: ${Math.round(per * 4 * 100) / 100}% less travel time.`);
+  assert.equal(lines[3], `XP: ${CONFIG.skills.activity.travel.xp} per map step walked (40 / ${xpToNext(3)} to level 4).`);
+  assert.equal(lines.length, 4, 'Travel has no scope line');
+  assert.doesNotMatch(t, /level 10|level-10|10 levels/i);
+});
+
+test('skillHoverText: Copper repair at level 0 says no effect yet, what the next level gives, who it is for and the XP', () => {
+  const s = game(1);
+  const per = CONFIG.skills.perMaterial.repair.effects.repairTime;
+  const t = skillHoverText(s, 'repair_copper');
+  const lines = t.split('\n');
+  assert.equal(lines[0], 'Copper repair: level 0.');
+  assert.equal(lines[1], 'No effect yet.');
+  assert.equal(lines[2], `Next level: ${Math.round(per * 100) / 100}% less repair time.`);
+  assert.equal(lines[3], 'Only for copper gear.');
+  assert.equal(lines[4], `XP: ${CONFIG.skills.perMaterial.repair.xp} per durability point repaired, per bar in the item (0 / ${xpToNext(0)} to level 1).`);
+  assert.doesNotMatch(t, /level 10|level-10/i);
+  // other scope lines
+  assert.match(skillHoverText(s, 'oreGrade_iron'), /Only for iron\./);
+  assert.match(skillHoverText(s, 'smith_steel'), /Only for steel gear\./);
+  assert.match(skillHoverText(s, 'gemFail_ruby'), /Only for ruby\./);
+  assert.match(skillHoverText(s, 'refineTime'), /Works for every bar type; each bar type's own skills count far more\./);
+  assert.match(skillHoverText(s, 'cutTime'), /Works for every gem type; each gem type's own skills count far more\./);
+  assert.match(skillHoverText(s, 'repairTime'), /Works for all gear; each bar type's own Repair skill counts \d+(\.\d+)? times as much\./);
+  // the XP of a per-material skill that has none of its own is the material's
+  assert.match(skillHoverText(s, 'smith_mythril'), new RegExp(`XP: ${CONFIG.skills.xpPerItem.mythril} per bar smithed into gear`));
+});
+
+test('skillHoverText: Carrying shows the resulting penalty, a gem grade skill the way to a master cutter, maximum level says so', () => {
+  const s = game(1);
+  const pen = CONFIG.map.loadPenaltyPerItem;
+  const red = CONFIG.skills.activity.carrying.effects.loadPenalty;
+  setSkillLevel(s, 'carrying', 3);
+  const half = (v) => Math.round(v * 100) / 100;
+  assert.match(skillHoverText(s, 'carrying'), new RegExp(`Now: each carried item adds ${half(pen * (1 - (red * 3) / 100))}% travel time instead of ${pen}%\\.`));
+  assert.match(skillHoverText(s, 'carrying'), new RegExp(`Next level: each carried item adds ${half(pen * (1 - (red * 4) / 100))}% travel time instead of ${pen}%\\.`));
+  setSkillLevel(s, 'gemGrade_ruby', 3);
+  const blend = CONFIG.skills.perMaterial.gemGrade.effects.cutBlend * 3;
+  assert.match(skillHoverText(s, 'gemGrade_ruby'), new RegExp(`Now: better ruby cutting chances \\(${blend}% of the way to a master cutter's\\)\\.`));
+  setSkillLevel(s, 'gearCare', CONFIG.skills.maxLevel);
+  const t = skillHoverText(s, 'gearCare');
+  assert.match(t, /Highest level reached\./);
+  assert.doesNotMatch(t, /Next level/);
+  assert.equal(skillHoverText(s, 'nope'), '');
+});
+
+test('skillNowText: null at level 0, the effects at the current level otherwise; effectText words points and percent', () => {
+  const s = game(1);
+  assert.equal(skillNowText(s, 'refineTime'), null);
+  setSkillLevel(s, 'refineTime', 2);
+  const A = CONFIG.skills.activity.refineTime.effects;
+  assert.equal(skillNowText(s, 'refineTime'), `${Math.round(A.refineTime * 2 * 100) / 100}% less refining time; ${Math.round(A.refineFail * 2 * 100) / 100} points less refining failure chance`);
+  assert.equal(effectText('refineUpgrade', 0.9, CONFIG), '0.9% chance to upgrade a bar one grade');
+  assert.equal(effectText('searchEff', 3.6, CONFIG), '3.6% more searched per search');
 });
 
 // ---------------------------------------------------- spec rules (real config) ----
@@ -157,16 +299,16 @@ const allSkillsMax = () => {
 };
 const closeTo = (a, b, eps = 1e-9) => GRADE_ORDER.every((g) => approx(a[g], b[g], eps));
 
-test('spec: every max-level skill with a matching smith ring is at least that ring\'s C value', () => {
+test('spec: every max-level skill with a matching smith ring is at least that ring\'s C value (main effects)', () => {
   const A = CONFIG.skills.activity;
   const P = CONFIG.skills.perMaterial;
   const pairs = [
-    ['returnTravel', A.returnTravel.perLevel, 'travelTime'],
-    ['searchTime', A.searchTime.perLevel, 'searchTime'],
-    ['searchEff', A.searchEff.perLevel, 'searchEff'],
-    ['refineTime', A.refineTime.perLevel, 'processTime'],
-    ['cutTime', A.cutTime.perLevel, 'processTime'],
-    ['oreGrade', P.oreGrade.perLevel, 'oreGrade'],
+    ['travel', A.travel.effects.travelTime, 'travelTime'],
+    ['searchTime', A.searchTime.effects.searchTime, 'searchTime'],
+    ['searchEff', A.searchEff.effects.searchEff, 'searchEff'],
+    ['refineTime', A.refineTime.effects.refineTime, 'processTime'],
+    ['cutTime', A.cutTime.effects.cutTime, 'processTime'],
+    ['oreGrade', P.oreGrade.effects.refineUpgrade, 'oreGrade'],
   ];
   for (const [skill, perLevel, ring] of pairs) {
     assert.equal(CONFIG.rings.types[ring].owner, 'smith', ring);
@@ -181,7 +323,7 @@ test('spec: in play, max-level skills give at least what worn C-grade smith ring
   const a = smithBonuses(sk);
   const b = smithBonuses(rg);
   const ge = (x, y, what) => assert.ok(x >= y - 1e-9, `${what}: skill ${x} < ring ${y}`);
-  ge(a.returnPct, b.travelPct, 'return travel vs travel ring');
+  ge(a.travelPct, b.travelPct, 'Travel vs travel ring');
   ge(a.searchTimePct, b.searchTimePct, 'search time');
   ge(a.searchEffPct, b.searchEffPct, 'search efficiency');
   ge(a.refineTimePct, b.refineTimePct, 'refine time');
@@ -208,7 +350,7 @@ test('spec: in play, max-level skills give at least what worn C-grade smith ring
 });
 
 test('spec: debris clearing at max level clears at least twice the debris per search (+100%)', () => {
-  const bonus = CONFIG.skills.activity.debris.perLevel * MAX;
+  const bonus = CONFIG.skills.activity.debris.effects.debrisClear * MAX;
   assert.ok(bonus >= 100, `debris skill at level ${MAX}: ${bonus}%`);
   const s = game(1);
   setSkillLevel(s, 'debris', MAX);
@@ -233,7 +375,7 @@ test('spec: debris clearing at max level clears at least twice the debris per se
 
 test('spec: the gem grade skill at max level reaches the master cut table', () => {
   const P = CONFIG.skills.perMaterial;
-  assert.ok(P.gemGrade.perLevel * MAX >= 100 - 1e-9, `gem grade at level ${MAX}: ${P.gemGrade.perLevel * MAX}% of the way`);
+  assert.ok(P.gemGrade.effects.cutBlend * MAX >= 100 - 1e-9, `gem grade at level ${MAX}: ${P.gemGrade.effects.cutBlend * MAX}% of the way`);
   const s = allSkillsMax();
   for (const gem of GEMS) {
     const c = CONFIG.cut[gem];
@@ -243,14 +385,15 @@ test('spec: the gem grade skill at max level reaches the master cut table', () =
     const tot = (x) => succ.reduce((a, g) => a + x[g], 0);
     for (const g of succ) assert.ok(approx(d[g] / tot(d), c.master[g] / tot(c.master), 1e-9), `${gem} ${g}`);
     // and the max cutting skill brings failure down to (at least) the master failure
+    const failRed = P.gemFail.effects.cutFail * MAX;
     assert.ok(d.F <= c.master.F + 1e-9, `${gem} failure ${d.F} > master ${c.master.F}`);
-    assert.ok(approx(d.F, Math.max(0, c.novice.F - P.gemFail.perLevel * MAX)));
-    assert.ok(closeTo(d, blendCutTable(c, 1, P.gemFail.perLevel * MAX)));
+    assert.ok(approx(d.F, Math.max(0, c.novice.F - failRed)));
+    assert.ok(closeTo(d, blendCutTable(c, 1, failRed)));
   }
   // with today's numbers that is exactly the master table
   for (const gem of GEMS) {
     const c = CONFIG.cut[gem];
-    if (Math.abs(c.novice.F - P.gemFail.perLevel * MAX - c.master.F) < 1e-9) assert.ok(closeTo(cutDistribution(s, gem), c.master), gem);
+    if (Math.abs(c.novice.F - P.gemFail.effects.cutFail * MAX - c.master.F) < 1e-9) assert.ok(closeTo(cutDistribution(s, gem), c.master), gem);
   }
   // level 0 = the novice table
   const n = game(1);
@@ -259,8 +402,8 @@ test('spec: the gem grade skill at max level reaches the master cut table', () =
 
 test('spec: max-level refining / cutting skills cut the failure chance by at least 5 points', () => {
   const P = CONFIG.skills.perMaterial;
-  assert.ok(P.oreFail.perLevel * MAX >= 5 - 1e-9, `oreFail at level ${MAX}: ${P.oreFail.perLevel * MAX}`);
-  assert.ok(P.gemFail.perLevel * MAX >= 5 - 1e-9, `gemFail at level ${MAX}: ${P.gemFail.perLevel * MAX}`);
+  assert.ok(P.oreFail.effects.refineFail * MAX >= 5 - 1e-9, `oreFail at level ${MAX}: ${P.oreFail.effects.refineFail * MAX}`);
+  assert.ok(P.gemFail.effects.cutFail * MAX >= 5 - 1e-9, `gemFail at level ${MAX}: ${P.gemFail.effects.cutFail * MAX}`);
   const s = allSkillsMax();
   const plain = game(1);
   for (const bar of BARS) {
@@ -276,8 +419,8 @@ test('spec: max-level refining / cutting skills cut the failure chance by at lea
 test('smithBonuses combines rings, skills and intel', () => {
   const s = game(1);
   addRing(s, 'processTime', 'B', true); // 7
-  setSkillLevel(s, 'refineTime', 2); // 1
-  setSkillLevel(s, 'cutTime', 4); // 2
+  setSkillLevel(s, 'refineTime', 2); // 1% less time, 0.2 points less failure (every bar)
+  setSkillLevel(s, 'cutTime', 4); // 2% less time, 4% of the way to the master table (every gem)
   addRing(s, 'oreGrade', 'A', true); // 5
   setSkillLevel(s, 'oreGrade_copper', 5); // 1.5
   setSkillLevel(s, 'gemFail_diamond', 3); // 0.9
@@ -285,8 +428,8 @@ test('smithBonuses combines rings, skills and intel', () => {
   setSkillLevel(s, 'debris', 3); // +6% debris per search
   addRing(s, 'gemGrade', 'C', true); // 3
   const b = smithBonuses(s, SK);
-  assert.equal(b.gemBlend('topaz'), 40);
-  assert.equal(b.gemBlend('ruby'), 0);
+  assert.equal(b.gemBlend('topaz'), 44, '40 from Topaz grade + 4 from General cutting');
+  assert.equal(b.gemBlend('ruby'), 4, 'General cutting counts for every gem');
   assert.equal(b.gemUpgrade('topaz'), 3, 'gem upgrade luck is rings only');
   assert.equal(b.gemUpgrade('ruby'), 3);
   assert.equal(b.debrisPct, 6);
@@ -294,24 +437,62 @@ test('smithBonuses combines rings, skills and intel', () => {
   assert.equal(b.cutTimePct, 9);
   assert.equal(b.oreUpgrade('copper'), 6.5);
   assert.equal(b.oreUpgrade('iron'), 5);
+  assert.ok(approx(b.oreFailRed('copper'), 0.2), 'General refining counts for every bar');
+  assert.ok(approx(b.oreFailRed('iron'), 0.2));
   assert.ok(approx(b.gemFailRed('diamond'), 0.9));
   assert.equal(b.gemFailRed('ruby'), 0);
   assert.equal('revealPct' in b, false, 'no ore sight chance any more');
+  assert.equal('returnPct' in b, false, 'no return-travel bonus any more');
   assert.equal(b.sight, SK.intel.tracks.oreSight.base, 'sight = Ore sight intel (base) + Ore sight rings (none worn)');
   assert.equal(b.travelPct, 0);
+  assert.equal(b.loadPenaltyRed, 0);
   // default config: same sums
   const A = CONFIG.skills.activity;
   const P = CONFIG.skills.perMaterial;
   const d = smithBonuses(s);
-  assert.ok(approx(d.refineTimePct, ringVal('processTime', 'B') + A.refineTime.perLevel * 2));
-  assert.ok(approx(d.cutTimePct, ringVal('processTime', 'B') + A.cutTime.perLevel * 4));
-  assert.ok(approx(d.oreUpgrade('copper'), ringVal('oreGrade', 'A') + P.oreGrade.perLevel * 5));
+  assert.ok(approx(d.refineTimePct, ringVal('processTime', 'B') + A.refineTime.effects.refineTime * 2));
+  assert.ok(approx(d.cutTimePct, ringVal('processTime', 'B') + A.cutTime.effects.cutTime * 4));
+  assert.ok(approx(d.oreUpgrade('copper'), ringVal('oreGrade', 'A') + P.oreGrade.effects.refineUpgrade * 5));
   assert.ok(approx(d.oreUpgrade('iron'), ringVal('oreGrade', 'A')));
-  assert.ok(approx(d.gemFailRed('diamond'), P.gemFail.perLevel * 3));
-  assert.ok(approx(d.gemBlend('topaz'), P.gemGrade.perLevel * 4));
+  assert.ok(approx(d.oreFailRed('iron'), A.refineTime.effects.refineFail * 2));
+  assert.ok(approx(d.gemFailRed('diamond'), P.gemFail.effects.cutFail * 3));
+  assert.ok(approx(d.gemBlend('topaz'), P.gemGrade.effects.cutBlend * 4 + A.cutTime.effects.cutBlend * 4));
+  assert.ok(approx(d.gemBlend('ruby'), A.cutTime.effects.cutBlend * 4));
   assert.ok(approx(d.gemUpgrade('topaz'), ringVal('gemGrade', 'C')));
-  assert.ok(approx(d.debrisPct, CONFIG.skills.activity.debris.perLevel * 3));
+  assert.ok(approx(d.debrisPct, CONFIG.skills.activity.debris.effects.debrisClear * 3));
   assert.equal(d.sight, CONFIG.intel.tracks.oreSight.base);
+});
+
+test('smithBonuses: smithing and repair time per bar type, Travel / Carrying, the blend is capped at 100', () => {
+  const s = game(1);
+  setSkillLevel(s, 'smith_iron', 5);
+  setSkillLevel(s, 'repair_iron', 2);
+  setSkillLevel(s, 'repairTime', 4);
+  setSkillLevel(s, 'travel', 6);
+  setSkillLevel(s, 'carrying', 4);
+  const b = smithBonuses(s, SK);
+  assert.equal(b.smithTimePct('iron'), 10);
+  assert.equal(b.smithTimePct('copper'), 0);
+  assert.equal(b.repairTimePct('iron'), 3 * 2 + 4 + 0.5 * 5, '3 x Iron repair + 1 x General repair + 0.5 x Iron smithing');
+  assert.equal(b.repairTimePct('mythril'), 4, 'General repair counts for all gear');
+  assert.equal(b.travelPct, 3);
+  assert.equal(b.loadPenaltyRed, 20, '4 levels x 5% of the penalty');
+  // 10 x 10 = 100% of the way, then General cutting on top: still 100
+  setSkillLevel(s, 'gemGrade_ruby', 10);
+  setSkillLevel(s, 'cutTime', 10);
+  assert.equal(smithBonuses(s, SK).gemBlend('ruby'), 100);
+  // Carrying cannot remove more than all of the penalty
+  setSkillLevel(s, 'carrying', 10);
+  const big = cfgWith(SK, { skills: { activity: { carrying: { effects: { loadPenalty: 50 } } } } });
+  assert.equal(smithBonuses(s, big).loadPenaltyRed, 100);
+  // default config
+  const t = game(1);
+  setSkillLevel(t, 'smith_steel', 3);
+  setSkillLevel(t, 'repair_steel', 3);
+  setSkillLevel(t, 'repairTime', 3);
+  const P = CONFIG.skills.perMaterial;
+  assert.ok(approx(smithBonuses(t).smithTimePct('steel'), P.smith.effects.smithTime * 3));
+  assert.ok(approx(smithBonuses(t).repairTimePct('steel'), (P.repair.effects.repairTime + P.smith.effects.repairTime + CONFIG.skills.activity.repairTime.effects.repairTime) * 3));
 });
 
 test('smithBonuses.sight = Ore sight intel + Ore sight rings', () => {
@@ -325,10 +506,10 @@ test('smithBonuses.sight = Ore sight intel + Ore sight rings', () => {
   assert.equal(smithBonuses(s).sight, intelValue(s, 'oreSight') + ringVal('reveal', 'C'));
 });
 
-test('smithBonuses.gearCarePct = Gear care perLevel x level; rings and intel do not change it', () => {
+test('smithBonuses.gearCarePct = Gear care wear x level; rings and intel do not change it', () => {
   const s = game(1);
   assert.equal(smithBonuses(s).gearCarePct, 0);
-  const per = CONFIG.skills.activity.gearCare.perLevel;
+  const per = CONFIG.skills.activity.gearCare.effects.wear;
   setSkillLevel(s, 'gearCare', 3);
   addRing(s, 'processTime', 'S', true);
   addRing(s, 'searchTime', 'S', true);
@@ -337,7 +518,7 @@ test('smithBonuses.gearCarePct = Gear care perLevel x level; rings and intel do 
   setSkillLevel(s, 'gearCare', CONFIG.skills.maxLevel);
   assert.ok(approx(smithBonuses(s).gearCarePct, CONFIG.skills.maxLevel * per));
   // pinned: 2% per level
-  const two = cfgWith({ skills: { activity: { gearCare: { perLevel: 2 } } } });
+  const two = cfgWith({ skills: { activity: { gearCare: { effects: { wear: 2 } } } } });
   assert.equal(smithBonuses(s, two).gearCarePct, 2 * CONFIG.skills.maxLevel);
   // a save without the skill (not yet repaired by deserialize) reads as 0
   delete s.skills.gearCare;

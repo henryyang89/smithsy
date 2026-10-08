@@ -5,13 +5,12 @@
 import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
 import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
-import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, wearLoss } from '../core/gear.js';
+import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, scrapReturn, wearLoss } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
-import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
+import { skillDefs, xpToNext, itemXp, xpPerUnit, effectText } from '../core/skills.js';
 import { trackValueText } from '../core/intel.js';
 import { sightRange, searchesToFinish, searchesText } from '../core/map.js';
 import { simCounts } from '../core/sim.js';
-import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade } from './skillsview.js';
 import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 import { VERSION } from '../version.js';
@@ -113,7 +112,7 @@ const SECTIONS = [
   ['rings', 'Rings', ringSection],
   ['skills', 'Skills', skillSection],
   ['intel', 'Intel', intelSection],
-  ['repair', 'Durability & repair', repairSection],
+  ['repair', 'Durability, repair & scrap', repairSection],
 ];
 
 export function renderHelp(root, ctx) {
@@ -167,10 +166,10 @@ function howToPlay(ctx) {
         'Everything you find goes to that field\'s pile; when you leave you choose what to carry in your bag ',
         `(up to ${cfg.bag.slots} items, rarest first by default) and the rest stays in the pile for a later trip. `,
         `Debris (the number on a brown cell) is cleared by searching; boulders can never be searched. Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
-      h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear.'),
+      h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear (it costs bars and time). Scrap gear you no longer need to get some bars back.'),
       h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
         `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
-        h('b', {}, 'Repair gear at night'), ' (battle report or plan screen): it costs materials but no time.'),
+        h('b', {}, 'Keep a spare of each item so you can leave one home to repair it:'), ' repairs happen by day, at camp, on gear the adventurer does not have.'),
       h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
         'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
         `It comes back at the end of the day; every item that was used loses about ${p((wear.min + wear.max) / 2, 0)} durability (${wear.min}-${wear.max}% before the modifiers below), a little more against tougher enemies (${TIERS.map((t) => `${t} x${(wear.tierMult && wear.tierMult[t]) || 1}`).join(', ')}) and a little less with the ${cfg.skills.activity.gearCare ? cfg.skills.activity.gearCare.name : 'Gear care'} skill. At 0% it is destroyed.`),
@@ -180,7 +179,7 @@ function howToPlay(ctx) {
       h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
       h('li', {}, `The plan screen can simulate the fight to estimate your win chance before you confirm: one button, Estimate all, runs ${simSummary(ctx.state, cfg)} for every enemy of the roster and fills the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and Foresight rings make it bigger.`),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
-      h('li', {}, `Skills level up on their own as you work${commonSkillRingGrade(cfg) ? ` (a level-${cfg.skills.maxLevel} skill is as strong as a ${commonSkillRingGrade(cfg)}-grade ring of the same kind)` : ''}. Farther fields are richer but cost more travel time.`),
+      h('li', {}, 'Skills level up on their own as you work (', tab('skills', 'Skills & Intel'), '). Farther fields are richer but cost more travel time.'),
       h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
       h('li', {}, 'Grades are always listed from lowest to highest, left to right: ', OUTCOMES.map((g, i) => [i ? ' < ' : '', gradeSpan(g)]), ' (Fail is the lowest outcome).'),
       h('li', {}, 'In a field your sight shows some of the items still in the ground (a tag on the cell). Your sight grows with Ore sight intel and Ore sight rings; on day 1 it is too low to see anything.')),
@@ -207,12 +206,13 @@ function timeSection(cfg) {
     ]),
     sub('What costs time (base, before bonuses)'),
     tbl(['Activity', 'Base time'], [
-      ['Travel', `${mins(cfg.map.travelMinPerStep)} per map step, +${p(cfg.map.loadPenaltyPerItem)} per item in the bag`],
+      ['Travel', `${mins(cfg.map.travelMinPerStep)} per map step, +${p(cfg.map.loadPenaltyPerItem)} per item you carry (the Carrying skill lowers the extra)`],
       ['Search a 3x3 area', `${mins(cfg.field.searchMin)}${cfg.field.freshCellMin > 0 ? ` + ${mins(cfg.field.freshCellMin)} for each fresh (never-searched) cell in the area` : ''} (also clears debris: no separate action)`],
       ['Refine a bar', byMinutes(cfg.refine)],
       ['Cut a gem', byMinutes(cfg.cut)],
-      ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem`],
-      ['Repair gear', `by day: ${p(g.repair.timeFraction)} of the smithing time x fraction repaired; at night (battle report / plan): no time`],
+      ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem; the bar type's Smithing skill makes it faster`],
+      ['Repair gear', `${p(g.repair.timeFraction)} of the smithing time x fraction repaired, by day at camp; the repair skills make it faster`],
+      ['Scrap gear', 'no time'],
       ['Choose what to carry, move items between bag and field pile, unload at camp', 'free'],
     ]),
   ];
@@ -229,9 +229,9 @@ function mapSection(cfg) {
   return [
     kv([
       ['Map', `${m.size} x ${m.size} map cells, camp in the center. ${m.blockedCells} cells are blocked (impassable); every field stays reachable, and a map is made again when the rocks force a field more than ${m.maxDetour} steps farther than the straight walk.`],
-      ['Travel time', formula(`steps x ${m.travelMinPerStep}m x (1 + ${m.loadPenaltyPerItem}% x items in bag)`, 'Steps = shortest path around blocked cells. You can travel field to field.')],
+      ['Travel time', formula(`steps x ${m.travelMinPerStep}m x (1 + ${m.loadPenaltyPerItem}% x items carried)`, 'Steps = shortest path around blocked cells. You can travel field to field.')],
       ['Bag', `${cfg.bag.slots} slots, 1 raw ore or gem per slot. You choose what to carry each time you leave a field. A full bag adds ${p(m.loadPenaltyPerItem * cfg.bag.slots)} travel time. Camp storage is unlimited.`],
-      ['Bonuses', `Travel rings reduce every trip; the Return travel skill reduces trips to camp. Total capped at ${p(cfg.processing.maxTimeReduction)}.`],
+      ['Bonuses', `Travel rings and the Travel skill reduce every trip; the Carrying skill reduces the extra time per carried item. Total capped at ${p(cfg.processing.maxTimeReduction)}.`],
     ]),
     sub('Base travel minutes by distance and bag load'),
     tbl(['Steps', ...loads.map((l) => ({ v: l === 0 ? 'Empty bag' : `${l} items`, cls: 'num' }))], rows),
@@ -295,7 +295,7 @@ function fieldSection(cfg) {
     tbl(['Item', { v: 'Sight needed', cls: 'num' }], sightRows),
     kv([
       ['Debris', `${p(f.debrisChance)} of cells, ${num(da.min)}-${num(da.max)} thick (in search effort; the number on the cell is what is left). There is no separate clear action: searching a debris cell spends that cell's effort roll (${p(f.searchEfficiency)} ± ${num(rnd)}) x debris clearing power (1 + ${debrisSkill ? debrisSkill.name : 'debris'} skill %) on the debris first; any effort left over searches the cell in the same search. At base power a ${num(da.min)}-thick cell takes ${clearSearches(da.min)} to clear, a ${num(da.max)}-thick one ${clearSearches(da.max)}. Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
-      debrisSkill ? ['Debris clearing skill', `+${num(debrisSkill.perLevel, 2)}% debris cleared per search per level (+${num(debrisSkill.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). XP: ${debrisSkill.xpFrom}.`] : null,
+      debrisSkill ? ['Debris clearing skill', `+${num(debrisSkill.effects.debrisClear, 2)}% debris cleared per search per level. XP: ${num(debrisSkill.xp)} per ${debrisSkill.xpUnit}.`] : null,
       ['Boulders', `${boulderText} cell${boulderText === '1' ? '' : 's'} per field (a dark rock): can never be cleared or searched and hold nothing. They do not count toward a field's searched %.`],
       ['Items per loot cell', `${Object.entries(countPct).map(([k, v]) => `${k} (${p(v, 0)})`).join(', ')}, average ${num(avg, 2)}`],
       ['Ores vs gems', `The share of gems among the items rises with distance, from ${p(rows[0].gemShare, 0)} to ${p(rows[last - 1].gemShare, 0)}; every gem type is equally likely.`],
@@ -318,7 +318,9 @@ function processSection(cfg) {
   const sk = cfg.skills;
   const gg = sk.perMaterial.gemGrade;
   const gf = sk.perMaterial.gemFail;
-  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(gg.perLevel, 1e-9) - 1e-9));
+  const blendPerLevel = gg.effects.cutBlend; // % of the way to the master table per grade skill level
+  const cutFailPerLevel = gf.effects.cutFail; // failure points removed per cutting skill level
+  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(blendPerLevel, 1e-9) - 1e-9));
   const gemLuck = cfg.rings.types.gemGrade;
   const barLuck = cfg.rings.types.oreGrade;
   const barRows = BARS.map((b) => {
@@ -336,7 +338,7 @@ function processSection(cfg) {
   }
   const gemLabel = (gems) => (gems.length === GEMS.length ? 'All gems' : gems.map(cap).join(', '));
   // Failure only depends on the cutting skill: the master table's failure is reached at this cutting level.
-  const failLv = (c) => Math.min(sk.maxLevel, Math.max(0, Math.ceil((c.novice.F - c.master.F) / Math.max(gf.perLevel, 1e-9) - 1e-9)));
+  const failLv = (c) => Math.min(sk.maxLevel, Math.max(0, Math.ceil((c.novice.F - c.master.F) / Math.max(cutFailPerLevel, 1e-9) - 1e-9)));
   const gemRows = groups.flatMap(({ gems, c }) => (c.novice
     ? [
       [h('b', {}, gemLabel(gems)), 'Novice (grade skill 0)', n(c.minutes), ...distCells(c.novice)],
@@ -349,7 +351,7 @@ function processSection(cfg) {
   for (let l = 0; l <= sk.maxLevel; l += Math.max(1, Math.floor(sk.maxLevel / 5))) levels.push(l);
   if (levels[levels.length - 1] !== sk.maxLevel) levels.push(sk.maxLevel);
   const blendRows = tiered ? levels.map((l) => {
-    const t = Math.min(100, gg.perLevel * l);
+    const t = Math.min(100, blendPerLevel * l);
     return [n(l, 0), np(t, 0), ...distCells1(blendCutTable(tiered.c, t / 100, 0))];
   }) : [];
   return [
@@ -363,9 +365,9 @@ function processSection(cfg) {
     ] : null,
     h('ul', { class: 'mi-list' },
       h('li', {}, 'Grades read from lowest (left) to highest (right). Fail = the material is lost. The Workshop shows these chances already adjusted by your rings and skills.'),
-      h('li', {}, 'Time: Refining rings (refining and cutting) + Refining / Cutting speed skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
-      h('li', {}, `Bars: ${barLuck ? `${barLuck.name} rings` : 'Rings'} + the bar grade skill (${num(sk.perMaterial.oreGrade.perLevel, 2)}% per level) give each successful bar that % chance to go up one grade (S stays S). The refining skill for that bar moves failure chance into grade D (${num(sk.perMaterial.oreFail.perLevel, 2)} points per level).`),
-      tiered ? h('li', {}, `Gems: each gem's grade skill blends its table from novice to master, ${num(gg.perLevel, 2)}% of the way per level (master at level ${masterLv}). D to S follow the blend and fill whatever failure leaves. Failure = the novice failure chance minus the gem's cutting skill (${num(gf.perLevel, 2)} points per level, ${num(gf.perLevel * sk.maxLevel, 2)} at level ${sk.maxLevel}). Then ${gemLuck ? `${gemLuck.name} rings` : 'gem luck rings'} give each successful cut their % chance to go up one grade, on top.`) : null),
+      h('li', {}, 'Time: Refining rings (refining and cutting) + the General refining / General cutting skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
+      h('li', {}, `Bars: ${barLuck ? `${barLuck.name} rings` : 'Rings'} + the bar grade skill (${num(sk.perMaterial.oreGrade.effects.refineUpgrade, 2)}% per level) give each successful bar that % chance to go up one grade (S stays S). Failure chance moves into grade D: ${num(sk.perMaterial.oreFail.effects.refineFail, 2)} points per level of that bar's refining skill, plus ${num(sk.activity.refineTime.effects.refineFail, 2)} points per level of General refining (every bar).`),
+      tiered ? h('li', {}, `Gems: each gem's grade skill blends its table from novice to master, ${num(blendPerLevel, 2)}% of the way per level; General cutting adds ${num(sk.activity.cutTime.effects.cutBlend, 2)}% per level to every gem. D to S follow the blend and fill whatever failure leaves. Failure = the novice failure chance minus the gem's cutting skill (${num(cutFailPerLevel, 2)} points per level). Then ${gemLuck ? `${gemLuck.name} rings` : 'gem luck rings'} give each successful cut their % chance to go up one grade, on top.`) : null),
   ];
 }
 
@@ -614,48 +616,46 @@ function skillSection(cfg) {
     total += xpToNext(l, cfg);
   }
   const defs = skillDefs(cfg);
-  const activity = defs.filter((d) => d.group === 'activity');
-  const ringCell = (key) => {
-    const m = skillRingMatch(key, cfg);
-    return m ? skillRingText(m) : h('span', { class: 'muted' }, 'no ring');
-  };
-  const actRows = activity.map((d) => [h('b', {}, d.name), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, ringCell(d.key), d.desc, d.xpFrom]);
+  // What one level of a skill gives, e.g. "0.6% less travel time"
+  const levelGain = (effects) => Object.entries(effects).map(([e, v]) => `${num(v, 2)}${s.effects[e].unit === 'pts' ? ' points' : '%'} ${s.effects[e].text}`).join('; ');
   const xpRange = (mats) => {
     const xs = mats.map((m) => itemXp(m, cfg));
     const lo = Math.min(...xs);
     const hi = Math.max(...xs);
     return lo === hi ? num(lo) : `${num(lo)}-${num(hi)}`;
   };
+  const actRows = defs.filter((d) => !d.material).map((d) => [h('b', {}, d.name), levelGain(d.effects), `${num(xpPerUnit(d, cfg))} per ${d.xpUnit}`]);
   const matRows = Object.entries(s.perMaterial).map(([k, d]) => {
-    const isOre = k.startsWith('ore');
-    const label = `${isOre ? 'Bar' : 'Gem'} ${d.name}`;
-    return [h('b', {}, label), { v: num(d.perLevel, 2), cls: 'num' }, { v: num(d.perLevel * s.maxLevel, 2), cls: 'num' }, ringCell(k), d.desc,
-      `${xpRange(isOre ? BARS : GEMS)} XP per ${isOre ? 'bar refined' : 'gem cut'} of that type (by material, table below)`];
+    const mats = d.materials === 'bars' ? BARS : GEMS;
+    return [h('b', {}, `${d.materials === 'bars' ? 'Bar' : 'Gem'} ${d.label.replace(/^bar /, '')}`), levelGain(d.effects),
+      d.xp !== undefined ? `${num(d.xp)} per ${d.xpUnit}` : `${xpRange(mats)} per ${d.xpUnit} (by material, table below)`];
   });
-  // XP per item by material, and how many items one skill needs to reach max level.
-  const xpTable = (mats, what) => tbl([what, { v: 'XP per item', cls: 'num' }, { v: `Items to level ${s.maxLevel}`, cls: 'num' }],
+  // XP per item by material, and how many items one skill needs to reach its highest level.
+  const xpTable = (mats, what) => tbl([what, { v: 'XP per item', cls: 'num' }, { v: 'Items for the highest level', cls: 'num' }],
     mats.map((m) => {
       const xp = itemXp(m, cfg);
       return [h('b', {}, cap(m)), n(xp, 0), xp > 0 ? n(Math.ceil(total / xp), 0) : { v: '·', cls: 'num muted' }];
     }));
   return [
     kv([
-      ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity.`],
-      ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, `${xpRow.join(', ')} (total ${total.toLocaleString('en-US')} XP to reach level ${s.maxLevel})`)],
-      ['Bonus', `per-level value x level; skill bonuses add to ring bonuses. ${skillVsRingText(cfg)}`],
+      ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity. Point at (or tap) a skill on the Skills & Intel tab for what it gives now, what the next level gives and how to earn XP.`],
+      ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, `${xpRow.join(', ')} (total ${total.toLocaleString('en-US')} XP for the highest level)`)],
+      ['Who it works for', `Skills of an activity (Travel, Carrying, searching, General refining / cutting / repair, Gear care) work for every material. The skills of one bar type or gem type only work for that material, and count far more than the general ones: for example a bar type\'s own refining skill removes ${num(s.perMaterial.oreFail.effects.refineFail / s.activity.refineTime.effects.refineFail, 2)} times the failure chance that General refining does.`],
+      ['Bonuses', `Skill bonuses add to the matching smith ring bonuses; time reductions from rings and skills together are capped at ${p(cfg.processing.maxTimeReduction)}.`],
     ]),
-    sub('Activity skills'),
-    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, `Level ${s.maxLevel} vs rings`, 'Effect', 'XP from'], actRows),
-    sub('Per-material skills (one of each per bar type / gem type)'),
-    tbl(['Skill', { v: 'Per level', cls: 'num' }, { v: `At level ${s.maxLevel}`, cls: 'num' }, `Level ${s.maxLevel} vs rings`, 'Effect', 'XP from'], matRows),
+    sub('Skills of an activity'),
+    tbl(['Skill', 'Per level', 'XP'], actRows),
+    sub('Skills of one bar type or gem type (one of each per material)'),
+    tbl(['Skill', 'Per level', 'XP'], matRows),
     sub('Per-material XP (rarer materials give more; failed attempts count)'),
     h('div', { class: 'mi-two' },
       h('div', {}, xpTable(BARS, 'Bar refined')),
       h('div', {}, xpTable(GEMS, 'Gem cut'))),
-    h('p', { class: 'mi-note' }, 'Each refined bar gives this XP to both skills of that bar type (grade and refining); each cut gem to both skills of that gem.'),
+    h('p', { class: 'mi-note' }, 'Each refined bar gives this XP to both refining skills of that bar type (grade and refining); each bar smithed into gear gives it to that bar type\'s Smithing skill; each cut gem gives it to both skills of that gem.'),
     h('ul', { class: 'mi-list' },
-      s.activity.debris ? h('li', {}, `${s.activity.debris.name}: +${num(s.activity.debris.perLevel, 2)}% debris cleared per search per level (+${num(s.activity.debris.perLevel * s.maxLevel, 2)}% at level ${s.maxLevel}). XP: ${s.activity.debris.xpFrom}. Debris is cleared by searching (see Fields & searching).`) : null,
-      h('li', {}, `Gem grade: ${num(s.perMaterial.gemGrade.perLevel, 2)}% of the way from the novice to the master cutting table per level (see Refining & cutting). It has no ring; Gem luck rings add upgrade chances on top.`)),
+      s.activity.debris ? h('li', {}, `${s.activity.debris.name}: debris is cleared by searching (see Fields & searching).`) : null,
+      h('li', {}, `Gem grade has no ring; Gem luck rings add upgrade chances on top (see Refining & cutting).`),
+      s.activity.carrying ? h('li', {}, `${s.activity.carrying.name}: ${effectText('loadPenalty', s.activity.carrying.effects.loadPenalty, cfg)} for the first level (the Skills tab shows your current penalty).`) : null),
   ];
 }
 
@@ -684,8 +684,11 @@ function repairSection(cfg) {
   const rows = SLOTS.map((s) => {
     const full = repairInfo({ slot: s, material: 'x', grade: GRADES[0], gem: null, durability: 0 }, cfg);
     const one = repairInfo({ slot: s, material: 'x', grade: GRADES[0], gem: null, durability: 100 - avgLoss }, cfg);
-    return [h('b', {}, cap(s)), n(g.slots[s].bars, 0), { v: `${fmtBars(full.bars)} bars`, cls: 'num' }, { v: mins(full.minutes), cls: 'num' },
-      { v: `${fmtBars(one.bars)} bars`, cls: 'num' }, { v: mins(one.minutes), cls: 'num' }];
+    const scrapNew = scrapReturn({ slot: s, material: 'x', grade: GRADES[0], durability: 100 }, cfg).qty;
+    const scrapOld = scrapReturn({ slot: s, material: 'x', grade: GRADES[0], durability: 50 }, cfg).qty;
+    return [h('b', {}, cap(s)), n(g.slots[s].bars, 0), { v: `${fmtBars(full.bars)} bars`, cls: 'num' }, { v: mins(full.baseMinutes), cls: 'num' },
+      { v: `${fmtBars(one.bars)} bars`, cls: 'num' }, { v: mins(one.baseMinutes), cls: 'num' },
+      { v: `${num(scrapNew, 2)} bars`, cls: 'num' }, { v: `${num(scrapOld, 2)} bars`, cls: 'num' }];
   });
   const tierMult = loss.tierMult || {};
   const wearRows = TIERS.map((t) => {
@@ -699,15 +702,16 @@ function repairSection(cfg) {
   return [
     kv([
       ['Wear', `Each fight, every item the adventurer actually used loses a durability roll of ${loss.min}-${loss.max}% (average ${num(avgLoss)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %). The result is kept to one decimal (for example 9.6%) so every Gear care level counts, and is at least 1%. Packed but unused items do not wear. At 0% the item is destroyed.`],
-      cfg.skills.activity.gearCare ? [cfg.skills.activity.gearCare.name, `Skill: ${num(cfg.skills.activity.gearCare.perLevel, 2)}% less wear per level (${num(cfg.skills.activity.gearCare.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). It earns ${cfg.skills.gearCareXpPerFight} XP for every fight the adventurer survives (win or draw), so it grows as you win.`] : null,
-      ['Repair', 'Only back to 100%, and not while the item is packed for today\'s fight. By day: at camp (Workshop), costs time. At night (battle report or plan screen): any gear at home, no time, materials only.'],
-      ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],
-      ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired`, 'By day only. Repairs at night cost no time.')],
-      ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and, by day, the infusion time counts in the repair time.`],
+      cfg.skills.activity.gearCare ? [cfg.skills.activity.gearCare.name, `Skill: ${num(cfg.skills.activity.gearCare.effects.wear, 2)}% less wear per level. It earns ${cfg.skills.activity.gearCare.xp} XP for every fight the adventurer survives (win or draw), so it grows as you win.`] : null,
+      ['Repair', 'Only back to 100%, only by day, at camp (Workshop), and only on gear the adventurer does not have: it is away when packed. It costs bars and time. Keep a spare of each item so you can leave one home to repair it.'],
+      ['Cost', formula(`${g.repair.materialFraction}% x original bars (and ${g.repair.gemFraction}% x its gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],
+      ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired, less your repair skills`, `Each bar type's Repair skill cuts the time of gear of that bar type by ${num(cfg.skills.perMaterial.repair.effects.repairTime, 2)}% per level, its Smithing skill by ${num(cfg.skills.perMaterial.smith.effects.repairTime, 2)}%, General repair by ${num(cfg.skills.activity.repairTime.effects.repairTime, 2)}% (all gear). The total is capped at ${p(cfg.processing.maxTimeReduction)}. Repairs must finish by ${formatClock(cfg.time.dayEndMin)}.`)],
+      ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and the infusion time counts in the repair time.`],
+      ['Scrap', formula(`${g.repair.materialFraction}% x original bars x durability`, 'Destroys the item and gives back bars of its material and grade, rounded down to 0.01; the gem is lost. It takes no time, and the Workshop shows what you get before you confirm. Repairing an item just to scrap it never pays.')],
     ]),
     sub('Wear per fight by enemy tier (before Gear care)'),
     tbl(['Enemy tier', { v: 'Multiplier', cls: 'num' }, { v: 'Loss per used item', cls: 'num' }, { v: 'Average', cls: 'num' }], wearRows),
-    sub('Repair cost by slot (item without a gem)'),
-    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time by day', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time by day', cls: 'num' }], rows),
+    sub('Repair cost and scrap return by slot (item without a gem; base times before the repair skills)'),
+    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time', cls: 'num' }, { v: 'Scrap at 100%', cls: 'num' }, { v: 'Scrap at 50%', cls: 'num' }], rows),
   ];
 }

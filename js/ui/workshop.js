@@ -1,10 +1,9 @@
 // Workshop tab: storage, refining ore, cutting gems, smithing gear, repairing/scrapping gear.
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.ws_*.
-import { h, section, bar, num } from './dom.js';
+import { h, section, bar, num, tip } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { skillBonus } from '../core/skills.js';
-import { craft, canCraft, craftCost, craftMinutes, gearStats, gearName, scrap, STAT_LABELS, fmtStat } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, smithMinutes, gearStats, gearName, scrap, scrapReturn, STAT_LABELS, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, EPS } from '../core/util.js';
@@ -143,10 +142,10 @@ function processPanel(ctx, kind, blocked) {
   const left = timeLeft(s, cfg);
   const verb = isRefine ? 'Refine' : 'Cut';
   const sk = cfg.skills;
-  const gemGradeDef = sk.perMaterial.gemGrade;
-  const gemFailDef = sk.perMaterial.gemFail;
+  const blendPerLevel = sk.perMaterial.gemGrade.effects.cutBlend; // % of the way to the master table, per grade skill level
+  const cutFailPerLevel = sk.perMaterial.gemFail.effects.cutFail; // failure points removed per cutting skill level
   // Level at which the gem grade skill reaches the master table (100% of the way).
-  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(gemGradeDef.perLevel, EPS) - 1e-9));
+  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(blendPerLevel, EPS) - 1e-9));
   const levelOf = (key) => (s.skills[key] && s.skills[key].level) || 0;
 
   const rows = (isRefine ? BARS : GEMS).map((k) => {
@@ -183,7 +182,7 @@ function processPanel(ctx, kind, blocked) {
     if (tiered) {
       const gLv = levelOf(`gemGrade_${k}`);
       const fLv = levelOf(`gemFail_${k}`);
-      const blend = Math.min(100, skillBonus(s, `gemGrade_${k}`, cfg));
+      const blend = b.gemBlend(k);
       nameCell = h('div', {}, h('b', {}, cap(k)),
         h('div', { class: 'ws-sub', title: `${cap(k)} grade skill level ${gLv} of ${sk.maxLevel}: your table is ${num(blend)}% of the way from novice to master` }, `Grade skill lv ${gLv} · ${num(blend)}% to master`),
         h('div', { class: 'ws-sub', title: `${cap(k)} cutting skill level ${fLv} of ${sk.maxLevel}: failure ${num(failRed)} points lower` }, `Cutting skill lv ${fLv} · fail ${num(dist.F)}%`),
@@ -231,7 +230,7 @@ function processPanel(ctx, kind, blocked) {
     h('p', { class: 'ws-sub ws-intro' }, isRefine
       ? 'Each bar rolls a grade (D lowest, S highest). Fail = the ore is lost. Chances already include your rings and skills.'
       : tieredAll
-        ? `Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. "Now" is your table: each gem's grade skill blends D to S from the novice table (level 0) to the master table (level ${masterLv}), +${num(gemGradeDef.perLevel)}% of the way per level; failure starts at the novice value and its cutting skill lowers it by ${num(gemFailDef.perLevel)} points per level. Gem luck rings (+${num(gemLuck)}% now) then give each successful cut that chance to go up one grade, on top. "Now" includes all of this.`
+        ? `Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. "Now" is your table: each gem's grade skill blends D to S from the novice table (level 0) to the master table (level ${masterLv}), +${num(blendPerLevel)}% of the way per level (General cutting adds a little to every gem); failure starts at the novice value and its cutting skill lowers it by ${num(cutFailPerLevel)} points per level. Gem luck rings (+${num(gemLuck)}% now) then give each successful cut that chance to go up one grade, on top. "Now" includes all of this.`
         : 'Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. Chances already include your rings and skills.'),
     h('div', { class: 'ws-scroll' },
       tbl([isRefine ? 'Bar' : 'Gem', 'Needs (you have)', { v: 'Time each', cls: 'num' }, distHeader(tieredAll), 'You can make', ''], rows, `ws-process${tieredAll ? ' ws-process-gems' : ''}`)),
@@ -298,7 +297,7 @@ function smithPanel(ctx, blocked) {
         const n = cfg.gear.slots[ui.ws_slot].bars;
         if (!enough(st.bars[`${ui.ws_mat}:${ui.ws_grade}`], n)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, n, ui.ws_grade);
       }),
-    }, SLOTS.map((sl) => h('option', { value: sl, selected: sl === slot }, `${cap(sl)} — ${cfg.gear.slots[sl].bars} bars, ${craftMinutes(sl, false, cfg)}m`))),
+    }, SLOTS.map((sl) => h('option', { value: sl, selected: sl === slot }, `${cap(sl)} — ${cfg.gear.slots[sl].bars} bars, ${num(smithMinutes(s, sl, mat, false, cfg))}m`))),
 
     h('label', { for: 'ws-mat' }, 'Material'),
     h('select', {
@@ -343,10 +342,11 @@ function smithPanel(ctx, blocked) {
   const mock = { slot, material: mat, grade, gem };
   const stats = gearStats(mock, cfg);
   const base = gearStats({ ...mock, gem: null }, cfg);
-  const minutes = craftMinutes(slot, !!gem, cfg);
+  const baseMinutes = craftMinutes(slot, !!gem, cfg);
+  const minutes = smithMinutes(s, slot, mat, !!gem, cfg);
   const cost = craftCost(spec, cfg);
   let reason = blocked ? `Workshop closed: ${blocked}` : canCraft(s, spec, cfg);
-  if (!reason && s.time + minutes > cfg.time.dayEndMin + EPS) reason = `Not enough time left today (needs ${minutes}m, ${mins(Math.max(0, left))} left).`;
+  if (!reason && s.time + minutes > cfg.time.dayEndMin + EPS) reason = `Not enough time left today (needs ${num(minutes)}m, ${mins(Math.max(0, left))} left).`;
 
   const statRows = Object.entries(stats).map(([k, v]) => {
     const fromGem = v - (base[k] || 0);
@@ -364,6 +364,9 @@ function smithPanel(ctx, blocked) {
     }),
   ];
   const timeParts = `${need} bars × ${cfg.gear.smithMinPerBar}m${gem ? ` + ${cfg.gear.infuseMin}m gem` : ''}`;
+  const timeTip = minutes < baseMinutes - EPS
+    ? `Base ${num(baseMinutes)}m (${timeParts}); your ${cap(mat)} smithing skill cuts it to ${num(minutes)}m. See the Skills tab.`
+    : `Base ${num(baseMinutes)}m (${timeParts}). The ${cap(mat)} smithing skill (Skills tab) makes it faster.`;
 
   const preview = h('div', { class: 'ws-preview' },
     h('div', { class: 'ws-preview-name' }, 'Result: ', h('b', { class: `grade-${grade}` }, gearName(mock)), h('span', { class: 'muted' }, ' · 100% durability')),
@@ -371,7 +374,7 @@ function smithPanel(ctx, blocked) {
     h('div', { class: 'ws-cost' },
       h('div', {}, h('span', { class: 'muted' }, 'Cost: '), costLines.map((c, i) => [i ? ', ' : '', c.text, ' ',
         h('span', { class: enough(c.have, c.n) ? 'ok' : 'err' }, `(have ${qty(c.have)})`)])),
-      h('div', {}, h('span', { class: 'muted' }, 'Time: '), h('b', {}, `${minutes}m`), ` (${timeParts})`,
+      h('div', {}, h('span', { class: 'muted' }, 'Time: '), h('b', { ...tip(timeTip) }, `${num(minutes)}m`),
         !blocked && !reason ? h('span', { class: 'muted' }, ` · done at ${formatClock(s.time + minutes)}`) : null)),
     h('div', { class: 'row ws-craft-row' },
       h('button', {
@@ -383,7 +386,7 @@ function smithPanel(ctx, blocked) {
           ctx.ui.ws_last = { area: 'smith', ok: res.ok, msg: res.msg };
           return res;
         }, { toast: true }),
-      }, `Craft (${minutes}m)`),
+      }, `Craft (${num(minutes)}m)`),
       reason ? h('span', { class: 'err ws-reason' }, reason) : h('span', { class: 'ok ws-reason' }, 'Ready to craft.')),
     ui.ws_last && ui.ws_last.area === 'smith' ? h('p', { class: `ws-last ${ui.ws_last.ok ? '' : 'err'}` }, h('span', { class: 'muted' }, 'Last: '), ui.ws_last.msg) : null);
 
@@ -395,7 +398,7 @@ function smithPanel(ctx, blocked) {
       const st2 = gearStats({ slot: sl, material: mat, grade, gem: null }, cfg);
       return {
         attrs: { class: sl === slot ? 'ws-selrow' : '' },
-        cells: [cap(sl), { v: String(cfg.gear.slots[sl].bars), cls: 'num' }, { v: `${craftMinutes(sl, false, cfg)}m`, cls: 'num' },
+        cells: [cap(sl), { v: String(cfg.gear.slots[sl].bars), cls: 'num' }, { v: `${num(smithMinutes(s, sl, mat, false, cfg))}m`, cls: 'num' },
           ...BASE_STATS.map((k) => (st2[k] ? { v: num(st2[k]), cls: 'num' } : { v: '–', cls: 'num ws-zero' }))],
       };
     }), 'ws-compact');
@@ -450,6 +453,11 @@ function gearPanel(ctx, blocked) {
       ? h('span', { class: 'muted' }, 'Full durability')
       : repairLine(ctx, item, { blocked: blocked ? `Workshop closed: ${blocked}` : null });
     const scrapWhy = item.packed ? 'With the adventurer today' : blocked ? `Workshop closed: ${blocked}` : null;
+    const back = scrapReturn(item, cfg);
+    const [bm, bg] = back.key.split(':');
+    const backText = back.qty > EPS ? `${qty(back.qty)} ${cap(bm)} ${bg} bar${back.qty === 1 ? '' : 's'}` : 'nothing';
+    const scrapMath = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${num(d)}% durability`;
+    const scrapNote = `You get back ${backText} (${scrapMath}).${item.gem ? ' The gem is lost.' : ''}`;
     return {
       attrs: { class: item.packed ? 'ws-packed' : '' },
       cells: [
@@ -461,9 +469,9 @@ function gearPanel(ctx, blocked) {
         h('button', {
           class: 'small ghost ws-scrap',
           disabled: !!scrapWhy,
-          title: scrapWhy || 'Destroy this item. No materials are returned.',
+          ...tip(scrapWhy || `Scrap this item. ${scrapNote}`),
           onclick: () => {
-            if (confirm(`Scrap ${gearName(item)}? It is destroyed and no materials are returned.`)) ctx.act(() => scrap(ctx.state, item.id), { toast: true });
+            if (confirm(`Scrap ${gearName(item)}? ${scrapNote}`)) ctx.act(() => scrap(ctx.state, item.id, cfg), { toast: true });
           },
         }, 'Scrap'),
       ],
@@ -471,9 +479,9 @@ function gearPanel(ctx, blocked) {
   });
 
   return section(title,
-    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. A full repair costs ${cfg.gear.repair.materialFraction}% of the original bars (and gem) and, by day, ${cfg.gear.repair.timeFraction}% of the smithing time, scaled by the % repaired. `,
-      'If you lack the item\'s own grade, the lowest higher grade you have enough of is used instead (no extra benefit).'),
-    h('p', { class: 'rp-night' }, h('b', {}, 'Repairs at night are free of time: '),
-      'after the day ends, the battle report and the plan screen let you repair any gear at home for materials only.'),
+    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. A full repair costs ${cfg.gear.repair.materialFraction}% of the original bars (and ${cfg.gear.repair.gemFraction}% of the gem) and ${cfg.gear.repair.timeFraction}% of the smithing time, scaled by the % repaired; the repair skills make it faster. `,
+      'If you lack the item\'s own grade, the lowest higher grade you have enough of is used instead (no extra benefit). ',
+      'Repairs happen here by day, at camp, on gear the adventurer does not have: leave an item home to repair it. Scrapping gives back ',
+      `${cfg.gear.repair.materialFraction}% of the bars, scaled by the durability left (the gem is lost).`),
     h('div', { class: 'ws-scroll' }, tbl(['Item', 'Stats', 'Durability', 'Repair to 100%', ''], rows, 'ws-gear')));
 }

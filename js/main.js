@@ -263,6 +263,37 @@ function render() {
   }
 }
 
+// Hover details on touch screens. A `title` never shows on a phone, so an element built with tip() (js/ui/dom.js)
+// also carries data-tip; tapping it opens the small popover #tip under it. The next tap anywhere, or a scroll,
+// closes it. Mouse users keep the normal title hover (pointerType 'mouse' is ignored).
+function installTips() {
+  const pop = document.getElementById('tip');
+  if (!pop) return;
+  let open = null;
+  const hide = () => {
+    pop.className = '';
+    open = null;
+  };
+  document.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse') return;
+    const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
+    if (!el || el === open) {
+      hide();
+      return;
+    }
+    open = el;
+    pop.textContent = el.getAttribute('data-tip');
+    pop.className = 'show';
+    const r = el.getBoundingClientRect();
+    const w = pop.offsetWidth;
+    pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    const below = r.bottom + 6;
+    pop.style.top = `${below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, r.top - pop.offsetHeight - 6) : below}px`;
+  });
+  window.addEventListener('scroll', hide, true);
+}
+
+installTips();
 render();
 if (startupNote) {
   save();

@@ -9,6 +9,12 @@ export const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // Floating point tolerance for fractional material quantities (repairs use 0.01 bars).
 export const EPS = 1e-9;
 
+// A material quantity: whole numbers as they are, fractions with 2 decimals ("2", "0.42", "1.05").
+export function qtyText(v) {
+  const r = round2(v || 0);
+  return Number.isInteger(r) ? String(r) : r.toFixed(2);
+}
+
 // "14:05" from minutes after midnight
 export function formatClock(min) {
   const m = Math.floor(min + EPS);

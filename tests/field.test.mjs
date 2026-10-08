@@ -23,7 +23,7 @@ const PIN = {
   map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
   bag: { slots: 20 },
   processing: { maxTimeReduction: 75 },
-  skills: { xpBase: 100, maxLevel: 10, activity: { searchTime: { perLevel: 0.5 }, searchEff: { perLevel: 1 }, debris: { perLevel: 10 }, returnTravel: { perLevel: 0.5 } } },
+  skills: { xpBase: 100, maxLevel: 10, activity: { searchTime: { effects: { searchTime: 0.5 } }, searchEff: { effects: { searchEff: 1 } }, debris: { effects: { debrisClear: 10 } }, travel: { effects: { travelTime: 0.5 } } } },
   rings: { duplicateFactor: 0.5, types: { searchTime: { values: [5, 6, 7, 8, 10] }, searchEff: { values: [10, 12, 14, 16, 20] }, reveal: { values: [10, 15, 20, 25, 30] }, travelTime: { values: [5, 6, 7, 8, 10] } } },
   intel: { tracks: { oreSight: { base: 0, gains: [10, 10, 10, 8, 8, 8, 6, 6, 6, 4], max: 100 } } },
 };
@@ -269,7 +269,7 @@ test('an area where every cell is under thick debris can still be searched: it c
 
 test('debris skill: each search clears effort x debrisClearMult (1 + skill %) of debris', () => {
   const { s, f } = setup();
-  const per = CFG.skills.activity.debris.perLevel; // 10
+  const per = CFG.skills.activity.debris.effects.debrisClear; // 10
   setSkillLevel(s, 'debris', 5);
   const m = debrisClearMult(s, CFG);
   assert.equal(m, 1 + (per * 5) / 100);
@@ -743,7 +743,7 @@ test('expectedSearches: exact for a fixed effort, and falls as efficiency rises 
     prev = e;
   }
   const t = game(1);
-  const plus12 = cfgWith(R37, { skills: { activity: { searchEff: { perLevel: 1.2 } } } });
+  const plus12 = cfgWith(R37, { skills: { activity: { searchEff: { effects: { searchEff: 1.2 } } } } });
   setSkillLevel(t, 'searchEff', plus12.skills.maxLevel); // +12%
   const e12 = expectedSearches(t, plus12);
   assert.ok(e12 > 3.3 && e12 < 3.6, `at +12%: ${e12}`);
@@ -756,8 +756,8 @@ test('expectedSearches: exact for a fixed effort, and falls as efficiency rises 
 // arithmetic below is unambiguous; searchMin is 30 (PIN).
 const F = 3;
 // searchTime skill 0 per level: the search XP these tests earn must not shave the times they check.
-const FRESH = cfgWith(CFG, { field: { freshCellMin: F }, skills: { activity: { searchTime: { perLevel: 0 } } } });
-const WITH_SKILL = cfgWith(FRESH, { skills: { activity: { searchTime: { perLevel: 0.5 } } } });
+const FRESH = cfgWith(CFG, { field: { freshCellMin: F }, skills: { activity: { searchTime: { effects: { searchTime: 0 } } } } });
+const WITH_SKILL = cfgWith(FRESH, { skills: { activity: { searchTime: { effects: { searchTime: 0.5 } } } } });
 const BASE = 30;
 const EDGE = FRESH.field.size - 1; // the last row / column of a field: areas centred there are clipped
 

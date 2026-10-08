@@ -168,7 +168,7 @@ export function resolveBattle(state, cfg = CONFIG) {
   }
   // Gear care XP for every fight the adventurer survives (win or draw)
   const notes = [];
-  if (result.win || result.draw) addXp(state, 'gearCare', cfg.skills.gearCareXpPerFight, notes, cfg);
+  if (result.win || result.draw) addXp(state, 'gearCare', cfg.skills.activity.gearCare.xp, notes, cfg);
   const destroyed = state.gear.filter((g) => g.durability <= 0).map(gearName);
   state.gear = state.gear.filter((g) => g.durability > 0);
   for (const g of state.gear) g.packed = false;

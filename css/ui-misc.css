@@ -63,13 +63,18 @@ p.mi-note { margin: 4px 0 8px; }
 .mi-xp { display: flex; align-items: center; gap: 8px; min-width: 150px; }
 .mi-xp .bar { flex: 1 1 auto; max-width: 160px; }
 .mi-xpnum { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* fixed layout so the three skill tables line up */
-.mi-skills { table-layout: fixed; min-width: 760px; }
-.mi-skills th:nth-child(1) { width: 29%; }
-.mi-skills th:nth-child(2) { width: 8%; }
-.mi-skills th:nth-child(3) { width: 22%; }
-.mi-skills th:nth-child(4) { width: 10%; }
-.mi-skills th:nth-child(5) { width: 10%; }
+/* fixed layout so the two skill tables line up */
+.mi-skills { table-layout: fixed; min-width: 540px; }
+.mi-skills th:nth-child(1) { width: 26%; }
+.mi-skills th:nth-child(2) { width: 9%; }
+.mi-skills th:nth-child(3) { width: 25%; }
+.mi-skills tr[data-tip] { cursor: help; }
+/* bar types / gem types: "Lv 3" and a thin XP bar per cell */
+.mi-matrix { min-width: 300px; }
+.mi-lv { min-width: 56px; cursor: help; }
+.mi-lv.mi-dim { color: var(--muted); }
+.mi-thin { height: 4px; min-width: 40px; margin-top: 2px; }
+@media (max-width: 480px) { .mi-thin { display: none; } }
 .mi-intel { min-width: 680px; }
 .mi-intel td:first-child { min-width: 200px; }
 .mi-intel td:last-child { white-space: nowrap; }

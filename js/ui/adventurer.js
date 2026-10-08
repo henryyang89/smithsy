@@ -1,6 +1,6 @@
 // Adventurer tab: today's fight, owned gear, adventurer stats and rings, tomorrow's roster.
 // Read-only screen (no game actions); shared widgets come from endday.js.
-import { h, section, num } from './dom.js';
+import { h, section, num, tip } from './dom.js';
 import { SLOTS } from '../config.js';
 import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
@@ -69,7 +69,7 @@ function gearPanel(ctx) {
       rows.push(h('tr', {},
         h('td', {}, gearCell(g, cfg)),
         h('td', {}, durabilityNode(g, cfg, wear)),
-        h('td', { class: 'adv-where' }, g.packed ? h('span', { class: 'warn', title: 'Away with the adventurer today: cannot be repaired until it returns' }, 'Packed (away)') : h('span', { class: 'ok' }, 'Home'))));
+        h('td', { class: 'adv-where' }, g.packed ? h('span', { class: 'warn', ...tip('Away with the adventurer today: it cannot be repaired until it comes back in the evening.') }, 'Packed (away)') : h('span', { class: 'ok' }, 'Home'))));
     }
   }
   const packed = s.gear.filter((g) => g.packed).length;

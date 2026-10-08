@@ -2,6 +2,7 @@
 // SMITHSY — ALL TUNABLE NUMBERS LIVE IN THIS FILE.
 // Edit values here to rebalance. docs/BALANCE.md explains every number.
 // Percentages are written as whole numbers (25 means 25%) unless noted.
+// Skills: each skill lists `effects` (an effect and its amount per level); the skills block explains the model.
 // ============================================================================
 
 export const GRADES = ['D', 'C', 'B', 'A', 'S']; // index 0..4, used to look up per-grade tables
@@ -106,8 +107,9 @@ export const CONFIG = {
     // Packed-but-unused gear does not wear.
     durabilityLoss: { min: 8, max: 12, tierMult: { normal: 1.0, elite: 1.1, champion: 1.2 } },
     repair: {
-      materialFraction: 35, // full 0->100% repair costs 35% of the original bars (+ gem); scales with % repaired
-      timeFraction: 50, // full repair takes 50% of the original smithing time; scales with % repaired
+      materialFraction: 35, // a full 0->100% repair costs 35% of the item's bars, scaled by the % repaired; scrap gives back 35% x durability
+      gemFraction: 35, // ... plus 35% of its cut gem, scaled the same way (0 = repairs cost bars only)
+      timeFraction: 100, // a full repair takes as long as smithing the item, scaled by the % repaired (repair skills cut it)
     },
   },
 
@@ -242,33 +244,53 @@ export const CONFIG = {
   },
 
   // ------------------------------------------------------------- SKILLS ----
-  // Skills level up automatically from doing the activity. A level-10 skill (lots of activity) equals a
-  // C-grade ring of the same kind. Skills without a ring: debris clearing +100% (twice as fast), failure
-  // -5 points, gem grade (blends the novice table into the master table), Gear care (-10% durability loss
-  // per fight; XP from fights the adventurer survives, not from time).
-  // XP needed to go from level L to L+1 = xpBase * (L + 1). Level 10 = 5,500 total XP.
+  // Skills level up by themselves from doing the activity. XP from level L to L+1 = xpBase x (L + 1) (level 10 =
+  // 5,500 XP). Every skill lists `effects` = { effect: amount per level }; `effects` below says what each effect means.
+  // Activity skills work for every material; per-material skills only for their own bar or gem type.
+  // A level-10 skill reaches a C-grade smith ring of the same kind (Travel 6% = Travel ring C, Search speed 6%, Search
+  // efficiency 12%, General refining and cutting time 6%, bar grade 3%). The other effects have no ring.
   skills: {
     maxLevel: 10,
     xpBase: 100,
-    gearCareXpPerFight: 100, // Gear care XP for each fight the adventurer survives (win or draw)
-    // XP per bar refined / gem cut (failures count), for the per-material skills. Rarer = more XP.
+    // XP per bar refined / gem cut / bar smithed into gear, for per-material skills without their own `xp`.
     xpPerItem: { copper: 25, iron: 25, steel: 30, mythril: 50, ruby: 25, topaz: 25, sapphire: 30, emerald: 40, diamond: 50 },
-    // Activity skills: XP = minutes spent on the activity. Bonus = perLevel x level.
-    activity: {
-      returnTravel: { name: 'Return travel', perLevel: 0.6, desc: '% less travel time back to camp', xpFrom: 'minutes travelling to camp' },
-      searchTime: { name: 'Search speed', perLevel: 0.6, desc: '% less search time', xpFrom: 'minutes searching' },
-      searchEff: { name: 'Search efficiency', perLevel: 1.2, desc: '% more searched per search', xpFrom: 'minutes searching' },
-      debris: { name: 'Debris clearing', perLevel: 10, desc: '% more debris cleared per search', xpFrom: 'debris cleared (1 XP per point)' },
-      refineTime: { name: 'Refining speed', perLevel: 0.6, desc: '% less refining time', xpFrom: 'minutes refining' },
-      cutTime: { name: 'Cutting speed', perLevel: 0.6, desc: '% less cutting time', xpFrom: 'minutes cutting' },
-      gearCare: { name: 'Gear care', perLevel: 1, desc: '% less durability loss in fights', xpFrom: 'fights the adventurer survives' },
+    // unit: '%' percent, 'pts' percentage points
+    effects: {
+      travelTime: { unit: '%', text: 'less travel time' },
+      loadPenalty: { unit: '%', text: 'less extra travel time per carried item' },
+      searchTime: { unit: '%', text: 'less search time' },
+      searchEff: { unit: '%', text: 'more searched per search' },
+      debrisClear: { unit: '%', text: 'more debris cleared per search' },
+      refineTime: { unit: '%', text: 'less refining time' },
+      refineFail: { unit: 'pts', text: 'less refining failure chance' },
+      refineUpgrade: { unit: '%', text: 'chance to upgrade a bar one grade' },
+      cutTime: { unit: '%', text: 'less cutting time' },
+      cutFail: { unit: 'pts', text: 'less cutting failure chance' },
+      cutBlend: { unit: '%', text: 'better cutting chances (of the way to a master cutter)' },
+      smithTime: { unit: '%', text: 'less smithing time' },
+      repairTime: { unit: '%', text: 'less repair time' },
+      wear: { unit: '%', text: 'less durability loss in fights' },
     },
-    // Per-material skills (one per bar type / gem type). XP = xpPerItem per item processed of that type.
+    // group: where the Skills tab lists it. xp: XP per one xpUnit.
+    activity: {
+      travel: { name: 'Travel', group: 'field', effects: { travelTime: 0.6 }, xp: 15, xpUnit: 'map step walked' },
+      carrying: { name: 'Carrying', group: 'field', effects: { loadPenalty: 5 }, xp: 2, xpUnit: 'item carried one map step' },
+      searchTime: { name: 'Search speed', group: 'field', effects: { searchTime: 0.6 }, xp: 1, xpUnit: 'minute searching' },
+      searchEff: { name: 'Search efficiency', group: 'field', effects: { searchEff: 1.2 }, xp: 1, xpUnit: 'minute searching' },
+      debris: { name: 'Debris clearing', group: 'field', effects: { debrisClear: 10 }, xp: 1, xpUnit: 'point of debris cleared' },
+      refineTime: { name: 'General refining', group: 'workshop', effects: { refineTime: 0.6, refineFail: 0.1 }, xp: 1, xpUnit: 'minute refining' },
+      cutTime: { name: 'General cutting', group: 'workshop', effects: { cutTime: 0.6, cutBlend: 1 }, xp: 1, xpUnit: 'minute cutting' },
+      repairTime: { name: 'General repair', group: 'workshop', effects: { repairTime: 1 }, xp: 1, xpUnit: 'durability point repaired, per bar in the item' },
+      gearCare: { name: 'Gear care', group: 'workshop', effects: { wear: 1 }, xp: 100, xpUnit: 'fight the adventurer survives' },
+    },
+    // One skill per bar type (materials: 'bars') or gem type ('gems'); name = material + label.
     perMaterial: {
-      oreGrade: { name: 'grade', perLevel: 0.3, desc: '% chance to upgrade the bar one grade' },
-      oreFail: { name: 'refining', perLevel: 0.5, desc: 'points less failure chance' },
-      gemGrade: { name: 'grade', perLevel: 10, desc: '% of the way from the novice to the master grade table' },
-      gemFail: { name: 'cutting', perLevel: 0.5, desc: 'points less failure chance' },
+      oreGrade: { label: 'bar grade', materials: 'bars', effects: { refineUpgrade: 0.3 }, xpUnit: 'bar refined' },
+      oreFail: { label: 'refining', materials: 'bars', effects: { refineFail: 0.5 }, xpUnit: 'bar refined' },
+      smith: { label: 'smithing', materials: 'bars', effects: { smithTime: 2, repairTime: 0.5 }, xpUnit: 'bar smithed into gear' },
+      repair: { label: 'repair', materials: 'bars', effects: { repairTime: 3 }, xp: 1, xpUnit: 'durability point repaired, per bar in the item' },
+      gemGrade: { label: 'grade', materials: 'gems', effects: { cutBlend: 10 }, xpUnit: 'gem cut' },
+      gemFail: { label: 'cutting', materials: 'gems', effects: { cutFail: 0.5 }, xpUnit: 'gem cut' },
     },
   },
 

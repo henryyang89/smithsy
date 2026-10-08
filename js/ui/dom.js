@@ -25,6 +25,12 @@ function append(el, children) {
   }
 }
 
+// Hover details that also work on a touch screen: spread into the attrs of h(), e.g. h('span', { ...tip('Why'), class: 'x' }, 'text').
+// A mouse shows the title; for a tap, installTips() (js/main.js) opens a popover with the same text (data-tip).
+export function tip(text) {
+  return { title: text, 'data-tip': text };
+}
+
 export function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
   return el;

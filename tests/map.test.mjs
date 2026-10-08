@@ -4,16 +4,25 @@ import { CONFIG, ORES, GEMS } from '../js/config.js';
 import { seededRng } from '../js/core/rng.js';
 import {
   generateMap, generateField, pathSteps, mapCell, key, travelMinutes, returnMinutes, travel, atCamp, timeLeft,
-  rollSight, boulderCell, fieldProgress, distanceRow, sightRange,
+  rollSight, boulderCell, fieldProgress, distanceRow, sightRange, loadPenaltyPct,
 } from '../js/core/map.js';
 import { game, cfgWith, customMap, addRing, setSkillLevel, DAY_END, DAY_START, fieldAt } from './helpers.mjs';
+import { skillDefs } from '../js/core/skills.js';
+import { smithBonuses } from '../js/core/bonuses.js';
+import { round1 } from '../js/core/util.js';
 
 // Pinned travel numbers: the hand-computed minutes below hold whatever CONFIG says.
 const TRAVEL = cfgWith({
   map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
   processing: { maxTimeReduction: 75 },
   rings: { duplicateFactor: 0.5, types: { travelTime: { values: [5, 6, 7, 8, 10] } } },
-  skills: { xpBase: 100, activity: { returnTravel: { perLevel: 0.5 } } },
+  skills: {
+    xpBase: 100,
+    activity: {
+      travel: { effects: { travelTime: 0.5 }, xp: 15 },
+      carrying: { effects: { loadPenalty: 5 }, xp: 2 },
+    },
+  },
 });
 
 // The hand-built maps below are 5x5 (camp at 2,2) whatever the game's map size is: the travel maths does not
@@ -399,19 +408,48 @@ test('travelMinutes: +1% per bag item', () => {
   assert.equal(returnMinutes(s, { x: 2, y: 4 }, 5, TRAVEL), 42);
 });
 
-test('travelMinutes: travel ring applies everywhere, return skill only when going to camp', () => {
+test('travelMinutes: the travel ring and the Travel skill apply to every trip (out, field to field, home)', () => {
   const s = travelState();
   const camp = s.map.camp;
   addRing(s, 'travelTime', 'S', true); // 10%
-  setSkillLevel(s, 'returnTravel', 4); // 4 x 0.5 = 2%
-  // out to a field: only the ring
-  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 36); // 40 x 0.9
-  // field to field: only the ring
-  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0, TRAVEL), 72);
-  // back to camp: ring + skill = 12%
-  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 0, TRAVEL), 35.2); // 40 x 0.88
+  setSkillLevel(s, 'travel', 4); // 4 x 0.5 = 2%
+  // ring + skill = 12% on every kind of trip
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 35.2); // 40 x 0.88
+  assert.equal(travelMinutes(s, { x: 0, y: 0 }, { x: 4, y: 0 }, 0, TRAVEL), 70.4); // 80 x 0.88
+  assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 0, TRAVEL), 35.2);
   // with load: 40 x 1.1 x 0.88 = 38.72 -> 38.7
   assert.equal(travelMinutes(s, { x: 2, y: 4 }, camp, 10, TRAVEL), 38.7);
+});
+
+test('Carrying skill: each level removes its share of the per-item load penalty (and only the load penalty)', () => {
+  const s = travelState();
+  const camp = s.map.camp;
+  const per = TRAVEL.skills.activity.carrying.effects.loadPenalty; // % of the penalty removed per level
+  assert.equal(loadPenaltyPct(s, TRAVEL), TRAVEL.map.loadPenaltyPerItem);
+  setSkillLevel(s, 'carrying', 4);
+  const left = TRAVEL.map.loadPenaltyPerItem * (1 - (per * 4) / 100);
+  assert.ok(Math.abs(loadPenaltyPct(s, TRAVEL) - left) < 1e-9);
+  assert.equal(smithBonuses(s, TRAVEL).loadPenaltyRed, per * 4);
+  // 2 steps x 20 min x (1 + left% x 10 items)
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 10, TRAVEL), round1(40 * (1 + (left * 10) / 100)));
+  // empty-handed the skill changes nothing
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 0, TRAVEL), 40);
+  // the reduction is capped at 100% of the penalty
+  setSkillLevel(s, 'carrying', 10);
+  const absurd = cfgWith(TRAVEL, { skills: { activity: { carrying: { effects: { loadPenalty: 50 } } } } });
+  assert.equal(loadPenaltyPct(s, absurd), 0);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 4 }, 20, absurd), 40);
+});
+
+test('travelMinutes defaults use the config\'s load penalty (and the Carrying skill lowers it)', () => {
+  const s = travelState();
+  const camp = s.map.camp;
+  const step = CONFIG.map.travelMinPerStep;
+  const pen = CONFIG.map.loadPenaltyPerItem;
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 10), round1(step * (1 + (pen * 10) / 100)));
+  setSkillLevel(s, 'carrying', 6);
+  const red = Math.min(100, CONFIG.skills.activity.carrying.effects.loadPenalty * 6);
+  assert.equal(travelMinutes(s, camp, { x: 2, y: 3 }, 10), round1(step * (1 + (pen * (1 - red / 100) * 10) / 100)));
 });
 
 test('travelMinutes: unworn rings do not count; duplicate rings stack 1 / 0.5', () => {
@@ -425,9 +463,9 @@ test('travelMinutes: unworn rings do not count; duplicate rings stack 1 / 0.5', 
 });
 
 test('travelMinutes: time reductions are capped at maxTimeReduction', () => {
-  const cfg = cfgWith(TRAVEL, { skills: { activity: { returnTravel: { perLevel: 20 } } } });
+  const cfg = cfgWith(TRAVEL, { skills: { activity: { travel: { effects: { travelTime: 20 } } } } });
   const s = travelState();
-  setSkillLevel(s, 'returnTravel', 10); // 200% -> capped at 75%
+  setSkillLevel(s, 'travel', 10); // 200% -> capped at 75%
   assert.equal(travelMinutes(s, { x: 2, y: 4 }, s.map.camp, 0, cfg), 10);
   assert.equal(travelMinutes(s, { x: 2, y: 4 }, s.map.camp, 0, cfgWith(cfg, { processing: { maxTimeReduction: 50 } })), 20);
 });
@@ -498,7 +536,7 @@ test('returning to camp is always allowed, even if it ends after 18:00', () => {
   assert.equal(timeLeft(s), -110);
 });
 
-test('arriving at camp unloads the bag into storage and grants return-travel XP', () => {
+test('arriving at camp unloads the bag into storage; the walk earns Travel XP and Carrying XP', () => {
   const s = travelState();
   s.location = { x: 2, y: 4 };
   s.bag = ['ore:copper', 'ore:copper', 'ore:mythril', 'gem:ruby', 'gem:diamond'];
@@ -511,18 +549,50 @@ test('arriving at camp unloads the bag into storage and grants return-travel XP'
   assert.equal(s.storage.gem.ruby, 1);
   assert.equal(s.storage.gem.diamond, 1);
   assert.equal(r.minutes, 42); // 40 x 1.05
-  assert.equal(s.skills.returnTravel.xp, 42);
-  assert.equal(s.skills.returnTravel.level, 0);
+  const act = TRAVEL.skills.activity;
+  assert.equal(s.skills.travel.xp, 2 * act.travel.xp, '2 map steps');
+  assert.equal(s.skills.carrying.xp, 5 * 2 * act.carrying.xp, '5 items carried 2 steps');
+  assert.equal(s.skills.travel.level, 0);
 });
 
-test('travelling out does not unload or grant return XP', () => {
+test('travelling out does not unload; it still earns Travel XP (and Carrying XP for what you carry)', () => {
   const s = travelState();
   s.location = { x: 2, y: 3 };
   s.bag = ['ore:iron'];
   assert.equal(travel(s, { x: 2, y: 4 }, TRAVEL).ok, true);
   assert.deepEqual(s.bag, ['ore:iron']);
   assert.equal(s.storage.ore.iron, 0);
-  assert.equal(s.skills.returnTravel.xp, 0);
+  assert.equal(s.skills.travel.xp, TRAVEL.skills.activity.travel.xp, '1 map step');
+  assert.equal(s.skills.carrying.xp, TRAVEL.skills.activity.carrying.xp, '1 item carried 1 step');
+});
+
+test('Travel XP on every trip = map steps x xp per step; Carrying XP = carried items x steps x xp; none when empty-handed', () => {
+  const act = TRAVEL.skills.activity;
+  const s = travelState([{ x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }]);
+  // out: 1 step (2,3), empty-handed
+  assert.equal(travel(s, { x: 2, y: 3 }, TRAVEL).ok, true);
+  assert.equal(s.skills.travel.xp, 1 * act.travel.xp);
+  assert.equal(s.skills.carrying.xp, 0, 'nothing carried: no Carrying XP');
+  // field to field, 3 items, (2,3) -> (0,3): 2 steps
+  s.bag = ['ore:copper', 'ore:copper', 'ore:copper'];
+  assert.equal(travel(s, { x: 0, y: 3 }, TRAVEL).ok, true);
+  assert.equal(s.skills.travel.xp, (1 + 2) * act.travel.xp);
+  assert.equal(s.skills.carrying.xp, 3 * 2 * act.carrying.xp);
+  // home, 4 items, (0,3) -> camp (2,2): 3 steps
+  s.bag.push('gem:ruby');
+  assert.equal(travel(s, s.map.camp, TRAVEL).ok, true);
+  assert.equal(s.skills.travel.xp, (1 + 2 + 3) * act.travel.xp);
+  assert.equal(s.skills.carrying.xp, (3 * 2 + 4 * 3) * act.carrying.xp);
+  // a refused trip earns nothing
+  const before = s.skills.travel.xp;
+  assert.equal(travel(s, { x: 2, y: 1 }, TRAVEL).ok, false);
+  assert.equal(s.skills.travel.xp, before);
+});
+
+test('there is no return-travel skill any more: Travel works on every trip', () => {
+  assert.equal(skillDefs().some((d) => d.key === 'returnTravel'), false);
+  assert.equal('returnTravel' in game(1).skills, false);
+  assert.ok(game(1).skills.travel && game(1).skills.carrying);
 });
 
 test('travel works on a generated map: every field can be reached on day 1 from camp', () => {
@@ -530,6 +600,7 @@ test('travel works on a generated map: every field can be reached on day 1 from 
   for (const c of s.map.cells.filter((x) => x.type === 'field')) {
     s.location = { ...s.map.camp };
     s.time = DAY_START;
+    s.skills.travel = { xp: 0, level: 0 }; // the Travel skill would shorten later trips
     const r = travel(s, { x: c.x, y: c.y });
     assert.equal(r.ok, true, `field ${c.x},${c.y}: ${r.msg}`);
     assert.equal(r.minutes, c.dist * CONFIG.map.travelMinPerStep);

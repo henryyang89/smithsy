@@ -2,7 +2,7 @@
 // catch a leftover in a rarely used UI string or a tool just as well as in the game logic.
 //
 // Each batch of the 2.0 plan adds its own guards here (B1: regrowth, ore-sight reveal, the old intel and
-// save names).
+// save names; B2: night repairs, the old skill model, the Skills tab's Maxed KPI).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { CONFIG } from '../js/config.js';
 import { newGame } from '../js/core/game.js';
 import { expectedSearches, sightValue } from '../js/core/map.js';
+import { scrapReturn } from '../js/core/gear.js';
+import { skillDefs } from '../js/core/skills.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -95,6 +97,37 @@ test('guard: saves are per version: the game never reads another version\'s save
   assert.doesNotMatch(main, /removeItem/);
 });
 
+// ------------------------------------------------------------ batch 2 guards ----
+test('guard: no night repairs anywhere (A3): no isNight, no "free at night", no "no time tonight", no night banner', () => {
+  assert.deepEqual(hits([...JS_FILES, ...TOOL_FILES], /\bisNight\b/), []);
+  assert.deepEqual(hits(JS_FILES, /free at night/i), []);
+  assert.deepEqual(hits(JS_FILES, /no time tonight/i), []);
+  assert.deepEqual(hits(JS_FILES, /repairs? (at|by) night|repair tonight|repairs tonight|cost materials but no time/i), []);
+  assert.deepEqual(hits(TOOL_FILES, /nightRepair\b|\bat night \(free\)/), []);
+  // the night banner and the night-only helpers are gone from code and styles
+  assert.deepEqual(hits([...JS_FILES, ...filesUnder(join(ROOT, 'css'), ['.css'])], /rp-night|reportRepair|repairAllButton|repairAllPreview/), []);
+});
+
+test('guard: the old skill model is gone (skillBonus, perLevel, Return travel, Maxed, level-10 vs ring text)', () => {
+  const gone = ['skillBonus', 'returnTravel', 'returnPct', 'gearCareXpPerFight', 'skillVsRingText', 'skillRingText', 'skillRingMatch', 'commonSkillRingGrade', 'xpFrom', 'perLevel'];
+  for (const name of gone) assert.deepEqual(hits([...JS_FILES, ...TOOL_FILES], new RegExp(`\\b${name}\\b`)), [], name);
+  // the Skills tab has no Maxed KPI (R43)
+  assert.doesNotMatch(read(join(ROOT, 'js', 'ui', 'skillsview.js')), /Maxed/);
+  // the config lists each skill's effects, not a per-level number
+  for (const d of Object.values(CONFIG.skills.activity)) assert.ok(d.effects && !('perLevel' in d), d.name);
+  for (const d of Object.values(CONFIG.skills.perMaterial)) assert.ok(d.effects && !('perLevel' in d), d.label);
+});
+
+test('guard: tips work on touch screens: index.html has the #tip holder and main.js opens it on a non-mouse tap', () => {
+  assert.match(read(join(ROOT, 'index.html')), /<div id="tip"/);
+  const main = read(join(ROOT, 'js', 'main.js'));
+  assert.match(main, /function installTips\(/);
+  assert.match(main, /pointerup/);
+  assert.match(main, /pointerType === 'mouse'/);
+  assert.match(main, /\[data-tip\]/);
+  assert.match(read(join(ROOT, 'css', 'style.css')), /#tip\b/);
+});
+
 // ---------------------------------------------------------------- request pins ----
 // The numbers the user asked for in their own words (R2 7x7 world map and 9x9 fields, R3 boulders 2 to 4, R14 20% base
 // banner chance, R29 gem share 15% to 25%, R31 no sight on day 1, R37 about 4 searches per cell). This is the one place
@@ -113,4 +146,28 @@ test('request pins: the numbers the user asked for are what CONFIG says (R2, R3,
   assert.equal(sightValue(newGame(1)), 0, 'R31: a new game has no sight, so nothing is seen on day 1');
   const e = expectedSearches(newGame(1), CONFIG);
   assert.ok(e > 3.9 && e < 4.1, `R37: about 4 searches finish a cell (${e})`);
+});
+
+test('request pins (batch 2): travel 0.6% / 15 XP, carrying 5% / 2 XP, smithing 2%, repair 3% / 1% / 0.5%, general skills 5x and 10x weaker, scrap 35%', () => {
+  const A = CONFIG.skills.activity;
+  const P = CONFIG.skills.perMaterial;
+  assert.equal(A.travel.effects.travelTime, 0.6, 'R4: 0.6% less time on every trip per level');
+  assert.equal(A.travel.xp, 15, 'R4: 15 XP per map step walked');
+  assert.equal(A.carrying.effects.loadPenalty, 5, 'R5: 5% of the per-item load penalty per level');
+  assert.equal(A.carrying.xp, 2, 'R5: 2 XP per item carried one map step');
+  assert.equal(P.smith.effects.smithTime, 2, 'R34: 2% less smithing time per level');
+  assert.equal(P.repair.effects.repairTime, 3, 'R35: 3% less repair time per Repair level');
+  assert.equal(A.repairTime.effects.repairTime, 1, 'R35: 1% per General repair level');
+  assert.equal(P.smith.effects.repairTime, 0.5, 'R35: 0.5% per Smithing level');
+  assert.equal(P.oreFail.effects.refineFail / A.refineTime.effects.refineFail, 5, 'R36: the own-material refining skill is 5x General refining');
+  assert.equal(P.gemGrade.effects.cutBlend / A.cutTime.effects.cutBlend, 10, 'R36: the own-material gem grade skill is 10x General cutting');
+  assert.equal(A.refineTime.effects.refineFail, 0.1, 'R36: General refining +0.1 failure points per level');
+  assert.equal(A.cutTime.effects.cutBlend, 1, 'R36: General cutting +1% blend per level');
+  assert.equal(CONFIG.gear.repair.materialFraction, 35, 'A4: scrap and repairs use 35% of the bars');
+  // A4 / R10 in play: a 60% copper sword (2 bars) scraps for 0.42 bars, a 59.6% one for 0.41, a 0% one for nothing
+  const sword = (durability) => ({ slot: 'sword', material: 'copper', grade: 'D', gem: null, durability });
+  assert.equal(scrapReturn(sword(60)).qty, 0.42);
+  assert.equal(scrapReturn(sword(59.6)).qty, 0.41);
+  assert.equal(scrapReturn(sword(0)).qty, 0);
+  assert.equal(skillDefs().length, 35);
 });

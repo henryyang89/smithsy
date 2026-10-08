@@ -62,7 +62,7 @@
 //            intel points, and at the old 40x30: wobble between presses and miss vs the true chance, at
 //            several scouting levels (steel C set vs elites at about 55 / 75 / 90% true win).
 //   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
-//            cut, smith, rings, intel; at night: free repairs, then the plan) and reports survival,
+//            cut, smith, repair, rings, intel; at night: the plan) and reports survival,
 //            score, gear over time, the daily time split, rings, skills, the tiers it chose and how
 //            much of the map's finite supply it has used (fields never refill).
 //            In a field it searches (clearing debris on the way) until what is worth carrying fills the
@@ -81,7 +81,7 @@ import {
   travel, search, defaultCarry, distanceRow, sightValue, sightShare, seenItems,
 } from '../js/core/map.js';
 import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
-import { gearStats, craftMinutes, craft, repairInfo, repairPlan, repair, isNight } from '../js/core/gear.js';
+import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, wearLoss } from '../js/core/gear.js';
 import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
 import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
@@ -571,8 +571,9 @@ function economySection(o) {
     const rng = seededRng(mixSeed(4040, 1));
     const r = cfg.field.searchRandomness || 0;
     const meanKs = [];
-    const rows = [0, cfg.skills.activity.searchEff.perLevel * cfg.skills.maxLevel, cfg.rings.types.searchEff.values[1], cfg.rings.types.searchEff.values[4],
-      cfg.rings.types.searchEff.values[4] + cfg.skills.activity.searchEff.perLevel * cfg.skills.maxLevel].map((bonus) => {
+    const effSkill = cfg.skills.activity.searchEff.effects.searchEff * cfg.skills.maxLevel; // % at the highest skill level
+    const rows = [0, effSkill, cfg.rings.types.searchEff.values[1], cfg.rings.types.searchEff.values[4],
+      cfg.rings.types.searchEff.values[4] + effSkill].map((bonus) => {
       const eff = cfg.field.searchEfficiency * (1 + bonus / 100);
       const hist = {};
       const T = 20000;
@@ -595,7 +596,7 @@ function economySection(o) {
     // ... and a debris cell (mean thickness), by debris skill level
     const dm = (cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2;
     const dRows = [0, 5, 10].map((lv) => {
-      const mult = 1 + (cfg.skills.activity.debris.perLevel * lv) / 100;
+      const mult = 1 + (cfg.skills.activity.debris.effects.debrisClear * lv) / 100;
       let tot = 0;
       const T = 20000;
       for (let t = 0; t < T; t++) {
@@ -781,8 +782,8 @@ function economySection(o) {
     const lvls = c.novice ? [0, 5, cfg.skills.maxLevel] : [0];
     for (const lv of lvls) {
       const d = c.novice
-        ? blendCutTable(c, (cfg.skills.perMaterial.gemGrade.perLevel * lv) / 100, cfg.skills.perMaterial.gemFail.perLevel * lv)
-        : adjustDistribution(c.dist, cfg.skills.perMaterial.gemFail.perLevel * lv, 0);
+        ? blendCutTable(c, (cfg.skills.perMaterial.gemGrade.effects.cutBlend * lv) / 100, cfg.skills.perMaterial.gemFail.effects.cutFail * lv)
+        : adjustDistribution(c.dist, cfg.skills.perMaterial.gemFail.effects.cutFail * lv, 0);
       const name = `${gems.length === GEMS.length ? 'any gem' : gems.join('/')} cut${c.novice ? `, skill ${lv}` : ''}`;
       if (lv === 0) gemCut.novice = d;
       if (lv === cfg.skills.maxLevel) gemCut.master = d;
@@ -792,11 +793,11 @@ function economySection(o) {
     }
   }
   printTable(['output', 'input', 'min', 'S%', 'A%', 'B%', 'C%', 'D%', 'F%', 'out/in', 'min per C+', 'min per B+', 'gem effect vs C'], rows);
-  note(`Gem skill N = grade skill N (${cfg.skills.perMaterial.gemGrade.perLevel}%/level of the way from novice to master) and cutting skill N ` +
-    `(-${cfg.skills.perMaterial.gemFail.perLevel} fail/level); gem luck rings upgrade on top. "gem effect vs C" = mean effect per gem cut / a C gem.`);
+  note(`Gem skill N = grade skill N (${cfg.skills.perMaterial.gemGrade.effects.cutBlend}%/level of the way from novice to master) and cutting skill N ` +
+    `(-${cfg.skills.perMaterial.gemFail.effects.cutFail} fail/level); gem luck rings upgrade on top. "gem effect vs C" = mean effect per gem cut / a C gem.`);
   const maxSk = cfg.skills.maxLevel;
-  const up10 = cfg.skills.perMaterial.oreGrade.perLevel * maxSk;
-  const fail10 = cfg.skills.perMaterial.oreFail.perLevel * maxSk;
+  const up10 = cfg.skills.perMaterial.oreGrade.effects.refineUpgrade * maxSk;
+  const fail10 = cfg.skills.perMaterial.oreFail.effects.refineFail * maxSk;
   const ringUp = cfg.rings.types.oreGrade.values[4] * (1 + cfg.rings.duplicateFactor);
   const adj = (bar, f, u) => adjustDistribution(cfg.refine[bar].dist, f, u);
   printTable(
@@ -1339,11 +1340,12 @@ function botParams(T, o) {
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
     verifyTop: 3,
     minRate: 0.003, minCraftGain: 1.0, minGemGain: 1.0, cutCap: 3, ironReserve: 4, reserveCap: 240,
-    // Repairs: durability only matters at 0% (destroyed), so the bot repairs late: a top-2 item of a slot once
-    // it is below repairBelow % (exact-grade bars), or below subBelow % when only a higher grade is in stock
-    // (a substitute uses up better bars for no benefit). Night repairs are free; day repairs are off (dayRepair)
-    // because a night repair before packing does the same job without the time.
-    usableDur: 15, repairBelow: 50, subBelow: 30, dayRepair: false,
+    // Repairs happen by day, at camp, on gear that stayed home (they cost time). Rest rule: before packing, an item
+    // below restBelow % that the stock can repair tomorrow, or one a champion fight could destroy, stays home when its
+    // slot has another item to pack. At camp the bot repairs the top-3 unpacked items of a slot once they are below
+    // repairBelow % (exact-grade bars), or below subBelow % when only a higher grade is in stock (a substitute uses
+    // up better bars for no benefit).
+    usableDur: 15, restBelow: 40, repairBelow: 60, subBelow: 30,
   };
 }
 
@@ -1484,7 +1486,7 @@ function bestCraft(st, P) {
           const sc = power(m, g) + (useGem ? useGem.bonus : 0);
           const gain = (sc - cur) * P.slotW[slot];
           if (gain < P.minCraftGain) continue;
-          if (st.time + craftMinutes(slot, !!useGem) > DAY_END + EPS) continue;
+          if (st.time + smithMinutes(st, slot, m, !!useGem) > DAY_END + EPS) continue;
           if (!best || gain > best.gain + 1e-9) best = { slot, material: m, grade: g, gem: useGem ? { type: useGem.type, grade: useGem.grade } : null, gain };
         }
       }
@@ -1493,10 +1495,10 @@ function bestCraft(st, P) {
   return best;
 }
 
-function topTwoIds(st, P) {
+function topIds(st, P, n) {
   const ids = new Set();
   for (const s of SLOTS) {
-    st.gear.filter((g) => g.slot === s).sort((a, b) => score(b, P) - score(a, P)).slice(0, 2).forEach((g) => ids.add(g.id));
+    st.gear.filter((g) => g.slot === s).sort((a, b) => score(b, P) - score(a, P)).slice(0, n).forEach((g) => ids.add(g.id));
   }
   return ids;
 }
@@ -1511,21 +1513,20 @@ function repairChoice(st, item, P) {
   return { want: true, plan, why: 'ok' };
 }
 
-// Repair candidates: the top-2 items of each slot, most important first (best item of the slot,
+// Repair candidates: the top-3 items of each slot, most important first (best item of the slot,
 // then by win-% weight).
 function repairCandidates(st, P) {
-  const top = topTwoIds(st, P);
+  const top = topIds(st, P, 3);
   const best = new Set(SLOTS.map((s) => st.gear.filter((g) => g.slot === s).sort((a, b) => score(b, P) - score(a, P))[0]).filter(Boolean).map((g) => g.id));
   return st.gear
     .filter((g) => top.has(g.id))
     .sort((a, b) => (best.has(b.id) ? 1 : 0) - (best.has(a.id) ? 1 : 0) || score(b, P) * P.slotW[b.slot] - score(a, P) * P.slotW[a.slot]);
 }
 
-function doRepair(st, item, plan, rec, night) {
+function doRepair(st, item, plan, rec) {
   const r = repair(st, item.id);
   if (!r.ok) return r;
   rec.repaired++;
-  if (night) rec.nightRepairs++;
   rec.repairBars += sum(Object.values(plan.bars));
   rec.repairPct += plan.missing;
   if (r.substitutes && r.substitutes.length) {
@@ -1535,23 +1536,43 @@ function doRepair(st, item, plan, rec, night) {
   return r;
 }
 
-// Night (report / plan phase): repairs cost no time and need no camp visit, and all gear is home
-// (packing is cleared when the adventurer returns), so the bot repairs here, before packing.
-function nightRepair(st, ctx, rec) {
-  const P = ctx.P;
-  if (P.ablate.has('repair') || !isNight(st)) return;
-  for (const it of repairCandidates(st, P)) {
-    const c = repairChoice(st, it, P);
-    if (c.why === 'none') rec.repairBlocked[st.day] = (rec.repairBlocked[st.day] || 0) + 1;
-    if (c.why === 'deferred') rec.subDeferred++;
-    if (c.want) doRepair(st, it, c.plan, rec, true);
+// The rest rule (run when packing): items that stay home tonight so they can be repaired tomorrow (below restBelow %
+// and repairable with the stock at hand) or because a champion fight could destroy them. An item only rests while
+// its slot keeps another item that does not rest.
+function restingIds(st, P) {
+  const rest = new Set();
+  if (P.ablate.has('repair')) return rest;
+  const dl = cfg.gear.durabilityLoss;
+  const worst = wearLoss(dl.max, (dl.tierMult && dl.tierMult.champion) || 1, smithBonuses(st).gearCarePct);
+  for (const slot of SLOTS) {
+    const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
+    for (const it of items) {
+      const wants = (it.durability < P.restBelow && repairPlan(st, it).ok) || it.durability <= worst;
+      if (wants && items.some((o) => o !== it && !rest.has(o.id))) rest.add(it.id);
+    }
   }
+  return rest;
 }
 
-function nextRepair(st, P, tried) {
-  if (P.ablate.has('repair') || !P.dayRepair) return null;
-  for (const g of repairCandidates(st, P)) if (!tried.has(g.id) && repairChoice(st, g, P).want) return g;
-  return null;
+// Repairs by day (camp + time): unpacked top-3 items below repairBelow %, best item first. Each item is counted
+// once per day in the blocked / deferred tallies, however often the bot is at camp.
+function dayRepairs(st, ctx, rec) {
+  const P = ctx.P;
+  if (P.ablate.has('repair')) return;
+  for (const it of repairCandidates(st, P)) {
+    const c = repairChoice(st, it, P);
+    const seen = (what) => {
+      const k = `${what}:${st.day}:${it.id}`;
+      if (ctx.seen.has(k)) return true;
+      ctx.seen.add(k);
+      return false;
+    };
+    if (c.why === 'none' && !seen('blocked')) rec.repairBlocked[st.day] = (rec.repairBlocked[st.day] || 0) + 1;
+    if (c.why === 'deferred' && !seen('deferred')) rec.subDeferred++;
+    if (!c.want) continue;
+    const r = doRepair(st, it, c.plan, rec);
+    if (r.ok) ctx.tm.repair += r.minutes;
+  }
 }
 
 function campWork(st, ctx, rec) {
@@ -1592,14 +1613,7 @@ function campWork(st, ctx, rec) {
     rec.cuts[r.grade] = (rec.cuts[r.grade] || 0) + 1;
   }
   while (tryCraft());
-  // Day repairs (camp + time) only when P.dayRepair is on; by default the free night repair does it.
-  const tried = new Set();
-  for (let guard = 0; guard < 50; guard++) {
-    const it = nextRepair(st, P, tried);
-    if (!it) break;
-    tried.add(it.id);
-    log('repair', doRepair(st, it, repairPlan(st, it), rec, false));
-  }
+  dayRepairs(st, ctx, rec);
 }
 
 // Greedy ring choice with the duplicate penalty. weights = value per unit of ring value.
@@ -1770,11 +1784,12 @@ function spendIntelPoints(st, P) {
 
 function choosePlan(st, ctx, rec) {
   const P = ctx.P;
+  const rest = restingIds(st, P);
   const gearIds = [];
   for (const slot of SLOTS) {
     const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
-    // (no "leave a worn piece home to repair it" any more: nightRepair already ran, at no time cost)
-    gearIds.push(...items.slice(0, 2).map((g) => g.id));
+    // the rest rule: worn items stay home so they can be repaired tomorrow (when the slot keeps another item)
+    gearIds.push(...items.filter((g) => !rest.has(g.id)).slice(0, 2).map((g) => g.id));
   }
   const advRings = P.ablate.has('rings') ? [] : st.rings.filter((r) => ringDef(r.type).owner === 'adventurer');
   const ringIds = pickRings(advRings, P.ringW, cfg.rings.maxWorn).map((r) => r.id);
@@ -1871,10 +1886,10 @@ function mapStats(st) {
 
 function runBot(seed, D, P) {
   const st = newGame(seed);
-  const ctx = { P, wasDebris: new WeakSet(), seed, tm: null };
+  const ctx = { P, wasDebris: new WeakSet(), seed, tm: null, seen: new Set() };
   const rec = {
     seed, deathDay: null, lastDay: 1, timeByDay: {}, tripsByDay: {}, snaps: {}, picks: [], gathered: {}, bars: {},
-    crafted: 0, repaired: 0, nightRepairs: 0, subRepairs: 0, subBars: 0, subDeferred: 0, repairBars: 0, repairPct: 0, gemsUsed: 0, destroyed: 0,
+    crafted: 0, repaired: 0, subRepairs: 0, subBars: 0, subDeferred: 0, repairBars: 0, repairPct: 0, gemsUsed: 0, destroyed: 0,
     craftLog: [], tripDist: [], tripItems: [], wornOut: 0, wornOutMat: {}, repairBlocked: {},
     found: 0, foundByDay: {}, mapByDay: {}, mapStart: null,
     searches: 0, carried: 0, fromOldPile: 0, fromDebris: 0, debrisEff: 0, searchEff: 0, pileTrips: 0, cuts: {},
@@ -1911,7 +1926,6 @@ function runBot(seed, D, P) {
     }
     if (st.phase === 'report') acknowledgeReport(st);
     if (day >= D) break;
-    nightRepair(st, ctx, rec);
     spendIntelPoints(st, P);
     const c = confirmPlan(st, choosePlan(st, ctx, rec));
     if (!c.ok) throw new Error(`seed ${seed} day ${day}: confirmPlan failed: ${c.msg}`);
@@ -2111,12 +2125,15 @@ function botSection(o, T) {
     `${f1(repairBars)} bars spent on repairs = ${f1((100 * repairBars) / Math.max(1, barsMade))}% of bars made, repair time ${f1((100 * repairMin) / Math.max(1, usedMin))}% of working time; ` +
     `${f1(mean(recs.map((r) => r.destroyed)))} items destroyed by wear (${f1(wornOut)} bars = ${f1((100 * wornOut) / Math.max(1, barsMade))}% of bars made; ` +
     BARS.map((b) => `${b} ${f1(mean(recs.map((r) => r.wornOutMat[b] || 0)))}`).join(', ') + ').');
-  note(`Repairs: ${f1(mean(recs.map((r) => r.nightRepairs)))} at night (free) and ${f1(mean(recs.map((r) => r.repaired - r.nightRepairs)))} by day per run` +
-    ` (bot repairs a top-2 item below ${P.repairBelow}%, or below ${P.subBelow}% if only a higher grade is in stock; day repairs ${P.dayRepair ? 'on' : 'off'}).` +
+  const repairDays = (r) => Object.entries(r.timeByDay).filter(([d]) => Number(d) >= 2);
+  note(`Repairs: 0 at night (repairs only happen by day) and ${f1(mean(recs.map((r) => r.repaired)))} by day per run, ` +
+    `${f1(mean(recs.map((r) => sum(Object.values(r.timeByDay).map((t) => t.repair)))))} repair minutes per run (${f1(mean(recs.flatMap((r) => repairDays(r).map(([, t]) => t.repair))))} min a day)` +
+    ` (the bot repairs an unpacked top-3 item below ${P.repairBelow}%, or below ${P.subBelow}% if only a higher grade is in stock; ` +
+    `items below ${P.restBelow}% that it can repair stay home, as do items a champion fight could destroy).` +
     ` With a higher-grade substitute: ${f1(mean(recs.map((r) => r.subRepairs)))} repairs/run (${f2(mean(recs.map((r) => r.subBars)))} better bars used);` +
-    ` deferred because only a higher grade was in stock: ${f1(mean(recs.map((r) => r.subDeferred)))} item-nights/run.`);
-  note(`Repair blocked (a worn top-2 item below ${P.repairBelow}% with no bars of its material at its grade or higher): ` +
-    `${f1(mean(recs.map((r) => Object.keys(r.repairBlocked).length)))} nights/run, ${f1(mean(recs.map((r) => sum(Object.values(r.repairBlocked)))))} item-nights/run.`);
+    ` deferred because only a higher grade was in stock: ${f1(mean(recs.map((r) => r.subDeferred)))} item-days/run.`);
+  note(`Repair blocked (a worn top-3 item below ${P.repairBelow}% with no bars of its material at its grade or higher): ` +
+    `${f1(mean(recs.map((r) => Object.keys(r.repairBlocked).length)))} days/run, ${f1(mean(recs.map((r) => sum(Object.values(r.repairBlocked)))))} item-days/run.`);
   note('Trips per run by field distance: ' + BUCKETS.map((d) => `d${bucketLabel(d)} ${f1(mean(recs.map((r) => r.tripDist.filter((x) => bucketOf(x) === d).length)))}`).join(', ') +
     `; mean trip distance ${f2(mean(recs.flatMap((r) => r.tripDist)))}.`);
 
@@ -2182,7 +2199,7 @@ function botSection(o, T) {
     ` | 3-slot iron/steel/myth d${f0(prog.iron.three)}/${f0(prog.steel.three)}/${f0(prog.mythril.three)}` +
     ` | d11-30 fights n/e/c ${TIERS.map((t) => share(mid, t)).join('/')}%` +
     ` | mining ${f0(miningPct(daysIn(2, D)))}% trips/day ${f1(mean(daysIn(2, D).map((x) => x.trips)))} idle ${f0(mean(daysIn(2, D).map((x) => DAY_LEN - sum(TIME_CATS.map((c) => x.t[c])))))}m` +
-    ` | repair ${f1((100 * repairBars) / Math.max(1, barsMade))}% bars ${f1((100 * repairMin) / Math.max(1, usedMin))}% time, ${f1(mean(recs.map((r) => r.nightRepairs)))} night/run (${f1(mean(recs.map((r) => r.subRepairs)))} subst.)` +
+    ` | repair ${f1((100 * repairBars) / Math.max(1, barsMade))}% bars ${f1((100 * repairMin) / Math.max(1, usedMin))}% time, 0 at night (${f1(mean(recs.map((r) => r.subRepairs)))} subst.)` +
     ` | map found ${[40, 60, 80].filter((d) => supply[d]).map((d) => `d${d}:${f0(supply[d].pct)}%`).join(' ') || '-'}` +
     ` | field: ${f2(fw.found / Math.max(1, fw.searches))} found/search, carried ${f0((100 * fw.carried) / Math.max(1, fw.found))}% of found (${f1(fw.carried / Math.max(1, fw.trips))}/trip, ${f0(fw.oldPile)} from old piles),` +
     ` piles at end ${f0(fw.pileEnd)} (${f1(fw.pileEndWorth)} worth), debris ${f1(fw.debrisPct)}% of effort` +

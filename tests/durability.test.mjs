@@ -18,7 +18,7 @@ const DRAW = cfgWith({ combat: { safetyCapSeconds: 0.01 } }); // a cap shorter t
 
 const DL = CONFIG.gear.durabilityLoss;
 const tierMultOf = (tier, dl = DL) => (dl.tierMult && dl.tierMult[tier]) || 1;
-const careOf = (level, cfg = CONFIG) => Math.min(100, cfg.skills.activity.gearCare.perLevel * level);
+const careOf = (level, cfg = CONFIG) => Math.min(100, cfg.skills.activity.gearCare.effects.wear * level);
 // the rule from the config comment, written out on its own: one decimal, at least 1
 const lossOf = (base, mult, red) => Math.max(1, Math.round(base * mult * (1 - red / 100) * 10) / 10);
 const oneDecimal = (v) => Math.round(v * 10) / 10;
@@ -83,7 +83,7 @@ test('wear: each used item loses roll x tier multiplier x (1 - Gear care %) to o
 test('wear: exact numbers with a pinned config (roll fixed, tier multipliers 1 / 1.5 / 2, Gear care 2% per level)', () => {
   const cfg = cfgWith(WEAK_ENEMIES, {
     gear: { durabilityLoss: { min: 10, max: 10, tierMult: { normal: 1, elite: 1.5, champion: 2 } } },
-    skills: { activity: { gearCare: { perLevel: 2 } } },
+    skills: { activity: { gearCare: { effects: { wear: 2 } } } },
   });
   // [tier, Gear care level, loss]; level 10 = 20% less
   const table = [
@@ -105,12 +105,12 @@ test('wear: exact numbers with a pinned config (roll fixed, tier multipliers 1 /
 
 test('wear: never below 1 (heavy reductions, tiny multipliers) and the skill reduction is capped at 100%', () => {
   // 3 x 10% of the roll rounds to 0 -> 1
-  const strong = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 3, max: 3 } }, skills: { activity: { gearCare: { perLevel: 9 } } } });
+  const strong = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 3, max: 3 } }, skills: { activity: { gearCare: { effects: { wear: 9 } } } } });
   const a = fightOnce({ cfg: strong, care: CONFIG.skills.maxLevel });
   assert.equal(a.rep.wear[0].skillRed, 9 * CONFIG.skills.maxLevel);
   for (const w of a.rep.wear) assert.equal(w.loss, 1);
   // a reduction above 100% is capped at 100% (and the minimum still holds)
-  const absurd = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 9, max: 9 } }, skills: { activity: { gearCare: { perLevel: 25 } } } });
+  const absurd = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 9, max: 9 } }, skills: { activity: { gearCare: { effects: { wear: 25 } } } } });
   const b = fightOnce({ cfg: absurd, care: CONFIG.skills.maxLevel });
   for (const w of b.rep.wear) {
     assert.equal(w.skillRed, 100);
@@ -206,7 +206,7 @@ test('Gear care: on the default config every level lowers the average loss, for 
 });
 
 test('Gear care: in real fights (roll fixed, 1% per level) each level takes off a visible 0.1% and the item keeps one decimal', () => {
-  const cfg = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 10, max: 10, tierMult: { normal: 1 } } }, skills: { activity: { gearCare: { perLevel: 1 } } } });
+  const cfg = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 10, max: 10, tierMult: { normal: 1 } } }, skills: { activity: { gearCare: { effects: { wear: 1 } } } } });
   let prev = Infinity;
   for (let level = 0; level <= cfg.skills.maxLevel; level++) {
     const { s, rep } = fightOnce({ cfg, care: level });
@@ -256,8 +256,10 @@ test('wear: durability stays at one decimal over many fights (no float drift) an
   // one decimal of missing durability changes the price (here: 0.1% of a full repair is a visible fraction of a bar)
   const slightlyMore = repairInfo({ ...g, durability: oneDecimal(g.durability - 0.1) }, cfg);
   assert.ok(slightlyMore.bars[barKey] >= info.bars[barKey]);
-  assert.ok(slightlyMore.minutes >= info.minutes);
+  assert.ok(slightlyMore.baseMinutes >= info.baseMinutes);
   s.storage.bars[barKey] = 10;
+  // repairs happen by day: leave everything home tomorrow, and the repair is possible at camp
+  assert.equal(confirmPlan(s, plan(tierIndex(s, 'normal'), []), cfg).ok, true);
   const before = s.storage.bars[barKey];
   assert.equal(repairPlan(s, g, cfg).ok, true);
   const res = repair(s, g.id, cfg);
@@ -267,25 +269,26 @@ test('wear: durability stays at one decimal over many fights (no float drift) an
 });
 
 // ------------------------------------------------------------ Gear care ----
-test('Gear care skill: an activity skill, perLevel % less durability loss, from config', () => {
+test('Gear care skill: an activity skill, % less durability loss per level, from config', () => {
   const def = skillDefs().find((d) => d.key === 'gearCare');
   assert.ok(def);
-  assert.equal(def.group, 'activity');
-  assert.equal(def.perLevel, CONFIG.skills.activity.gearCare.perLevel);
-  assert.ok(def.perLevel > 0);
+  assert.equal(def.material, null, 'an activity skill: it works for every material');
+  const perLevel = CONFIG.skills.activity.gearCare.effects.wear;
+  assert.deepEqual(def.effects, { wear: perLevel });
+  assert.ok(perLevel > 0);
   // "very slightly" reduces: even at max level the loss stays well above zero
   assert.ok(careOf(CONFIG.skills.maxLevel) < 50);
   const s = game(1);
   assert.equal(smithBonuses(s).gearCarePct, 0);
   for (const level of [1, 4, CONFIG.skills.maxLevel]) {
     setSkillLevel(s, 'gearCare', level);
-    assert.equal(smithBonuses(s).gearCarePct, def.perLevel * level);
+    assert.equal(smithBonuses(s).gearCarePct, perLevel * level);
   }
   assert.deepEqual(game(1).skills.gearCare, { xp: 0, level: 0 });
 });
 
-test('Gear care XP: every survived fight gives gearCareXpPerFight (a win, and a draw), once per fight not per item', () => {
-  const per = CONFIG.skills.gearCareXpPerFight;
+test('Gear care XP: every survived fight gives the skill\'s xp (a win, and a draw), once per fight not per item', () => {
+  const per = CONFIG.skills.activity.gearCare.xp;
   assert.ok(per > 0);
   // win, with the full set (5 used items) and with no gear at all
   for (const gear of [true, false]) {
@@ -319,7 +322,7 @@ test('Gear care XP: nothing for a lost fight (game over)', () => {
 test('Gear care XP: levels follow the XP curve; a level gained in a fight applies from the next fight', () => {
   // pinned: 100 XP for level 1, 200 more for level 2; 150 XP per fight; 2% less loss per level; fixed roll 50
   const cfg = cfgWith(WEAK_ENEMIES, {
-    skills: { xpBase: 100, maxLevel: 10, gearCareXpPerFight: 150, activity: { gearCare: { perLevel: 2 } } },
+    skills: { xpBase: 100, maxLevel: 10, activity: { gearCare: { xp: 150, effects: { wear: 2 } } } },
     gear: { durabilityLoss: { min: 50, max: 50, tierMult: { normal: 1 } } },
   });
   const s = game(9, cfg);

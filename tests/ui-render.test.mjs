@@ -16,9 +16,12 @@ import { renderLog } from '../js/ui/logview.js';
 import { renderHelp } from '../js/ui/help.js';
 import { renderPlan, renderReport, renderGameOver } from '../js/ui/endday.js';
 import { endDay, confirmPlan } from '../js/core/game.js';
+import { tip } from '../js/ui/dom.js';
+import { scrapReturn, smithMinutes, repairMinutes } from '../js/core/gear.js';
+import { skillDefs, skillHoverText } from '../js/core/skills.js';
 import { intelValue } from '../js/core/intel.js';
 import { travel, search, currentField, sightValue, seenItems, expectedSearches, searchesText, searchesToFinish } from '../js/core/map.js';
-import { game, cfgWith, addGear, addRing, fieldAt, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START } from './helpers.mjs';
+import { game, cfgWith, addGear, addRing, fieldAt, setSkillLevel, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START } from './helpers.mjs';
 
 installFakeDom();
 
@@ -328,6 +331,146 @@ test('Help describes sight and the by-distance tables, and has no regrowth, ore-
   assert.doesNotMatch(text, /regrow/i);
   assert.doesNotMatch(text, /Gain per point spent/);
   assert.doesNotMatch(text, /chance to reveal everything/i);
+});
+
+// ------------------------------------------------------ skills tab (batch 2) ----
+test('the Skills tab: grouped skill tables, Skill levels (no Maxed), hovers on every skill, no level-10 value anywhere', () => {
+  const s = stateDay1();
+  setSkillLevel(s, 'travel', 3);
+  s.skills.travel.xp = 40;
+  setSkillLevel(s, 'repair_iron', 2);
+  const root = render(renderSkills, s);
+  const text = textOf(root);
+  const all = readable(root);
+  assert.match(text, /Skill levels/);
+  assert.match(text, new RegExp(`${skillDefs().length} skills`));
+  assert.doesNotMatch(all, /Maxed/, 'R43: no Maxed KPI');
+  assert.doesNotMatch(all, /level[ -]10/i, 'R18: no level-10 value');
+  assert.doesNotMatch(all, /vs rings|no ring\b|= C-grade/i, 'the level-10 vs ring columns are gone');
+  assert.match(text, /Skills level up by themselves as you work\. Hover or tap a skill for what it does and how to earn XP\./);
+  for (const title of ['Travel and fields', 'Workshop', 'Bar types', 'Gem types', 'Intel']) assert.ok(text.includes(title), title);
+  // every activity skill is a table row with its name, level and a tap / hover text
+  const rows = findAll(root, (el) => el.tagName === 'TR' && el.attributes['data-tip']);
+  const activity = skillDefs().filter((d) => !d.material);
+  assert.equal(rows.length, activity.length, 'one hoverable row per activity skill');
+  for (const d of activity) assert.ok(text.includes(d.name), d.name);
+  const travelRow = rows.find((r) => textOf(r).startsWith('Travel'));
+  assert.equal(travelRow.attributes['data-tip'], skillHoverText(s, 'travel'));
+  assert.equal(travelRow.attributes.title, travelRow.attributes['data-tip'], 'a mouse gets the same text as the title');
+  assert.match(textOf(travelRow), /40\/\d+/, 'XP progress');
+  assert.match(textOf(travelRow), /3[\s\S]*% less travel time/, 'level and the effect now');
+  // bar types and gem types: a matrix of "Lv N" cells, each with a hover
+  const matrixCells = findAll(root, (el) => el.classList.contains('mi-lv'));
+  const perMaterial = skillDefs().filter((d) => d.material);
+  assert.equal(matrixCells.length, perMaterial.length);
+  assert.ok(matrixCells.every((c) => /^Lv \d+$/.test(textOf(c)) && c.attributes['data-tip']));
+  assert.ok(matrixCells.some((c) => textOf(c) === 'Lv 2' && /^Iron repair: level 2\./.test(c.attributes['data-tip'])));
+  for (const head of ['Grade', 'Refining', 'Smithing', 'Repair', 'Cutting']) assert.ok(text.includes(head), head);
+  // the hover texts say what it does and how to earn XP
+  assert.match(all, /Travel: level 3\.\nNow: [\d.]+% less travel time\.\nNext level: [\d.]+% less travel time\.\nXP: \d+ per map step walked \(40 \/ \d+ to level 4\)\./);
+  assert.match(all, /Copper repair: level 0\.\nNo effect yet\./);
+  assert.match(all, /Only for copper gear\./);
+  // in the other phases too
+  for (const st of [statePlan(), stateReport(), stateOver()]) assert.doesNotMatch(readable(render(renderSkills, st)), /Maxed|level[ -]10/i);
+});
+
+test('hover details use tip(): the same text as the title and as data-tip (so a tap can open it)', () => {
+  assert.deepEqual(tip('Why'), { title: 'Why', 'data-tip': 'Why' });
+  const root = render(renderSkills, stateDay1());
+  const withTip = findAll(root, (el) => el.attributes['data-tip']);
+  assert.ok(withTip.length >= skillDefs().length);
+  for (const el of withTip) assert.equal(el.attributes.title, el.attributes['data-tip']);
+});
+
+// ---------------------------------------------- repairs by day, scrap (batch 2) ----
+const NIGHT_WORDS = /free at night|no time tonight|repairs? (at|by) night|repair tonight|cost materials but no time|repairs tonight/i;
+
+test('no screen talks about night repairs; the plan screen says repairs happen at camp by day and has no repair buttons', () => {
+  const worn = (s) => {
+    addGear(s, 'sword', 'copper', 'D', null, { durability: 60 });
+    addGear(s, 'chest', 'iron', 'C', { type: 'ruby', grade: 'B' }, { durability: 35 });
+    return s;
+  };
+  const states = [['day 1', worn(stateDay1())], ['in a field', worn(stateInField())], ['plan', worn(statePlan(1))], ['report', worn(stateReport())], ['over', stateOver()]];
+  for (const [label, s] of states) {
+    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderGameOver]];
+    for (const [name, fn] of screens) assert.doesNotMatch(readable(render(fn, s)), NIGHT_WORDS, `${name} (${label})`);
+  }
+  for (const [label, s] of states.filter(([, st]) => st.phase === 'plan' || st.phase === 'report')) {
+    const root = render(s.phase === 'plan' ? renderPlan : renderReport, s);
+    assert.equal(findAll(root, (el) => el.attributes['data-repair'] !== undefined).length, 0, `${label}: no repair buttons`);
+  }
+  const plan = textOf(render(renderPlan, states[2][1]));
+  assert.match(plan, /Repairs happen at camp during the day, on gear the adventurer does not have\. To repair an item, leave it home: tomorrow you can repair it in the Workshop\./);
+});
+
+test('the Workshop gear list: Repair buttons by day (time and bars), a Scrap button that says what comes back, no night banner', () => {
+  const s = stateDay1();
+  const sword = addGear(s, 'sword', 'copper', 'D', { type: 'ruby', grade: 'B' }, { durability: 60 });
+  s.storage.bars['copper:D'] = 3;
+  s.storage.cut['ruby:B'] = 1;
+  setSkillLevel(s, 'repair_copper', 2);
+  const root = render(renderWorkshop, s);
+  const text = textOf(root);
+  const all = readable(root);
+  assert.doesNotMatch(all, NIGHT_WORDS);
+  assert.equal(withClass(root, 'rp-night').length, 0);
+  const minutes = repairMinutes(s, sword, CONFIG);
+  const btn = findAll(root, (el) => el.attributes['data-repair'] === String(sword.id))[0];
+  assert.ok(btn, 'a Repair button for the worn sword');
+  assert.equal(btn.disabled, undefined, 'it can be done now');
+  assert.match(textOf(btn), /^Repair \+40%$/);
+  assert.ok(text.includes(`${minutes}m`), 'the repair time with the repair skills');
+  assert.match(all, /Repairing takes [\d.]+m; your repair skills cut it to [\d.]+m/);
+  // Scrap: the tip says what comes back
+  const back = scrapReturn(sword, CONFIG);
+  const qtyStr = String(back.qty);
+  const scrapBtn = withClass(root, 'ws-scrap')[0];
+  assert.match(scrapBtn.attributes.title, new RegExp(`You get back ${qtyStr.length === 3 ? qtyStr + '0' : qtyStr} Copper D bars \\(${CONFIG.gear.repair.materialFraction}% of its ${CONFIG.gear.slots.sword.bars} bars × 60% durability\\)\\. The gem is lost\\.`));
+  assert.equal(scrapBtn.attributes['data-tip'], scrapBtn.attributes.title);
+  assert.match(text, /Repairs happen here by day, at camp, on gear the adventurer does not have/);
+});
+
+test('a Copper sword at 60% scrapped from the Workshop returns 0.42 bars (confirm text and the click through ctx.act)', () => {
+  const s = stateDay1();
+  addGear(s, 'sword', 'copper', 'D', null, { durability: 60 });
+  const ctx = makeCtx(s);
+  const confirms = [];
+  globalThis.confirm = (m) => {
+    confirms.push(m);
+    return true;
+  };
+  try {
+    const root = render(renderWorkshop, s, CONFIG, ctx);
+    const scrapBtn = withClass(root, 'ws-scrap')[0];
+    assert.equal(scrapBtn.disabled, undefined);
+    scrapBtn.listeners.click[0]();
+  } finally {
+    delete globalThis.confirm;
+  }
+  assert.equal(confirms.length, 1);
+  assert.match(confirms[0], /^Scrap D Copper Sword\? You get back 0\.42 Copper D bars \(35% of its 2 bars × 60% durability\)\./);
+  assert.equal(s.storage.bars['copper:D'], 0.42);
+  assert.deepEqual(s.gear, []);
+});
+
+test('the Workshop smith panel shows the skilled smithing time with its reduction in the hover', () => {
+  const s = stateDay1();
+  s.storage.bars['copper:D'] = 5;
+  setSkillLevel(s, 'smith_copper', 5);
+  const root = render(renderWorkshop, s);
+  const m = smithMinutes(s, 'sword', 'copper', false, CONFIG);
+  assert.ok(m < CONFIG.gear.slots.sword.bars * CONFIG.gear.smithMinPerBar, 'the skill really makes it faster');
+  assert.match(textOf(root), new RegExp(`Craft \\(${m}m\\)`));
+  assert.match(tipsOf(root), /Base [\d.]+m \(2 bars × \d+m\); your Copper smithing skill cuts it to [\d.]+m/);
+});
+
+test('the map explains the Carrying skill: the load penalty per item shrinks and the base is mentioned', () => {
+  const s = stateDay1();
+  setSkillLevel(s, 'carrying', 4);
+  const text = textOf(render(renderMap, s));
+  assert.match(text, new RegExp(`${CONFIG.map.travelMinPerStep}m per step, \\+[\\d.]+% per item carried \\(${CONFIG.map.loadPenaltyPerItem}% before the Carrying skill\\)`));
+  assert.doesNotMatch(text, /way home \(skill\)|Return travel/i);
 });
 
 test('the day clock still starts at the configured time (sanity for the shared test states)', () => {
