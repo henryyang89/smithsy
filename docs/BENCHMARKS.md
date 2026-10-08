@@ -151,11 +151,12 @@ size, so a bigger simulation does not make "safe" estimates safer either.
    likely reason (not isolated by an experiment): a player, and the bot, picks the enemy with the highest
    estimate out of seven, which favours whichever enemy got lucky draws; a smaller wobble cuts that selection
    bias.
-5. **The displayed ± margin is not a 95% interval when attributes are hidden.** The game shows twice the
+5. **The displayed ± margin is not a 95% interval; with attributes hidden it covers much less.** The game shows twice the
    standard error of the guesses, which tracks the wobble (about ±13 at 10 x 10, ±9 at 20 x 20, ±6 at 40 x 30
-   for a steel C set against an elite with nothing scouted) and says "about 19 times in 20 the true chance is
-   within it". Checked against the truth (200 enemies, true chance ~55%), the true chance lay inside the
-   margin:
+   for a steel C set against an elite with nothing scouted). The screen used to say "about 19 times in 20 the
+   true chance is within it"; it now says the ± is how far the simulation alone could be off (about 9 times in
+   10 when every attribute is known) and that attributes you can't see add more uncertainty. Checked against
+   the truth (200 enemies, true chance ~55%), the true chance lay inside the margin:
 
 | Size | sight 10% | sight 50% | sight 100% |
 |---|---|---|---|
@@ -163,11 +164,11 @@ size, so a bigger simulation does not make "safe" estimates safer either.
 | 20 x 20 | 44% | 46% | 94% |
 | 40 x 30 | 30% | 33% | 90% |
 
-   (63-75% / 64-77% / 89-94% at 10 x 10 for the 75% and 90% targets.) With every attribute known it is close to
-   the advertised 95% (83-95%); with few known it is much lower, and bigger simulations look *worse* because
+   (63-75% / 64-77% / 89-94% at 10 x 10 for the 75% and 90% targets.) With every attribute known it is about 9 times
+   in 10 (90-94% here, 83-95% across seeds), not 19 in 20; with few known it is much lower, and bigger simulations look *worse* because
    their margins shrink while the guesswork stays. This was measured with a one-off script that reuses the
-   estimator section's setup (it is not part of the tool). It is a UI wording/behaviour mismatch to decide
-   on (HANDOFF, known concerns).
+   estimator section's setup (it is not part of the tool). The wording was corrected in 1.2; the margin math is
+   unchanged.
 
 **Verdict.** 10 x 10 is not too low as a *design*: it is within about a point of 1.1's estimate in average miss
 at the starting scouting, it is 12 times cheaper, and it leaves a real role for the Battle simulation track

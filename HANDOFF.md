@@ -351,10 +351,10 @@ BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:
   attributes you cannot see: in a coverage check (200 elites, steel C set, true chance ~55%) the true chance lay
   inside the shown margin for only **56%** of 10 x 10 estimates at 10% scouting (69% at 50%, 93% with every
   attribute visible; 20 x 20 and 40 x 30 are worse at low scouting, 44% and 30%, because their margins shrink).
-  The screen's wording "about 19 times in 20 the true chance is within N points" (detail panel, cell tooltip,
-  `estimateHow`) is therefore only true for a fully known enemy. This is a code/UI mismatch, not fixed in the
-  docs pass. Options: widen the margin with the number of hidden attributes, change the wording, a higher
-  starting scouting.
+  The screen's wording was corrected before the 1.2 release (detail panel, cell tooltip, `estimateHow`, Help:
+  the ± is how far the simulation alone could be off, about 9 times in 10 when every attribute is known;
+  attributes you can't see add more uncertainty); the margin math is unchanged. Still open as options: widen
+  the margin with the number of hidden attributes, a higher starting scouting.
 - **Firefox is unresolved and ignored** (user decision, session 6: the user uses Chrome). The blank page
   reported in 1.0 was never confirmed to be the `||=` shorthand removed in 1.1; the code still uses `?.` and
   `??` (Firefox 74+), and the start-up box would show the error. Not tested since.
@@ -367,15 +367,18 @@ BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:
   slow and by S gems. Sapphire armor + a Slow resistance ring win back 103-140% of a High Chilling, which may be
   too strong; the armor defence for magic (48%) and piercing (52%) on a mythril set is right at the "at least
   half" line.
+- **Ruby is now the strongest sword gem:** +19.9 win points at S against +13.7 to +15.6 for the other sword
+  gems (steel C set vs a typical elite; `power` report, `docs/BALANCE.md` special-gem table). Retune ruby
+  (`CONFIG.gemEffects.ruby.weapon`) if it should sit with the rest.
+- **Armor-gem recovery vs a High Chilling enemy is 98-140%** (mythril C set with 3-4 armor gems and a B
+  ring; 103-121% on steel C): the defence can win back more than the special cost, maybe too strong.
+- **Mythril armor recovers only about 48% vs High Magical and about 52% vs High Piercing** (3 armor gems and
+  a B ring; the "at least half" line), because the mythril set already has so much defense.
 - **`--ablate repair` and `--ablate skills` are within noise** (median 51.0 and 52.0 vs 51.5; in 1.1 they cost
   8 and 3.5 days): with 10% wear the bot rebuilds broken pieces, so repair and Gear care show in the bar bill
   (destroyed items 11.9% of the bars made without repair, 4.8% with), not in survival. Re-run on 200 seeds before
   concluding anything; the default carry also shows no cost any more (51.5 vs 51.5; the 1.1 concern "Default
   carry includes junk" is within noise).
-- **Economy report inconsistency:** section 2 ("Searching a whole field", `min/item`, `debris min`) charges a
-  flat 30 minutes per search and so leaves out the 126 fresh-cell minutes per field; sections 3a / 3b include
-  them. Not fixed (the tool was out of scope for the docs pass). The true figure is 16.4 min/item at distance 2
-  against the table's 14.6.
 - **Fresh cells in v2 saves:** cells have no `touched` flag, so a debris cell that was partly cleared but has
   0% searched counts as fresh once more. Harmless, small.
 - **Debris skill XP comes fast early.** XP is 1 per point of debris cleared and the first levels cost
@@ -452,7 +455,7 @@ BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:
   five ablations and a regrowth-5% what-if at 40 seeds).
 - Session 4 (commit 1e53a91): user request "Champions shouldn't have higher HP, damage, or defense than
   the elites or normals. The win rate is too low." All three enemy tiers now share base HP 80, damage 8,
-  defense 20% (`CONFIG.enemies.tiers`); tiers differ only by attribute levels, score and ring grades.
+  defense 20% (25% since 1.2) (`CONFIG.enemies.tiers`); tiers differ only by attribute levels, score and ring grades.
 - Session 4 docs refresh: BALANCE.md, SPEC.md and this file updated to commit 1e53a91 (enemy tier tables,
   quick levers, enemy section, defense/pierce/magic examples, matchup example, Appendix A/B/C, gem/ring/
   slot value tables, "Balance targets and current results"); results regenerated (`--section power`,

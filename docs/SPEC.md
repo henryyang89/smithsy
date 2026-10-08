@@ -199,10 +199,10 @@ randomness adds luck and variety. Starting numbers are round.
   fresh fights. Draws count as survival. It is deliberately small, so it is noisy: every estimate shows
   its margin of error as "62% ± 12" (twice the standard error of the per-guess win rates, whole points,
   never below 1), in the detail panel, the cell, the confirm bar and the low-win confirmation. The screen
-  words it as "about 19 times in 20 the true chance is within it"; that holds when every attribute of the
-  enemy is known, but not otherwise: the margin measures the simulation's noise, not the guess about the
-  hidden attributes, so with 10% scouting the true chance lies inside it only about 55-65% of the time at
-  10 x 10 (`docs/BENCHMARKS.md`). Results are kept per selection (same gear, rings, intel and
+  words it as how far the simulation alone could be off (about 9 times in 10 when every attribute of the
+  enemy is known) and says attributes you can't see add more uncertainty: the margin measures the
+  simulation's noise, not the guess about the hidden attributes, so with 10% scouting the true chance lies
+  inside it only about 55-60% of the time at 10 x 10 (`docs/BENCHMARKS.md`). Results are kept per selection (same gear, rings, intel and
   sizes always give the same numbers); changing the gear or ring selection, confirming the plan, a new
   roster or a new game **cancels a run in progress** (it stops simulating and paints nothing), picking
   another enemy column does not.

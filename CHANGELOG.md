@@ -48,12 +48,12 @@ Fights and gear:
   the wear per level (10% off at level 10) and earns its XP from every fight the adventurer survives
   (100 XP per fight, so level 10 comes after about 55 fights). Why: repairs and spare bars now matter all
   game, and you get a way to lower the bill.
-- **Enemy specials are dangerous and resistances matter.** Magic, Piercing, Stunning and Chilling were
-  all raised (Magical 10/15/25 %, Piercing 10/25/60 %, Stunning 5/15/35 % for 1.5 s, Chilling
-  10/20/40 % for 2.5 s; every resistance is 0/20/40 %). Switching one special from Normal to High now
-  costs a mid-game set about 11-20 win points, and the matching armor gem and resistance ring win back
-  about half to all of it. Why: before, Piercing and Stunning were almost harmless, so their gems, armor
-  and resistance rings were not worth wearing.
+- **Enemy specials are dangerous and resistances matter.** Piercing, Stunning and Chilling were raised
+  and Magical was retuned down at Normal and High (Magical 10/15/25 %, was 10/20/30; Piercing 10/25/60 %,
+  Stunning 5/15/35 % for 1.5 s, Chilling 10/20/40 % for 2.5 s; every resistance is 0/20/40 %).
+  Switching one special from Normal to High now costs a mid-game set about 11-20 win points, and the
+  matching armor gem and resistance ring win back about half to all of it. Why: before, Piercing and
+  Stunning were almost harmless, so their gems, armor and resistance rings were not worth wearing.
 - **Your own gems and rings follow.** Ruby 6-18 % magic, diamond 15-55 % piercing, topaz 10-30 % stun
   for 1-1.5 s, sapphire 10-30 % slow for 1.5-2 s; the Piercing, Pierce resistance, Magic resistance, Stun
   resistance and Slow resistance rings were retuned (mostly stronger). Your best (S) gem is a little weaker
@@ -65,12 +65,14 @@ Fights and gear:
 
 Planning the fight:
 - **One "Estimate all" button.** It simulates every enemy of the roster with the gear and rings you have
-  picked and fills a "Win estimate" row under the roster table. Changing the gear or rings, confirming, or
-  starting a new game stops a run that is no longer valid; choosing another enemy does not.
+  picked and fills a "Win estimate" row in the roster table (after the Hidden attributes row). Changing
+  the gear or rings, confirming, or starting a new game stops a run that is no longer valid; choosing
+  another enemy does not.
 - **A smaller, honest estimate.** It now runs 10 guesses of the hidden attributes x 10 test fights per
   enemy (was 40 x 30), so it is faster and a little noisy. Every estimate shows its margin (for example
-  "62% +/- 12": how much the simulation alone could be off; attributes you cannot see add more
-  uncertainty on top, so scout the enemy before trusting a close call).
+  "62% +/- 12": how far the simulation alone could be off, about 9 times in 10 when every attribute is
+  known; attributes you cannot see add more uncertainty on top, so scout the enemy before trusting a
+  close call).
 - **Two ways to make it steadier.** A new intel track, **Battle simulation** (first point +10, then +9,
   +8, ...), adds guesses and test fights per enemy, and a new smith ring, **Foresight** (+2 to +6, rounded
   down when stacked), does the same. Most of the estimate's error early on comes from attributes you

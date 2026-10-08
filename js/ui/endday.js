@@ -379,7 +379,7 @@ function estimateCell(res, running) {
   if (res) {
     const m = marginPts(res);
     return h('div', { class: 'rt-ec' },
-      h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${winWithMargin(res)}${m != null ? ` point${m === 1 ? '' : 's'}` : ''} from ${res.fights} simulated fights${m != null ? ` (about 19 times in 20 the true chance is within ${pointsText(m)})` : ''}` }, winText(res.winPct)),
+      h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${winWithMargin(res)}${m != null ? ` point${m === 1 ? '' : 's'}` : ''} from ${res.fights} simulated fights${m != null ? ` (the ± is how far the simulation alone could be off; hidden attributes add more)` : ''}` }, winText(res.winPct)),
       m != null ? h('div', { class: 'muted rt-sm rt-pm' }, `± ${m}`) : null);
   }
   if (running) return h('span', { class: 'muted', title: 'Simulating…' }, '…');
@@ -389,12 +389,12 @@ function estimateCell(res, running) {
 const winClass = (p) => (p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'err');
 const winText = (v) => `${Math.round(v)}%`;
 
-// Margin of an estimate in points: twice the standard error (about 19 times in 20 the true chance is within
-// it), shown in whole points and never below 1. null for results without one (nothing simulated).
+// Margin of an estimate in points: twice the standard error, shown in whole points and never below 1. It covers
+// the simulation's own noise only (about 9 times in 10 when every attribute is known), not the guesswork about
+// hidden attributes. null for results without one (nothing simulated).
 export const marginPts = (res) => (res && Number.isFinite(res.se) ? Math.max(1, Math.round(2 * res.se)) : null);
 // "62% ± 12" (or just "62%" without a margin)
 const winWithMargin = (res) => (marginPts(res) != null ? `${winText(res.winPct)} ± ${marginPts(res)}` : winText(res.winPct));
-const pointsText = (n) => `${n} point${n === 1 ? '' : 's'}`;
 
 // -------------------------------------------------------------- combat log ----
 // Backpack-Battles style log lines. Returns a DOM node.
@@ -1057,7 +1057,7 @@ function estimateHow(ctx, sel, counts, est = null) {
       `For each guess of the hidden attributes${nHidden != null ? ` (${nHidden} hidden for ${sel.name})` : ''}, consistent with the tier mix, the adventurer picks the best packed gear (${counts.fightsPerLoadout} test fights per combination), then fights ${counts.evalFights} fresh fights: ${counts.samples * counts.evalFights} fights per enemy. A draw (safety time cap) counts as survival.`),
     h('p', { class: 'muted adv-small', 'data-margin-note': m != null ? m : null },
       m != null
-        ? ['A small simulation is noisy: this estimate is ', h('b', {}, winWithMargin(est)), ` point${m === 1 ? '' : 's'} (about 19 times in 20 the true chance is within ${pointsText(m)} of ${winText(est.winPct)}). It is a rough guide, and a risk you take on. `]
+        ? ['A small simulation is noisy: this estimate is ', h('b', {}, winWithMargin(est)), ` point${m === 1 ? '' : 's'}. The ± is how far the simulation alone could be off (about 9 times in 10 when every attribute is known); attributes you can't see add more uncertainty. It is a rough guide, and a risk you take on. `]
         : 'A small simulation is noisy: every estimate shows its margin of error (± points), and it is a rough guide, a risk you take on. ',
       'To make it steadier, spend intel on ',
       h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear ', h('b', {}, cfg.rings.types.foresight.name), ' smith rings (Rings tab). Both add guesses and test fights, which tightens the margin (about 4 times as many guesses halve it) and makes the run slower.'));
@@ -1087,7 +1087,7 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
     };
     right = h('div', {},
       h('div', { class: 'adv-bignums' },
-        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, title: marginPts(est) != null ? `Margin of error: about 19 times in 20 the true win chance is within ${pointsText(marginPts(est))} of ${winText(est.winPct)}` : null },
+        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, title: marginPts(est) != null ? `± ${marginPts(est)} is how far the simulation alone could be off (about 9 times in 10 when every attribute is known). Attributes you can't see add more uncertainty.` : null },
           winText(est.winPct), marginPts(est) != null ? h('span', { class: 'adv-pm' }, ` ± ${marginPts(est)}`) : null), h('div', { class: 'muted' }, marginPts(est) != null ? 'win chance (± points)' : 'win chance')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),

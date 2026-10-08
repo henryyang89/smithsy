@@ -189,8 +189,9 @@ by 17%, 17%, 27% and 17% (best distances); the steel pair at distance 3, where i
 from 129 to 155, and its best distance is now the thin distance-5+ bucket (0.47 fields a map; 115, mostly
 sample noise). The map holds 1,541 items on these 100 maps, unchanged; items per search fell about 3% (1.84 vs
 1.89 at distance 1). A novice cuts gems at 15% failure and 40% C-or-better, worth 0.77 of a C gem per cut
-(section 5). The economy report's section 2 still charges a flat 30 minutes per search (its `min/item`
-leaves the 126 fresh-cell minutes per field out); sections 3a and 3b include them.
+(section 5). Section 2 (a whole field, no travel) charges the 30-minute base per search plus 2 minutes per
+never-searched cell, once per cell (126 minutes a field), without the search-skill speed-up; sections 3a and
+3b charge the game's own search time.
 
 **Power curve** (`node tools/balance.mjs --section power`, about 5 s):
 
@@ -731,10 +732,10 @@ picks in the economy report use about 36 searches per field (36.0–36.7 by dist
 at the edges, some cells need a 4th search and debris cells need about one more. On average a search finds
 1.84 / 2.05 / 2.22 / 2.36 / 2.55 items at distance 1 / 2 / 3 / 4 / 5+, debris cells included (1.1: 1.89 /
 2.10 / 2.27 / 2.41 / 2.60: about one search more per field, probably because the economy report's greedy
-area picks now weigh the fresh-cell minutes). Its `min/item` column still charges a flat 30
-minutes per search and so leaves the fresh-cell time out; adding the 126 minutes makes a whole field cost
-18.2 / 16.4 / 15.1 / 14.2 / 13.1 minutes per item at distance 1 / 2 / 3 / 4 / 5+ (distance 2: 16.4 against
-14.6 flat). The trip tables (3a, 3b) already include the surcharge.
+area picks now weigh the fresh-cell minutes). Its `min/item` column charges the 30-minute base plus the
+fresh-cell surcharge (126 minutes a field), so a whole field costs 18.2 / 16.4 / 15.1 / 14.2 / 13.1 minutes
+per item at distance 1 / 2 / 3 / 4 / 5+ (a flat 30 minutes per search would give 16.3 / 14.6 / 13.5 / 12.7 /
+11.8). The trip tables (3a, 3b) include the surcharge too.
 
 **Tuning notes.** `freshCellMin` is a flat tax on every cell the first time a search works on it: a fully
 searched field costs 126 minutes more (about 11% on top of ~36 searches × 30 minutes), and the first search
@@ -1095,7 +1096,7 @@ material or grade. Armor gem effects from several pieces add up.
 (grade D: chest 5, helmet 4.4, gloves 4, boots 4). Diamond armor has its own, larger table: grade S chest
 22.5, helmet 19.8, gloves 18, boots 18 (grade D: 7.5, 6.6, 6, 6).
 
-**Worked example.** Emerald S on a chest: 12 × 1.25 = **+15 dodge**. Ruby C on a sword: magic damage +8%
+**Worked example.** Emerald S on a chest: 12 × 1.25 = **+15 dodge**. Ruby C on a sword: magic damage +9%
 of the sword's damage. On an iron B sword (28.8 damage) that is 2.59 extra magic damage per hit before the
 enemy's magic resistance.
 
@@ -1638,8 +1639,9 @@ For each of the `samples` guesses:
 Reported win % = (wins + draws) / (samples × evalFights fights), plus the **margin**: the standard error of
 the per-guess win fractions (`winStandardError`: the sample standard deviation of the `samples` fractions
 divided by √samples, ×100; with a single guess the binomial error of its fights), shown in the game as
-`max(1, round(2 × SE))` points ("62% ± 12"; the screen says about 19 times in 20 the true chance is within it,
-which holds only for a fully known enemy, see the worked example). Cost per
+`max(1, round(2 × SE))` points ("62% ± 12"; the screen says it is how far the simulation alone could be off,
+about 9 times in 10 when every attribute is known, and that attributes you can't see add more uncertainty;
+see the worked example). Cost per
 enemy: samples × (loadouts × fightsPerLoadout + evalFights) = 10 × (32 × 10 + 10) = **3,300 fights** with 32
 loadouts (1.1: 40 × (32 × 30 + 30) = 39,600), 23,100 for the whole roster; in the browser it runs in steps
 (one `setTimeout` per guess) with a progress bar.
@@ -1674,7 +1676,7 @@ would differ by about 5-7 points (the "repeat sd"; in the game the draws are see
 again gives the same numbers), so the margin and the repeat wobble agree; the error against the truth is
 larger at low scouting and almost the same as the wobble at full scouting (4.6 vs 4.8). Coverage check (200 elites, steel
 C set, true chance ~55%): the true chance lay inside the displayed margin for **56%** of 10 × 10 estimates
-at the 10% starting scouting, 69% at 50% and 93% at 100% (the nominal 95%); for 20 × 20 it is 44% / 46% /
+at the 10% starting scouting, 69% at 50% and 93% at 100% (about 9 in 10 is all the margin promises, even with nothing hidden); for 20 × 20 it is 44% / 46% /
 94% and for 40 × 30 30% / 33% / 90%, because a bigger simulation shrinks the margin but not the guesswork
 about hidden attributes. Details, by scouting level and size, in `docs/BENCHMARKS.md` ("Is 10 × 10 too
 low?"). In the bot runs (which use the bot's own larger
@@ -1978,8 +1980,8 @@ gives 3,000 XP: Mythril bar grade and Mythril refining reach level 7 = +2.1% upg
 points. Cutting 60 rubies gives 1,500 XP: Ruby grade and Ruby cutting reach level 5, the halfway table
 (F 12.5, D 32.5, C 25, B 16, A 9.5, S 4.5). Clearing one 40-thick debris cell gives 40 Debris clearing XP,
 so level 1 (+10%) comes after two or three debris cells and level 3 (+30%, 600 XP) after about 15. A
-field holds about 380 debris points, cleared over its ~35 searches, so a searcher working through whole
-fields reaches level 3 after about 55 searches and level 5 after about 140 (a map holds about 7,550 debris
+field holds about 380 debris points, cleared over its ~36 searches, so a searcher working through whole
+fields reaches level 3 after about 57 searches and level 5 after about 142 (a map holds about 7,550 debris
 points, level 10 needs 5,500).
 
 **What the bot reaches** by the end of a run (about day 52, mean levels): activity skills from 6.6 to 9.4
@@ -2221,6 +2223,8 @@ Adventurer: iron B sword + ruby C, iron C chest, copper B helmet, copper D glove
 Enemy: elite Ogre, day 6; Piercing High, Pierce res Normal, Magical Normal, Magic res Low, Stunning Low,
 Stun res Normal, Accurate Normal, Evasion High, Chilling Low, Slow res Normal, Fast Normal, HP Normal
 (HP 94, damage 9.4, accuracy 105, dodge 126, defense 25).
+(The attribute mix above, 3 Low / 7 Normal / 2 High, is illustrative: an actual elite always rolls exactly
+3 Low / 6 Normal / 3 High.)
 
 | Step | Adventurer → Ogre | Ogre → Adventurer |
 |---|---|---|

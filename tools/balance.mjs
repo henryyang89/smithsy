@@ -489,7 +489,7 @@ function exhaustField(st0, loc) {
   st.location = { x: loc.x, y: loc.y };
   const field = currentField(st);
   const wasDebris = new WeakSet();
-  const o = { searches: 0, items: 0, debrisEff: 0, searchEff: 0, fromDebris: 0, clearMin: 0, debrisSearches: 0 };
+  const o = { searches: 0, items: 0, minutes: 0, debrisEff: 0, searchEff: 0, fromDebris: 0, clearMin: 0, debrisSearches: 0 };
   for (let guard = 0; guard < 600; guard++) {
     st.time = DAY_START;
     const act = bestAction(st, field, () => 1, wasDebris);
@@ -498,6 +498,7 @@ function exhaustField(st0, loc) {
     if (!s.r.ok) break;
     o.searches++;
     o.items += s.r.found.length;
+    o.minutes += cfg.field.searchMin + (cfg.field.freshCellMin || 0) * (act.fresh || 0); // base time + fresh-cell surcharge (counted before the search; no skill speed-up)
     o.debrisEff += s.debrisEff;
     o.searchEff += s.searchEff;
     o.fromDebris += s.fromDebris;
@@ -625,7 +626,7 @@ function economySection(o) {
   );
 
   // ---- 2. full-field yield per search (no travel); debris is cleared by the searches
-  const ex = Object.fromEntries(BUCKETS.map((b) => [b, { n: 0, s: 0, i: 0, de: 0, se: 0, fd: 0, cm: 0, ds: 0, left: 0 }]));
+  const ex = Object.fromEntries(BUCKETS.map((b) => [b, { n: 0, s: 0, i: 0, min: 0, de: 0, se: 0, fd: 0, cm: 0, ds: 0, left: 0 }]));
   states.forEach((st, si) => {
     const rng = seededRng(mixSeed(77, si));
     for (const b of BUCKETS) {
@@ -637,6 +638,7 @@ function economySection(o) {
       e.n++;
       e.s += a.searches;
       e.i += a.items;
+      e.min += a.minutes;
       e.de += a.debrisEff;
       e.se += a.searchEff;
       e.fd += a.fromDebris;
@@ -647,18 +649,20 @@ function economySection(o) {
   });
   const sMin = cfg.field.searchMin;
   const debrisShare = (b) => (100 * ex[b].de) / Math.max(EPS, ex[b].de + ex[b].se);
-  h2(`2. Searching a whole field (greedy 3x3 picks, ${sMin} min/search, ${cfg.field.searchEfficiency}% +/-${cfg.field.searchRandomness || 0} per cell per search, no travel)`);
+  h2(`2. Searching a whole field (greedy 3x3 picks, ${sMin} min/search + ${cfg.field.freshCellMin || 0} min per never-searched cell in the area, ${cfg.field.searchEfficiency}% +/-${cfg.field.searchRandomness || 0} per cell per search, no travel)`);
   printTable(
     ['dist', 'searches', 'items', 'items/search', 'min/item', 'searches touching debris', 'debris % of effort', 'debris min', 'items from debris cells', 'items left'],
     BUCKETS.filter((b) => ex[b].n).map((b) => {
       const e = ex[b];
       const k = (v) => v / e.n;
-      return [bucketLabel(b), f1(k(e.s)), f1(k(e.i)), f2(e.i / e.s), f1((e.s * sMin) / e.i), f1(k(e.ds)), f1(debrisShare(b)), f0(k(e.cm)), f1(k(e.fd)), f1(k(e.left))];
+      return [bucketLabel(b), f1(k(e.s)), f1(k(e.i)), f2(e.i / e.s), f1(e.min / e.i), f1(k(e.ds)), f1(debrisShare(b)), f0(k(e.cm)), f1(k(e.fd)), f1(k(e.left))];
     }),
   );
   note('Debris is cleared by searching: each search gives each open cell an effort roll; on a debris cell it clears\n' +
     'debris first (x debris skill) and the rest searches the cell. "debris % of effort" = effort spent on debris /\n' +
-    '(debris + searching) effort; "debris min" charges that share of each search\'s minutes to debris.\n' +
+    '(debris + searching) effort; "debris min" charges that share of each search\'s minutes to debris. "min/item" charges\n' +
+    'the base search time plus the fresh-cell surcharge (freshCellMin per never-searched cell, once per cell: about 126 min\n' +
+    'per field), with no search-skill speed-up.\n' +
     'Items left = still hidden when no search can add anything (only boulders are never searched, and they hold nothing).');
 
   // ---- 3. trips and days including travel
