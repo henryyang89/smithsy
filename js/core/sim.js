@@ -2,6 +2,17 @@ import { CONFIG, SLOTS } from '../config.js';
 import { seededRng, mixSeed } from './rng.js';
 import { adventurerCombatant, fight } from './combat.js';
 import { enemyCombatant, sampleLevels } from './enemies.js';
+import { intelChance } from './intel.js';
+import { smithRingTotals } from './rings.js';
+
+// Size of the win-chance estimate for this game: the base counts from CONFIG.sim plus `extra`, which
+// is the Battle simulation intel track (a count, not a chance) plus the worn Foresight rings (rounded
+// down). Callers pass the result as `opts` to estimateWinChance / estimateWinChanceSync.
+export function simCounts(state, cfg = CONFIG) {
+  const extra = intelChance(state, 'simDepth', cfg) + Math.floor((smithRingTotals(state, cfg).foresight || 0) + 1e-9);
+  const b = cfg.sim;
+  return { samples: b.samples + extra, evalFights: b.evalFights + extra, fightsPerLoadout: b.fightsPerLoadout + extra, extra };
+}
 
 // All gear combinations: one item (or nothing, if none packed) per slot.
 export function loadouts(gearItems) {
@@ -49,11 +60,25 @@ export function bestLoadout(combos, ringTotals, enemyC, seed, fights, cfg = CONF
   return { index: best, wins: bestWins };
 }
 
+// Standard error of the win chance in percentage points: the spread (sample sd) of the per-guess win
+// fractions divided by sqrt(guesses), x 100. More guesses and more test fights per guess both shrink it.
+// With a single guess there is no spread to measure, so the plain binomial error of its fights is used.
+export function winStandardError(fractions, evalFights = 1) {
+  const n = fractions.length;
+  if (!n) return 0;
+  const mean = fractions.reduce((a, f) => a + f, 0) / n;
+  if (n < 2) return Math.sqrt((mean * (1 - mean)) / Math.max(1, evalFights)) * 100;
+  const variance = fractions.reduce((a, f) => a + (f - mean) ** 2, 0) / (n - 1);
+  return Math.sqrt(variance / n) * 100;
+}
+
 // Estimate win chance against an enemy whose attributes are partly hidden.
 // For each sample: guess the hidden attributes (respecting the tier's low/normal/high counts),
 // let the adventurer pick the best packed gear for that guess, then run fresh fights.
 // params: { gearItems, ringTotals, tier, day, known, seed }
-// Returns a Promise; onProgress(fraction) is called between samples.
+// Returns a Promise; onProgress(fraction) is called between samples. If it returns false the run stops
+// and the Promise resolves to null (a cancelled run has no result).
+// Result: { winPct, se (margin of error, see winStandardError), perGuess (win % of each guess), fights, avgTime, avgHpLeftPct, usage }
 export async function estimateWinChance(params, opts = {}, onProgress = null, cfg = CONFIG) {
   const o = { ...cfg.sim, ...opts };
   const combos = loadouts(params.gearItems);
@@ -63,6 +88,7 @@ export async function estimateWinChance(params, opts = {}, onProgress = null, cf
   let timeSum = 0;
   let hpSum = 0;
   const usage = new Array(combos.length).fill(0);
+  const fractions = [];
   for (let s = 0; s < o.samples; s++) {
     const levels = sampleLevels(rng, params.tier, params.known || {}, cfg);
     const enemyC = enemyCombatant(params.tier, params.day, levels, 'Enemy', cfg);
@@ -70,22 +96,27 @@ export async function estimateWinChance(params, opts = {}, onProgress = null, cf
     usage[pick.index]++;
     const adv = adventurerCombatant(combos[pick.index], params.ringTotals, cfg);
     const er = seededRng(mixSeed(params.seed ?? 1, s, 2));
+    let guessWins = 0;
     for (let f = 0; f < o.evalFights; f++) {
       const r = fight(adv, enemyC, er.next, false, cfg);
       fights++;
       timeSum += r.time;
       if (r.win || r.draw) {
         wins++;
+        guessWins++;
         hpSum += r.advHp / adv.hp;
       }
     }
+    fractions.push(o.evalFights ? guessWins / o.evalFights : 0);
     if (onProgress) {
-      onProgress((s + 1) / o.samples);
-      await new Promise((res) => setTimeout(res, 0));
+      await new Promise((res) => setTimeout(res, 0)); // let the page breathe (and handle a cancel click)
+      if (onProgress((s + 1) / o.samples) === false) return null;
     }
   }
   return {
     winPct: fights ? (wins / fights) * 100 : 0,
+    se: winStandardError(fractions, o.evalFights),
+    perGuess: fractions.map((f) => f * 100),
     fights,
     avgTime: fights ? timeSum / fights : 0,
     avgHpLeftPct: wins ? (hpSum / wins) * 100 : 0,
@@ -100,17 +131,23 @@ export function estimateWinChanceSync(params, opts = {}, cfg = CONFIG) {
   const rng = seededRng(mixSeed(params.seed ?? 1, 0xabc));
   let wins = 0;
   let fights = 0;
+  const fractions = [];
   for (let s = 0; s < o.samples; s++) {
     const levels = sampleLevels(rng, params.tier, params.known || {}, cfg);
     const enemyC = enemyCombatant(params.tier, params.day, levels, 'Enemy', cfg);
     const pick = bestLoadout(combos, params.ringTotals, enemyC, mixSeed(params.seed ?? 1, s, 1), o.fightsPerLoadout, cfg);
     const adv = adventurerCombatant(combos[pick.index], params.ringTotals, cfg);
     const er = seededRng(mixSeed(params.seed ?? 1, s, 2));
+    let guessWins = 0;
     for (let f = 0; f < o.evalFights; f++) {
       const r = fight(adv, enemyC, er.next, false, cfg);
-      if (r.win || r.draw) wins++;
+      if (r.win || r.draw) {
+        wins++;
+        guessWins++;
+      }
       fights++;
     }
+    fractions.push(o.evalFights ? guessWins / o.evalFights : 0);
   }
-  return { winPct: fights ? (wins / fights) * 100 : 0, fights };
+  return { winPct: fights ? (wins / fights) * 100 : 0, se: winStandardError(fractions, o.evalFights), perGuess: fractions.map((f) => f * 100), fights };
 }

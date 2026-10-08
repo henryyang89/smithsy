@@ -25,18 +25,13 @@
 .bar.adv-dur-mid .bar-fill { background: var(--warn); }
 .bar.adv-dur-low .bar-fill { background: var(--err); }
 
-/* enemy cards */
-.adv-roster { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
-.adv-roster .enemy-card, .adv-report .enemy-card { margin: 0; }
+/* enemy cards (a single enemy: today's opponent, the battle report) */
+.adv-report .enemy-card { margin: 0; }
 .adv-ecard { background: var(--panel); }
-.adv-pick { cursor: pointer; transition: border-color 0.1s; }
-.adv-pick:hover { border-color: var(--accent); }
-.adv-pick:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 1px; }
-.adv-pick input[type=radio] { margin: 0; pointer-events: none; accent-color: var(--accent); }
 .adv-ehead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 2px; }
 .adv-ename { font-weight: 700; font-size: 15px; }
 .adv-tier { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-.adv-badge { margin-left: auto; font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 8px; border: 1px solid currentColor; }
+.adv-badge { font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 8px; border: 1px solid currentColor; }
 .adv-base { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; margin: 2px 0 6px; }
 .adv-bstat b { font-variant-numeric: tabular-nums; }
 .adv-pairs { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; font-size: 12px; }
@@ -88,10 +83,49 @@
 .adv-big.ok { color: var(--ok); }
 .adv-big.warn { color: var(--warn); }
 .adv-big.err { color: var(--err); }
+.adv-pm { font-size: 15px; font-weight: 600; color: var(--muted); }
 .adv-wins { max-width: 460px; margin-bottom: 8px; }
 .adv-over { border-left: 4px solid var(--err); }
 
+/* roster comparison table: one enemy per column, one attribute per row */
+.rt-scroll { padding-bottom: 2px; }
+table.rt { --rt-label: 100px; --rt-col: 96px; border-collapse: separate; border-spacing: 0; table-layout: fixed; min-width: 100%; font-size: 12px; }
+.rt th, .rt td { padding: 3px 4px; border-bottom: 1px dotted var(--border); vertical-align: middle; }
+.rt td.rt-c, .rt th.rt-c { text-align: center; overflow-wrap: anywhere; border-left: 2px solid transparent; border-right: 2px solid transparent; }
+/* the label column stays put while the enemies scroll */
+.rt th.rt-row {
+  position: sticky; left: 0; z-index: 2; background: var(--panel); text-align: left; font-size: 12px; font-weight: 600;
+  color: var(--muted); border-right: 1px solid var(--border);
+}
+.rt thead th.rt-row { z-index: 3; width: var(--rt-label); }
+.rt thead th.rt-c { width: var(--rt-col); }
+.rt .rt-sm { font-size: 11px; font-weight: 400; line-height: 1.2; }
+.rt tr.rt-names th { border-bottom: 2px solid var(--border); padding-top: 6px; padding-bottom: 6px; }
+.rt-hd { display: flex; align-items: center; justify-content: center; gap: 5px; }
+.rt-name { font-weight: 700; font-size: 13px; line-height: 1.15; color: var(--text); }
+.rt-hd input[type=radio] { margin: 0; flex: none; accent-color: var(--accent); }
+.rt .adv-tier { font-size: 11px; }
+.rt tr.rt-sect th.rt-row { background: var(--cell); color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; border-top: 2px solid var(--border); }
+.rt tr.rt-sect td { background: var(--cell); border-top: 2px solid var(--border); padding: 3px 0; text-align: left; font-size: 11px; color: var(--muted); }
+.rt-sect-sub { position: sticky; left: 108px; padding-left: 6px; white-space: nowrap; } /* stays in view while the enemies scroll */
+/* the Defense divider repeats the enemy names (compact, muted) so they stay visible below the header */
+.rt tr.rt-sect-names td { padding: 3px 4px; text-align: center; font-size: 11px; font-weight: 600; line-height: 1.15; color: var(--muted); overflow-wrap: anywhere; border-left: 2px solid transparent; border-right: 2px solid transparent; }
+.rt tr.rt-sect-names td.rt-pick:hover { background: linear-gradient(rgba(181, 101, 29, 0.07), rgba(181, 101, 29, 0.07)), var(--cell); }
+.rt tr.rt-sect-names td.rt-sel { background: linear-gradient(rgba(181, 101, 29, 0.13), rgba(181, 101, 29, 0.13)), var(--cell); border-left-color: var(--accent); border-right-color: var(--accent); color: var(--text); }
+.rt-ring { line-height: 1.25; }
+.rt .rt-pm { margin-top: 1px; }
+.rt tr.rt-est td { padding-top: 5px; padding-bottom: 5px; }
+.rt .adv-badge { display: inline-block; margin: 0; font-size: 13px; padding: 0 8px; }
+/* choosable columns: a clear highlight on the selected enemy, from the name down to the last row */
+.rt td.rt-pick, .rt th.rt-pick { cursor: pointer; }
+.rt td.rt-pick:hover, .rt th.rt-pick:hover { background: rgba(181, 101, 29, 0.07); }
+.rt td.rt-sel, .rt th.rt-sel { background: rgba(181, 101, 29, 0.13); border-left-color: var(--accent); border-right-color: var(--accent); }
+.rt th.rt-head.rt-sel { box-shadow: inset 0 4px 0 var(--accent); }
+.rt tr.rt-last td.rt-sel { border-bottom: 3px solid var(--accent); }
+
 /* plan */
+.adv-estrun { margin: 0 0 8px; }
+.adv-how p { margin: 4px 0 0; }
 .adv-intel { font-size: 13px; }
 .adv-progress { height: 12px; margin: 4px 0; }
 .adv-bar {
@@ -116,7 +150,8 @@
 @media (max-width: 600px) {
   .adv-hprow { grid-template-columns: 80px 1fr 96px; }
   .adv-pairs { gap: 0 8px; }
-  .adv-roster { grid-template-columns: minmax(0, 1fr); }
+  table.rt { --rt-label: 84px; --rt-col: 96px; }
+  .rt-sect-sub { left: 92px; }
 }
 
 /* dark mode: brighter level colors so chips stay readable on dark panels */

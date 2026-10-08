@@ -13,7 +13,7 @@ import { renderRings } from './ui/ringsview.js';
 import { renderSkills } from './ui/skillsview.js';
 import { renderLog } from './ui/logview.js';
 import { renderHelp } from './ui/help.js';
-import { renderReport, renderPlan, renderGameOver } from './ui/endday.js';
+import { renderReport, renderPlan, renderGameOver, cancelRun } from './ui/endday.js';
 
 const TABS = [
   { id: 'map', label: 'Map', render: renderMap },
@@ -57,7 +57,10 @@ const ctx = {
   save: () => save(),
   toast: (msg, kind) => toast(msg, kind),
   newGame(seed) {
+    cancelRun(ctx); // a running "Estimate all" belongs to the old game
     state = Game.newGame(seed);
+    ui.plan = null;
+    ui.plan_est = {};
     ui.tab = 'map';
     save();
     render();
@@ -82,7 +85,7 @@ function load() {
     try {
       const s = Game.deserialize(text);
       if (!s || !s.map || !s.storage) throw new Error('Save is missing data');
-      if (key !== Game.SAVE_KEY) startupNote = 'Your v1.0 save was converted to v1.1.';
+      if (key !== Game.SAVE_KEY) startupNote = `Your earlier save was converted to v${VERSION}.`;
       return s;
     } catch (e) {
       console.warn('Save could not be loaded', e);
@@ -131,6 +134,29 @@ function locationText() {
   return `Field (${state.location.x + 1},${state.location.y + 1}) · distance ${f.dist}`;
 }
 
+// Visual bar of the work day (08:00-18:00): full at the start, empty when the day is over. Drawn as a thin
+// strip along the bottom edge of the top bar (CSS: absolute, so it takes no layout space).
+function timeLabel(left) {
+  const dayLen = CONFIG.time.dayEndMin - CONFIG.time.dayStartMin;
+  return left > EPS ? `${formatDuration(left)} left of the ${formatDuration(dayLen)} work day (${formatClock(CONFIG.time.dayStartMin)}-${formatClock(CONFIG.time.dayEndMin)})` : 'The work day is over';
+}
+
+function timeBar(left) {
+  const dayLen = CONFIG.time.dayEndMin - CONFIG.time.dayStartMin;
+  const frac = Math.max(0, Math.min(1, left / dayLen));
+  const tone = frac <= 0.1 ? ' low' : frac <= 0.25 ? ' mid' : '';
+  const label = timeLabel(left);
+  return h('div', {
+    class: `timebar${tone}`,
+    role: 'progressbar',
+    'aria-label': 'Time left in the work day',
+    'aria-valuemin': 0,
+    'aria-valuemax': dayLen,
+    'aria-valuenow': Math.round(Math.max(0, left)),
+    title: label,
+  }, h('div', { class: 'timebar-fill', style: { width: `${Math.round(frac * 1000) / 10}%` } }));
+}
+
 function renderTopbar() {
   const el = clear(document.getElementById('topbar'));
   const left = timeLeft(state);
@@ -142,7 +168,7 @@ function renderTopbar() {
   const parts = [
     h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version', title: `Smithsy version ${VERSION} (see Help and CHANGELOG.md)` }, `v${VERSION}`)),
     h('div', { class: 'stat' }, h('b', {}, `Day ${state.day}`)),
-    h('div', { class: 'stat' }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > EPS ? `${formatDuration(left)} left` : 'day over')),
+    h('div', { class: 'stat timestat', title: timeLabel(left) }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > EPS ? `${formatDuration(left)} left` : 'day over')),
     h('div', { class: 'stat' }, locationText()),
     h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`,
       field && field.pile && field.pile.length ? h('span', { class: 'muted', title: 'Items waiting in this field\'s pile' }, ` · pile ${field.pile.length}`) : null),
@@ -169,7 +195,7 @@ function renderTopbar() {
       },
     }, 'New game'),
   ];
-  el.append(...parts.filter(Boolean));
+  el.append(...parts.filter(Boolean), timeBar(left));
 }
 
 // Outside the work day (report / plan / game over) the phase screen is the first tab and only

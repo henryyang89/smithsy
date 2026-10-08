@@ -5,16 +5,22 @@
 import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
 import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
-import { STAT_LABELS, fmtStat, craftMinutes, repairInfo } from '../core/gear.js';
+import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, wearLoss } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
-import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade } from './skillsview.js';
+import { simCounts } from '../core/sim.js';
+import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade, isCountTrack } from './skillsview.js';
 import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 import { VERSION } from '../version.js';
 
 // ------------------------------------------------------------------ helpers ----
+// "10 guesses x 10 test fights per enemy" for this game (base + Battle simulation intel + Foresight rings).
+const simSummary = (state, cfg) => {
+  const c = simCounts(state, cfg);
+  return `${c.samples} guesses x ${c.evalFights} test fights per enemy`;
+};
 const p = (v, d = 1) => `${num(v, d)}%`;
 const mins = (m) => formatDuration(m);
 const x = (v) => `×${num(v, 2)}`;
@@ -171,12 +177,12 @@ function howToPlay(ctx) {
         h('b', {}, 'Repair gear at night'), ' (battle report or plan screen): it costs materials but no time.'),
       h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
         'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
-        `It comes back at the end of the day; every item that was used loses ${wear.min}-${wear.max}% durability (0% = destroyed).`),
+        `It comes back at the end of the day; every item that was used loses about ${p((wear.min + wear.max) / 2, 0)} durability (${wear.min}-${wear.max}% before the modifiers below), a little more against tougher enemies (${TIERS.map((t) => `${t} x${(wear.tierMult && wear.tierMult[t]) || 1}`).join(', ')}) and a little less with the ${cfg.skills.activity.gearCare ? cfg.skills.activity.gearCare.name : 'Gear care'} skill. At 0% it is destroyed.`),
       h('li', {}, h('b', {}, 'Day 1 is a rest day. '), 'From day 2 on there is a fight every day; it cannot be skipped.')),
     h('ul', { class: 'mi-list' },
       h('li', {}, 'Enemy attributes and reward rings are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them.'),
       h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
-      h('li', {}, 'The plan screen can simulate the fight to estimate your win chance before you confirm.'),
+      h('li', {}, `The plan screen can simulate the fight to estimate your win chance before you confirm: one button, Estimate all, runs ${simSummary(ctx.state, cfg)} for every enemy of the roster and fills the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and Foresight rings make it bigger.`),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
       h('li', {}, `Skills level up on their own as you work${commonSkillRingGrade(cfg) ? ` (a level-${cfg.skills.maxLevel} skill is as strong as a ${commonSkillRingGrade(cfg)}-grade ring of the same kind)` : ''}. Farther fields are richer but cost more travel time.`),
       h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
@@ -208,7 +214,7 @@ function timeSection(cfg) {
     sub('What costs time (base, before bonuses)'),
     tbl(['Activity', 'Base time'], [
       ['Travel', `${mins(cfg.map.travelMinPerStep)} per map step, +${p(cfg.map.loadPenaltyPerItem)} per item in the bag`],
-      ['Search a 3x3 area', `${mins(cfg.field.searchMin)} (also clears debris: no separate action)`],
+      ['Search a 3x3 area', `${mins(cfg.field.searchMin)}${cfg.field.freshCellMin > 0 ? ` + ${mins(cfg.field.freshCellMin)} for each fresh (never-searched) cell in the area` : ''} (also clears debris: no separate action)`],
       ['Refine a bar', byMinutes(cfg.refine)],
       ['Cut a gem', byMinutes(cfg.cut)],
       ['Smith gear', `${mins(g.smithMinPerBar)} per bar (${SLOTS.map((s) => `${s} ${mins(craftMinutes(s, false, cfg))}`).join(', ')}), +${mins(g.infuseMin)} to infuse a gem`],
@@ -281,9 +287,10 @@ function fieldSection(cfg) {
   return [
     kv([
       ['Field', `${f.size} x ${f.size} = ${cells} cells. Contents are hidden.`],
+      f.freshCellMin > 0 ? ['Fresh cells', `A cell is fresh until a search works on it (clears some of its debris or searches it). Each fresh cell in the 3x3 area adds ${mins(f.freshCellMin)} to that search, so a search of an all-fresh area takes ${mins(f.searchMin)} + 9 x ${mins(f.freshCellMin)} = ${mins(f.searchMin + f.freshCellMin * 9)}, and finishing an area before moving on keeps searches near ${mins(f.searchMin)}. Search-time reductions (rings, skill) apply to the total. Fresh cells are marked with a small dot on the map; a boulder is never fresh.`] : null,
       ['Search', rnd > 0
-        ? `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} ± ${num(rnd)} "searched" to every cell in the area: each cell rolls its own amount (${p(effLo)}-${p(effHi)}), so ${searchesToFinish} searches finish a cell.`
-        : `A 3x3 area takes ${mins(f.searchMin)}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
+        ? `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} ± ${num(rnd)} "searched" to every cell in the area: each cell rolls its own amount (${p(effLo)}-${p(effHi)}), so ${searchesToFinish} searches finish a cell.`
+        : `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
       ['Search efficiency', `${cfg.rings.types.searchEff ? `${cfg.rings.types.searchEff.name} rings` : 'Rings'} and the ${cfg.skills.activity.searchEff ? cfg.skills.activity.searchEff.name : 'search efficiency'} skill raise the average: average = ${p(f.searchEfficiency)} x (1 + bonus %).${rnd > 0 ? ` The ± ${num(rnd)} spread per cell stays the same.` : ''} The Map shows your current range.`],
       ['Hidden depth', 'Each item has a hidden depth from 0 to 100. It is found once the cell\'s searched % passes its depth. A fully searched cell gives up everything.'],
       ['Debris', `${p(f.debrisChance)} of cells, ${num(da.min)}-${num(da.max)} thick (in search effort; the number on the cell is what is left). There is no separate clear action: searching a debris cell spends that cell's effort roll (${p(f.searchEfficiency)} ± ${num(rnd)}) x debris clearing power (1 + ${debrisSkill ? debrisSkill.name : 'debris'} skill %) on the debris first; any effort left over searches the cell in the same search. At base power a ${num(da.min)}-thick cell takes ${clearSearches(da.min)} to clear, a ${num(da.max)}-thick one ${clearSearches(da.max)}. Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
@@ -521,7 +528,7 @@ function combatSection(cfg) {
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
-      ['Win-chance estimate', `Plan screen: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination. Draws count as survival.`],
+      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. Every estimate shows its margin of error (for example 62% ± 12: the simulation alone could be off by about 12 points, which holds about 9 times in 10 when every attribute is known; attributes you can't see add more uncertainty); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.gainsPerPoint[0]} for the first point, then +${cfg.intel.gainsPerPoint[1]}, ...), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -594,6 +601,7 @@ function ringSection(cfg) {
       ['Source', `Each defeated enemy drops 1 ring. Type: uniform over all ${types.length} types (${p(100 / types.length)} each). Grade: by tier (below).`],
       ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once and can be swapped at the start of a day (before your first action) or while planning at night; adventurer rings are chosen in each night's plan.`],
       ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).`],
+      r.types.foresight ? [r.types.foresight.name, `A smith ring: every point of the stacked total adds one guess AND one test fight per enemy to the plan screen's win-chance estimate (the total is rounded down: ${r.types.foresight.values.map((v) => v).join(' / ')} for ${GRADES.join(' / ')} rings). It does nothing in the fight itself.`] : null,
     ]),
     tbl(['Ring', 'Wearer', ...gradeHead(), 'Effect'], typeRows),
     sub('Ring grade odds by enemy tier'),
@@ -662,13 +670,14 @@ function intelSection(cfg) {
   const k = ic.gainsPerPoint.length;
   const head = ['Point', ...ic.gainsPerPoint.map((_, i) => ({ v: ordinal(i + 1), cls: 'num' })), { v: `${ordinal(k + 1)}+`, cls: 'num' }];
   const row = ['Gain', ...ic.gainsPerPoint.map((_, i) => ({ v: `+${gainForPoint(i + 1, cfg)}`, cls: 'num' })), { v: `+${gainForPoint(k + 1, cfg)}`, cls: 'num' }];
-  const trackRows = Object.values(ic.tracks).map((t) => [h('b', {}, t.name), np(t.base, 0), t.desc]);
+  const trackRows = Object.entries(ic.tracks).map(([k, t]) => [h('b', {}, t.name), { v: isCountTrack(k) ? `+${t.base}` : p(t.base, 0), cls: 'num' }, t.desc]);
   return [
     kv([
       ['Earning', `1 intel point at the end of every ${ordinal(ic.daysPerPoint)} day (day ${ic.daysPerPoint}, ${ic.daysPerPoint * 2}, ${ic.daysPerPoint * 3}, ...).`],
       ['Spending', `Each point raises one track. Diminishing returns per track (below), max ${p(ic.maxChance, 0)}.`],
+      ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win-chance estimate (base ${cfg.sim.samples} guesses x ${cfg.sim.evalFights} fights). The first point gives +${gainForPoint(1, cfg)}, so ${cfg.sim.samples + gainForPoint(1, cfg)} x ${cfg.sim.evalFights + gainForPoint(1, cfg)}; every extra guess and fight also makes the estimate slower to run.`],
     ]),
-    tbl(['Track', { v: 'Base chance', cls: 'num' }, 'What it does'], trackRows),
+    tbl(['Track', { v: 'Base', cls: 'num' }, 'What it does'], trackRows),
     sub('Gain per point spent on the same track'),
     tbl(head, [row]),
   ];
@@ -686,16 +695,26 @@ function repairSection(cfg) {
     return [h('b', {}, cap(s)), n(g.slots[s].bars, 0), { v: `${fmtBars(full.bars)} bars`, cls: 'num' }, { v: mins(full.minutes), cls: 'num' },
       { v: `${fmtBars(one.bars)} bars`, cls: 'num' }, { v: mins(one.minutes), cls: 'num' }];
   });
+  const tierMult = loss.tierMult || {};
+  const wearRows = TIERS.map((t) => {
+    const m = tierMult[t] || 1;
+    const lo = wearLoss(loss.min, m);
+    const hi = wearLoss(loss.max, m);
+    return [h('span', { class: `tier-${t}` }, cap(t)), { v: `x${num(m, 2)}`, cls: 'num' }, { v: `${num(lo, 1)}-${num(hi, 1)}%`, cls: 'num' }, { v: p(avgLoss * m, 1), cls: 'num' }];
+  });
   const gemFull = repairInfo({ slot: 'chest', material: 'x', grade: GRADES[0], gem: { type: 'gem', grade: GRADES[0] }, durability: 0 }, cfg);
   const gemExtra = Object.values(gemFull.gems)[0] || 0;
   return [
     kv([
-      ['Wear', `Each fight, every item the adventurer actually used loses ${loss.min}-${loss.max}% durability (whole numbers, average ${num(avgLoss)}%). Packed but unused items do not wear. At 0% the item is destroyed.`],
+      ['Wear', `Each fight, every item the adventurer actually used loses a durability roll of ${loss.min}-${loss.max}% (average ${num(avgLoss)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %). The result is kept to one decimal (for example 9.6%) so every Gear care level counts, and is at least 1%. Packed but unused items do not wear. At 0% the item is destroyed.`],
+      cfg.skills.activity.gearCare ? [cfg.skills.activity.gearCare.name, `Skill: ${num(cfg.skills.activity.gearCare.perLevel, 2)}% less wear per level (${num(cfg.skills.activity.gearCare.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). It earns ${cfg.skills.gearCareXpPerFight} XP for every fight the adventurer survives (win or draw), so it grows as you win.`] : null,
       ['Repair', 'Only back to 100%, and not while the item is packed for today\'s fight. By day: at camp (Workshop), costs time. At night (battle report or plan screen): any gear at home, no time, materials only.'],
       ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],
       ['Time', formula(`${g.repair.timeFraction}% x smithing time x fraction repaired`, 'By day only. Repairs at night cost no time.')],
       ['With a gem', `Also costs ${num(gemExtra, 2)} of the same cut gem for a full repair (scaled the same way) and, by day, the infusion time counts in the repair time.`],
     ]),
+    sub('Wear per fight by enemy tier (before Gear care)'),
+    tbl(['Enemy tier', { v: 'Multiplier', cls: 'num' }, { v: 'Loss per used item', cls: 'num' }, { v: 'Average', cls: 'num' }], wearRows),
     sub('Repair cost by slot (item without a gem)'),
     tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time by day', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time by day', cls: 'num' }], rows),
   ];

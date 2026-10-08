@@ -4,17 +4,21 @@ import { CONFIG } from '../js/config.js';
 import * as mapModule from '../js/core/map.js';
 import {
   search, fieldProgress, areaCells, searchMinutes, searchEfficiency, searchEfficiencyRange, debrisClearMult,
-  currentField, cellOpen, boulderCell,
+  currentField, cellOpen, boulderCell, cellFresh, freshCellCount, rollCell, generateField, fitsWithReturn, returnMinutes,
 } from '../js/core/map.js';
+import { serialize, deserialize } from '../js/core/game.js';
+import { seededRng } from '../js/core/rng.js';
+import { round1 } from '../js/core/util.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { intelChance } from '../js/core/intel.js';
-import { game, cfgWith, cell, boulder, idx, standInBlankField, addRing, setSkillLevel, ringVal, totalXp, approx, DAY_START } from './helpers.mjs';
+import { game, cfgWith, cell, boulder, blankField, idx, standInBlankField, addRing, setSkillLevel, ringVal, totalXp, approx, DAY_START, DAY_END } from './helpers.mjs';
 
 // Pinned field numbers: the hand-computed times/percentages below hold whatever CONFIG says.
 // searchRandomness 0: every cell gets exactly the efficiency, so exact search depths and debris
-// clearing can be checked (the per-cell roll has its own tests below).
+// clearing can be checked (the per-cell roll has its own tests below). freshCellMin 0: the extra time for
+// never-searched cells has its own tests (FRESH below); everything else is about the base search time.
 const PIN = {
-  field: { size: 8, searchMin: 30, searchEfficiency: 25, searchRandomness: 0, debrisAmount: { min: 20, max: 60 }, boulders: 1 },
+  field: { size: 8, searchMin: 30, freshCellMin: 0, searchEfficiency: 25, searchRandomness: 0, debrisAmount: { min: 20, max: 60 }, boulders: 1 },
   map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
   bag: { slots: 20 },
   processing: { maxTimeReduction: 75 },
@@ -583,4 +587,197 @@ test('default config: every cell\'s roll stays within searchEfficiencyRange', ()
 test('spec: base search efficiency is in the 30-40% range, with some per-cell randomness', () => {
   assert.ok(CONFIG.field.searchEfficiency >= 30 && CONFIG.field.searchEfficiency <= 40);
   assert.ok(CONFIG.field.searchRandomness > 0);
+});
+
+// ------------------------------------------------- fresh cells (v1.2) ----
+// A cell is "fresh" until a search works on it (clears debris or searches it); a 3x3 search costs
+// freshCellMin extra minutes per fresh cell in its area. Pinned to 3 here (not the config's number) so the
+// arithmetic below is unambiguous; searchMin is 30 (PIN).
+const F = 3;
+// searchTime skill 0 per level: the search XP these tests earn must not shave the times they check.
+const FRESH = cfgWith(NO_REVEAL, { field: { freshCellMin: F }, skills: { activity: { searchTime: { perLevel: 0 } } } });
+const WITH_SKILL = cfgWith(FRESH, { skills: { activity: { searchTime: { perLevel: 0.5 } } } });
+const BASE = 30;
+
+test('rollCell / generateField: new cells are untouched; legacy cells (no flag) are fresh only while unsearched', () => {
+  const rng = seededRng(5);
+  for (let i = 0; i < 50; i++) assert.equal(rollCell(rng, 1 + (i % 3)).touched, false);
+  const f = generateField(seededRng(6), 2);
+  for (const c of f.cells) {
+    assert.equal(c.touched === undefined || c.touched === false, true);
+    assert.equal(cellFresh(c), !c.boulder, 'every non-boulder cell of a new field is fresh');
+  }
+  // an older save: no touched flag at all
+  const legacy = cell([], { searched: 0 });
+  delete legacy.touched;
+  assert.equal(cellFresh(legacy), true);
+  legacy.searched = 0.5;
+  assert.equal(cellFresh(legacy), false, 'any search progress means it was worked on');
+});
+
+test('cellFresh / freshCellCount: only open cells nobody has worked on count; edges are clipped', () => {
+  const f = blankField(1, FRESH);
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 9);
+  assert.equal(freshCellCount(f, 0, 0, FRESH), 4);
+  assert.equal(freshCellCount(f, 7, 3, FRESH), 6);
+  assert.equal(freshCellCount(f, 7, 7, FRESH), 4);
+  assert.equal(freshCellCount(null, 4, 4, FRESH), 0, 'no field (at camp)');
+  assert.equal(freshCellCount(f, 4, 4), 9, 'defaults to CONFIG');
+  const c = (x, y) => f.cells[idx(x, y, FRESH)];
+  c(3, 3).touched = true;
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 8, 'touched');
+  c(4, 3).searched = 100;
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 7, 'fully searched (not open)');
+  f.cells[idx(5, 3, FRESH)] = boulder();
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 6, 'a boulder is never fresh');
+  f.cells[idx(3, 4, FRESH)] = cell([], { debris: 30 });
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 6, 'untouched debris cell is fresh');
+  f.cells[idx(3, 4, FRESH)].touched = true;
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 5, 'debris cleared a bit but not searched: touched, not fresh');
+  delete c(5, 4).touched;
+  c(5, 4).searched = 25;
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 4, 'legacy cell with progress');
+  assert.equal(freshCellCount(f, 4, 4, FRESH), areaCells(4, 4, FRESH).filter((i) => cellFresh(f.cells[i])).length);
+});
+
+test('searchMinutes: the base time, plus freshCellMin per fresh cell when the area is given', () => {
+  const { s, f } = setup(3, FRESH);
+  assert.equal(searchMinutes(s, FRESH), BASE, 'no area: the base time');
+  assert.equal(searchMinutes(s, FRESH, 4, 4), BASE + F * 9);
+  assert.equal(searchMinutes(s, FRESH, 0, 0), BASE + F * 4);
+  assert.equal(searchMinutes(s, FRESH, 7, 7), BASE + F * 4);
+  f.cells[idx(4, 4, FRESH)].touched = true;
+  f.cells[idx(5, 5, FRESH)] = boulder();
+  assert.equal(searchMinutes(s, FRESH, 4, 4), BASE + F * 7);
+  assert.equal(searchMinutes(s, FRESH, 4, 4), BASE + F * freshCellCount(f, 4, 4, FRESH));
+  // freshCellMin 0 or absent: always the base time
+  assert.equal(searchMinutes(s, cfgWith(FRESH, { field: { freshCellMin: 0 } }), 4, 4), BASE);
+  const absent = cfgWith(FRESH);
+  delete absent.field.freshCellMin;
+  assert.equal(searchMinutes(s, absent, 4, 4), BASE);
+  // at camp there is no field: just the base time
+  const camp = game(2);
+  assert.equal(searchMinutes(camp, FRESH, 4, 4), BASE);
+  // x and y are given together; a zero coordinate counts as given
+  assert.equal(searchMinutes(s, FRESH, 0, 7), BASE + F * 4);
+});
+
+test('searchMinutes: search-time reductions (rings, skill, the cap) apply to the whole total, surcharge included', () => {
+  const { s } = setup(3, WITH_SKILL);
+  addRing(s, 'searchTime', 'S', true); // 10% (PIN)
+  setSkillLevel(s, 'searchTime', 2); // +1%
+  const total = BASE + F * 9; // 57
+  assert.equal(smithBonuses(s, WITH_SKILL).searchTimePct, 11);
+  assert.equal(searchMinutes(s, WITH_SKILL, 4, 4), round1(total * 0.89));
+  assert.equal(searchMinutes(s, WITH_SKILL), round1(BASE * 0.89), 'no area: base only, still reduced');
+  // capped reduction: 11% would apply, but at most 10%
+  const capped = cfgWith(WITH_SKILL, { processing: { maxTimeReduction: 10 } });
+  assert.equal(searchMinutes(s, capped, 4, 4), round1(total * 0.9));
+  // and a search charges that reduced total
+  const r = search(s, 4, 4, WITH_SKILL);
+  assert.equal(r.minutes, round1(total * 0.89));
+});
+
+test('search charges the area\'s own time: fresh cells cost extra once, touched cells never again', () => {
+  const { s, f } = setup(3, FRESH);
+  const fresh = (x, y) => areaCells(x, y, FRESH).filter((i) => cellFresh(f.cells[i])).length;
+  let t = s.time;
+  // 1. a brand-new area: all 9 cells fresh
+  const r1 = search(s, 4, 4, FRESH);
+  assert.equal(r1.ok, true, r1.msg);
+  assert.equal(r1.freshCells, 9);
+  assert.equal(r1.minutes, BASE + F * 9);
+  assert.equal(s.time, t + r1.minutes);
+  assert.equal(s.skills.searchTime.xp, r1.minutes, 'search XP follows the minutes spent');
+  for (const i of areaCells(4, 4, FRESH)) assert.equal(f.cells[i].touched, true);
+  // 2. the same area again: nothing fresh
+  t = s.time;
+  const r2 = search(s, 4, 4, FRESH);
+  assert.equal(r2.freshCells, 0);
+  assert.equal(r2.minutes, BASE);
+  assert.equal(s.time, t + BASE);
+  // 3. overlapping area one column over: only the new column is fresh
+  assert.equal(fresh(5, 4), 3);
+  const r3 = search(s, 5, 4, FRESH);
+  assert.equal(r3.freshCells, 3);
+  assert.equal(r3.minutes, BASE + F * 3);
+  // 4. a corner area has only 4 cells
+  const r4 = search(s, 0, 0, FRESH);
+  assert.equal(r4.freshCells, 4);
+  assert.equal(r4.minutes, BASE + F * 4);
+  // 5. an area nobody touched but cells elsewhere are untouched
+  assert.equal(f.cells[idx(7, 7, FRESH)].touched, false);
+  assert.equal(fresh(7, 7), 4);
+});
+
+test('touched: set by clearing debris (cell not yet searched) and by searching; not by skipping boulders or finished cells', () => {
+  const { s, f } = setup(3, FRESH);
+  const E = searchEfficiency(s, FRESH); // 25
+  f.cells[idx(4, 4, FRESH)] = cell([], { debris: 3 * E }); // thick debris, only cleared a bit per search
+  f.cells[idx(3, 3, FRESH)] = boulder();
+  f.cells[idx(5, 5, FRESH)] = cell([], { searched: 100 });
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 9 - 2, 'boulder and finished cell are not fresh');
+  const r = search(s, 4, 4, FRESH);
+  assert.equal(r.minutes, BASE + F * 7);
+  const c = (x, y) => f.cells[idx(x, y, FRESH)];
+  assert.equal(c(4, 4).debris, 2 * E);
+  assert.equal(c(4, 4).searched, 0, 'only debris was cleared');
+  assert.equal(c(4, 4).touched, true, 'clearing debris counts as working on the cell');
+  assert.equal(c(3, 3).touched, false, 'boulder untouched');
+  assert.equal(c(5, 5).touched, false, 'finished cell untouched');
+  assert.equal(freshCellCount(f, 4, 4, FRESH), 0);
+  assert.equal(search(s, 4, 4, FRESH).minutes, BASE, 'the second search of the area has no surcharge');
+});
+
+test('fresh surcharge: the whole time (incl. surcharge) must fit before the day ends', () => {
+  const { s, f } = setup(3, FRESH);
+  const back = returnMinutes(s, s.location, 0, FRESH);
+  s.time = DAY_END - BASE - back; // exactly enough for a search without a surcharge
+  assert.equal(fitsWithReturn(s, BASE, FRESH), true);
+  const t = s.time;
+  const r = search(s, 4, 4, FRESH);
+  assert.equal(r.ok, false);
+  assert.match(r.msg, /Not enough time/);
+  assert.equal(s.time, t, 'a refused search costs nothing');
+  assert.ok(f.cells.every((c) => !c.touched && c.searched === 0), 'and does not touch the cells');
+  // the same area once it has been worked on (no surcharge) fits exactly
+  for (const i of areaCells(4, 4, FRESH)) f.cells[i].touched = true;
+  const ok = search(s, 4, 4, FRESH);
+  assert.equal(ok.ok, true, ok.msg);
+  assert.equal(ok.minutes, BASE);
+  assert.equal(s.time, DAY_END - back);
+});
+
+test('every cell pays the surcharge exactly once, however the searches overlap; the minutes always match the fresh count', () => {
+  const { s, f } = setup(5, FRESH);
+  const rng = seededRng(99);
+  let freshTotal = 0;
+  let searches = 0;
+  while (fieldProgress(f) < 100 && searches < 500) {
+    s.time = DAY_START; // time is not what this test is about
+    const x = rng.int(0, 7);
+    const y = rng.int(0, 7);
+    const before = freshCellCount(f, x, y, FRESH);
+    const r = search(s, x, y, FRESH);
+    searches++;
+    if (!r.ok) continue; // nothing left in that area
+    assert.equal(r.freshCells, before);
+    assert.equal(r.minutes, BASE + F * before);
+    freshTotal += r.freshCells;
+  }
+  assert.equal(fieldProgress(f), 100);
+  assert.equal(freshTotal, FRESH.field.size ** 2, 'all 64 cells were charged once');
+  assert.ok(f.cells.every((c) => c.touched));
+});
+
+test('touched is saved with the game: a reloaded game does not charge for the same cells again', () => {
+  const { s, f } = setup(3, FRESH);
+  search(s, 4, 4, FRESH);
+  s.time = DAY_START;
+  const back = deserialize(serialize(s));
+  const g = currentField(back);
+  assert.deepEqual(g, f);
+  assert.equal(freshCellCount(g, 4, 4, FRESH), 0);
+  assert.equal(search(back, 4, 4, FRESH).minutes, BASE);
+  assert.equal(search(back, 4, 5, FRESH).freshCells, 3);
 });

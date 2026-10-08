@@ -2,14 +2,21 @@
 // ============================================================================
 // SMITHSY BALANCE REPORT — is the pacing and difficulty sensible?
 //
-//   node tools/balance.mjs [--section economy|power|bot|all] [--seeds N] [--days N] [--samples N]
+//   node tools/balance.mjs [--section economy|power|bot|benchmark|specials|estimator|all] [--seeds N] [--days N] [--samples N]
 //                          [--minwin P] [--future F] [--ablate x,y] [--immortal] [--carry value|default]
-//                          [--quick] [--set path=value ...]
+//                          [--estimator game|bot] [--jobs N] [--quick] [--set path=value ...]
 //
-//   --section  which report to run (default: all)
+//   --section  which report to run (default: all = economy + power + bot; benchmark is separate)
 //   --seeds    economy: generated maps (default 100); bot: runs (default 20; survival numbers move
-//              by ~+-10 points between seed sets of this size, use 40+ to compare close what-ifs)
-//   --days     bot: play up to this day (default 80; runs that are still alive then are cut off)
+//              by ~+-10 points between seed sets of this size, use 40+ to compare close what-ifs);
+//              benchmark: runs (default 100, the fixed seed list mixSeed(31337, 0..N-1))
+//   --days     bot: play up to this day (default 80; runs that are still alive then are cut off);
+//              benchmark: default 100
+//   --estimator  how the bot estimates win chances when it plans a fight. game = the in-game button: every
+//              enemy, all packed gear, the game's own counts (CONFIG.sim + Battle simulation intel +
+//              Foresight rings; the default for benchmark). bot = the bot's own larger two-stage estimate
+//              (screen all 7, re-check the top 3; the default for the bot section, version-independent)
+//   --jobs     benchmark: run the seeds in N parallel node processes (same numbers as 1 process)
 //   --samples  power: hidden-attribute guesses per win-% cell (default 100, x50 fights each)
 //   --minwin   bot: minimum estimated win % to accept a fight (default 90)
 //   --future   bot: points one survival is worth when comparing fights (default 1000 = careful:
@@ -43,6 +50,17 @@
 //            hidden = a typical enemy of the tier): the day-2 fight with day-1 gear, archetype sets,
 //            the weakest full set that holds target win rates on each day, and how much each gem /
 //            ring / gear slot is worth.
+//   benchmark  Difficulty benchmark that works on any version: the careful bot (below) on a FIXED list of
+//            seeds, reporting the SURVIVAL CURVE (% of runs still alive at day 5, 10, ... 100), the median
+//            life and the mean score, as a table row, a one-line BENCHMARK summary and a markdown row for
+//            docs/BENCHMARKS.md. Run the same command on two versions to compare how tough each is.
+//   specials How dangerous each enemy special (magic, piercing, stun, slow) is and how much the matching
+//            defence recovers, and how strong the adventurer's own gems and rings are against enemy
+//            resistances: direct fight simulations of a plain C set (iron, steel, mythril) vs an elite on the
+//            day that set wins about 55% (window of 7 days), one enemy attribute changed at a time.
+//   estimator How accurate the in-game win-chance estimate is at 10x10, with a Foresight ring or Battle simulation
+//            intel points, and at the old 40x30: wobble between presses and miss vs the true chance, at
+//            several scouting levels (steel C set vs elites at about 55 / 75 / 90% true win).
 //   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
 //            cut, smith, rings, intel; at night: free repairs, then the plan) and reports survival,
 //            score, gear over time, the daily time split, rings, skills, the tiers it chose and how
@@ -66,14 +84,19 @@ import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade
 import { gearStats, craftMinutes, craft, repairInfo, repairPlan, repair, isNight } from '../js/core/gear.js';
 import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
-import { knownLevels } from '../js/core/enemies.js';
+import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
+import { adventurerCombatant, fight } from '../js/core/combat.js';
 import { spendIntel, intelChance } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { itemXp } from '../js/core/skills.js';
 import { seededRng, mixSeed } from '../js/core/rng.js';
 import { EPS, deepClone } from '../js/core/util.js';
+import { VERSION } from '../js/version.js';
+import * as mapMod from '../js/core/map.js'; // optional exports (freshCellCount, 1.2+) are read from here so this tool also runs on older versions
+import * as simMod from '../js/core/sim.js'; // simCounts (1.2+): the in-game estimate sizes; older versions use CONFIG.sim
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 
 const IS_MAIN = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 const SET_LOG = [];
@@ -137,7 +160,7 @@ function printTable(headers, rows) {
 
 // ----------------------------------------------------------------- args ----
 function parseArgs(argv) {
-  const o = { section: 'all', seeds: null, days: 80, samples: null, minwin: 90, future: 1000, quick: false, immortal: false, help: false, set: [], ablate: [], carry: 'value' };
+  const o = { section: 'all', seeds: null, days: null, samples: null, minwin: 90, future: 1000, quick: false, immortal: false, help: false, set: [], ablate: [], carry: 'value', estimator: null, jobs: 1, shard: null, emitJson: false };
   const ABLATIONS = ['gems', 'rings', 'skills', 'intel', 'repair'];
   for (let i = 0; i < argv.length; i++) {
     let a = argv[i];
@@ -160,6 +183,16 @@ function parseArgs(argv) {
     else if (a === '--minwin') o.minwin = num();
     else if (a === '--future') o.future = num();
     else if (a === '--quick') o.quick = true;
+    else if (a === '--estimator') {
+      o.estimator = val();
+      if (!['game', 'bot'].includes(o.estimator)) throw new Error('--estimator must be game or bot');
+    } else if (a === '--jobs') o.jobs = Math.max(1, Math.floor(num()));
+    else if (a === '--shard') {
+      // internal: --shard i/k runs seeds i, i+k, ... (used by --jobs)
+      const m = /^(\d+)\/(\d+)$/.exec(val());
+      if (!m || +m[1] >= +m[2]) throw new Error('--shard needs i/k with i < k');
+      o.shard = [+m[1], +m[2]];
+    } else if (a === '--emit-json') o.emitJson = true; // internal: a --jobs child prints its raw run records as JSON
     else if (a === '--immortal') o.immortal = true;
     else if (a === '--carry') {
       o.carry = val();
@@ -178,7 +211,8 @@ function parseArgs(argv) {
     } else if (a === '-h' || a === '--help') o.help = true;
     else throw new Error(`Unknown option ${a} (try --help)`);
   }
-  if (!['all', 'economy', 'power', 'bot'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
+  if (!['all', 'economy', 'power', 'bot', 'benchmark', 'specials', 'estimator'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
+  if (o.days == null) o.days = o.section === 'benchmark' ? 100 : 80;
   return o;
 }
 
@@ -230,6 +264,9 @@ function setOf(material, grade, { swordGem = null, armorGem = null, slots = SLOT
   return slots.map((s) => mkItem(s, material, grade, s === 'sword' ? swordGem : armorGem));
 }
 const ringSet = (grade, types = ADV_RINGS) => ringTotals(types.map((type) => ({ type, grade })));
+// The in-game estimate's sizes for this game state: simCounts (1.2+: CONFIG.sim + intel + Foresight rings);
+// older versions have no such export and the estimator just uses CONFIG.sim.
+const gameSimOpts = (st) => (simMod.simCounts ? simMod.simCounts(st) : {});
 
 // Expected loot of one cell, from the documented field formula.
 function lootPct(dist, debris) {
@@ -282,7 +319,8 @@ function centerOptions(st, field, vf, wasDebris) {
   const n = cfg.field.size;
   const [lo, hi] = searchEfficiencyRange(st);
   const mult = debrisClearMult(st);
-  const sMin = searchMinutes(st);
+  const sMin = searchMinutes(st); // base minutes of a search (with the search-time reductions)
+  const freshMin = cfg.field.freshCellMin || 0; // 1.2+: extra base minutes per never-searched cell in the 3x3
   const shares = itemShares(field.dist);
   let avgVal = 0;
   for (const [t, s] of Object.entries(shares)) avgVal += s * vf(t);
@@ -307,15 +345,19 @@ function centerOptions(st, field, vf, wasDebris) {
       let items = 0;
       let open = 0;
       let nd = 0;
+      let fresh = 0;
       for (const i of areaCells(cx, cy)) {
         const c = cv[i];
         if (!c) continue;
+        if (mapMod.freshCellCount && mapMod.cellFresh(field.cells[i])) fresh++;
         open++;
         if (c.debris) nd++;
         val += c.val;
         items += c.items;
       }
-      if (open && val > EPS) out.push({ cx, cy, nd, val, items, minutes: sMin, rate: val / sMin });
+      // the game charges the reduced (base + freshCellMin x fresh cells); the reductions are a plain multiplier
+      const minutes = Math.round((sMin * (cfg.field.searchMin + freshMin * fresh)) / cfg.field.searchMin * 10) / 10;
+      if (open && val > EPS) out.push({ cx, cy, nd, val, items, minutes, fresh, rate: val / minutes });
     }
   }
   return out;
@@ -447,7 +489,7 @@ function exhaustField(st0, loc) {
   st.location = { x: loc.x, y: loc.y };
   const field = currentField(st);
   const wasDebris = new WeakSet();
-  const o = { searches: 0, items: 0, debrisEff: 0, searchEff: 0, fromDebris: 0, clearMin: 0, debrisSearches: 0 };
+  const o = { searches: 0, items: 0, minutes: 0, debrisEff: 0, searchEff: 0, fromDebris: 0, clearMin: 0, debrisSearches: 0 };
   for (let guard = 0; guard < 600; guard++) {
     st.time = DAY_START;
     const act = bestAction(st, field, () => 1, wasDebris);
@@ -456,6 +498,7 @@ function exhaustField(st0, loc) {
     if (!s.r.ok) break;
     o.searches++;
     o.items += s.r.found.length;
+    o.minutes += cfg.field.searchMin + (cfg.field.freshCellMin || 0) * (act.fresh || 0); // base time + fresh-cell surcharge (counted before the search; no skill speed-up)
     o.debrisEff += s.debrisEff;
     o.searchEff += s.searchEff;
     o.fromDebris += s.fromDebris;
@@ -583,7 +626,7 @@ function economySection(o) {
   );
 
   // ---- 2. full-field yield per search (no travel); debris is cleared by the searches
-  const ex = Object.fromEntries(BUCKETS.map((b) => [b, { n: 0, s: 0, i: 0, de: 0, se: 0, fd: 0, cm: 0, ds: 0, left: 0 }]));
+  const ex = Object.fromEntries(BUCKETS.map((b) => [b, { n: 0, s: 0, i: 0, min: 0, de: 0, se: 0, fd: 0, cm: 0, ds: 0, left: 0 }]));
   states.forEach((st, si) => {
     const rng = seededRng(mixSeed(77, si));
     for (const b of BUCKETS) {
@@ -595,6 +638,7 @@ function economySection(o) {
       e.n++;
       e.s += a.searches;
       e.i += a.items;
+      e.min += a.minutes;
       e.de += a.debrisEff;
       e.se += a.searchEff;
       e.fd += a.fromDebris;
@@ -605,18 +649,20 @@ function economySection(o) {
   });
   const sMin = cfg.field.searchMin;
   const debrisShare = (b) => (100 * ex[b].de) / Math.max(EPS, ex[b].de + ex[b].se);
-  h2(`2. Searching a whole field (greedy 3x3 picks, ${sMin} min/search, ${cfg.field.searchEfficiency}% +/-${cfg.field.searchRandomness || 0} per cell per search, no travel)`);
+  h2(`2. Searching a whole field (greedy 3x3 picks, ${sMin} min/search + ${cfg.field.freshCellMin || 0} min per never-searched cell in the area, ${cfg.field.searchEfficiency}% +/-${cfg.field.searchRandomness || 0} per cell per search, no travel)`);
   printTable(
     ['dist', 'searches', 'items', 'items/search', 'min/item', 'searches touching debris', 'debris % of effort', 'debris min', 'items from debris cells', 'items left'],
     BUCKETS.filter((b) => ex[b].n).map((b) => {
       const e = ex[b];
       const k = (v) => v / e.n;
-      return [bucketLabel(b), f1(k(e.s)), f1(k(e.i)), f2(e.i / e.s), f1((e.s * sMin) / e.i), f1(k(e.ds)), f1(debrisShare(b)), f0(k(e.cm)), f1(k(e.fd)), f1(k(e.left))];
+      return [bucketLabel(b), f1(k(e.s)), f1(k(e.i)), f2(e.i / e.s), f1(e.min / e.i), f1(k(e.ds)), f1(debrisShare(b)), f0(k(e.cm)), f1(k(e.fd)), f1(k(e.left))];
     }),
   );
   note('Debris is cleared by searching: each search gives each open cell an effort roll; on a debris cell it clears\n' +
     'debris first (x debris skill) and the rest searches the cell. "debris % of effort" = effort spent on debris /\n' +
-    '(debris + searching) effort; "debris min" charges that share of each search\'s minutes to debris.\n' +
+    '(debris + searching) effort; "debris min" charges that share of each search\'s minutes to debris. "min/item" charges\n' +
+    'the base search time plus the fresh-cell surcharge (freshCellMin per never-searched cell, once per cell: about 126 min\n' +
+    'per field), with no search-skill speed-up.\n' +
     'Items left = still hidden when no search can add anything (only boulders are never searched, and they hold nothing).');
 
   // ---- 3. trips and days including travel
@@ -903,6 +949,7 @@ function printValueTables(T) {
 
 // Day-1 gear the player can realistically smith (one trip + refining leaves time for 1-3 pieces).
 const DAY1_LOADOUTS = [
+  { name: 'Unarmed, no gear', gear: () => [], unarmed: true },
   { name: 'Copper D sword', gear: () => [mkItem('sword', 'copper', 'D')] },
   { name: 'Copper C sword', gear: () => [mkItem('sword', 'copper', 'C')] },
   { name: 'Copper C sword + C boots', gear: () => setOf('copper', 'C', { slots: ['sword', 'boots'] }) },
@@ -914,9 +961,11 @@ const DAY1_LOADOUTS = [
   { name: 'Copper C full set (lucky day 1)', gear: () => setOf('copper', 'C') },
   { name: 'Iron C sword + copper C boots', gear: () => [mkItem('sword', 'iron', 'C'), mkItem('boots', 'copper', 'C')] },
 ];
-// Day-2 bands (user targets, session 4): champions ~30-40% and elites ~60-70% with on-pace gear;
-// day-1 gear is a bit behind pace, so the day-2 bands sit slightly lower.
-const DAY2_TARGET = { normal: [85, 98], elite: [50, 75], champion: [15, 40] };
+// Day-2 bands. 1.2 (user, session 6): an UNARMED adventurer beats a typical normal enemy on day 2 about 50-65%
+// of the time, and a copper D sword is ~+50% over unarmed, so the sensible day-1 sets sit well above the
+// 1.1 bands (normal 85-98, elite 50-75, champion 15-40). The mid-game targets (power section 2/3) did not change.
+const UNARMED_TARGET = [50, 65];
+const DAY2_TARGET = { normal: [95, 100], elite: [75, 95], champion: [40, 75] };
 
 function powerSection(o, T) {
   const S = o.samples ?? (o.quick ? 20 : 100);
@@ -925,11 +974,15 @@ function powerSection(o, T) {
 
   // ---- 1. the first fight
   const S2 = o.quick ? 40 : 200;
-  h2(`1. Day-2 fight with day-1 gear (target: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion ${DAY2_TARGET.champion.join('-')}%; ${S2} x ${E} fights)`);
+  h2(`1. Day-2 fight with day-1 gear (unarmed vs normal ${UNARMED_TARGET.join('-')}%; sets: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion ${DAY2_TARGET.champion.join('-')}%; ${S2} x ${E} fights)`);
   const day2 = DAY1_LOADOUTS.map((l) => ({ ...l, w: Object.fromEntries(TIERS.map((t, ti) => [t, winPct(l.gear(), {}, t, 2, S2, E, mixSeed(222, ti))])) }));
-  const mark = (t, v) => (v < DAY2_TARGET[t][0] - EPS ? ' (low)' : v > DAY2_TARGET[t][1] + EPS ? ' (high)' : '');
-  printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => `${f1(l.w[t])}${mark(t, l.w[t])}`)]));
-  note('* = the reference "sensible day 1" used in the summary line. (low)/(high) = outside the target band.');
+  const mark = (t, v, l) => {
+    // the unarmed row is only judged against normal enemies (target 50-65%); other tiers are shown for reference
+    const [lo, hi] = l.unarmed ? (t === 'normal' ? UNARMED_TARGET : [0, 100]) : DAY2_TARGET[t];
+    return v < lo - EPS ? ' (low)' : v > hi + EPS ? ' (high)' : '';
+  };
+  printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => `${f1(l.w[t])}${mark(t, l.w[t], l)}`)]));
+  note('* = the reference "sensible day 1" used in the summary line. (low)/(high) = outside the target band (unarmed vs normal: ' + UNARMED_TARGET.join('-') + '%).');
 
   // ---- 2. archetypes over time
   const days = [2, 5, 10, 15, 20, 30, 40, 50, 60, 80];
@@ -1002,12 +1055,253 @@ function powerSection(o, T) {
     return last;
   };
   const archIdx = (name) => ARCH.findIndex((a) => a.name === name);
-  console.log(`\nPOWER SUMMARY | day-2 ref (${ref.name}) n/e/c ${TIERS.map((t) => f0(ref.w[t])).join('/')}%` +
-    ` | Cu D sword n/e/c ${TIERS.map((t) => f0(day2[0].w[t])).join('/')}%` +
+  const unarmed = day2.find((l) => l.unarmed);
+  const cuD = day2.find((l) => l.name === 'Copper D sword');
+  console.log(`\nPOWER SUMMARY | unarmed d2 vs normal ${f0(unarmed.w.normal)}% (target ${UNARMED_TARGET.join('-')})` +
+    ` | day-2 ref (${ref.name}) n/e/c ${TIERS.map((t) => f0(ref.w[t])).join('/')}%` +
+    ` | Cu D sword n/e/c ${TIERS.map((t) => f0(cuD.w[t])).join('/')}%` +
     ` | last day >=90% vs normal: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('normal', archIdx(n), 90)}`).join(', ')}` +
     ` | >=70% vs elite: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('elite', archIdx(n), 70)}`).join(', ')}` +
     ` | ceiling vs normal d60/d80 ${f0(arch.normal[ARCH.length - 1][days.indexOf(60)])}/${f0(arch.normal[ARCH.length - 1][days.indexOf(80)])}%`);
   return VT;
+}
+
+
+// =============================================================== SPECIALS ====
+// Targets (v1.2): switching ONE enemy offensive special from Normal to High (everything else Normal) costs a
+// mid-game set (steel C) roughly 10-20 win points, the matching defence (the armor gem at C on 3 pieces plus
+// one B ring) recovers at least half of that, and the adventurer's own S gem is a little weaker than the
+// enemy's High value (and enemy resistances blunt it).
+const SPECIALS = [
+  { name: 'Magic', off: 'magical', field: 'magicPct', res: 'magicRes', gem: 'ruby', resRing: 'magicRes', offRing: 'magicDmg' },
+  { name: 'Piercing', off: 'piercing', field: 'pierce', res: 'pierceRes', gem: 'diamond', resRing: 'pierceRes', offRing: 'pierce' },
+  { name: 'Stun', off: 'stunning', field: 'stunChance', res: 'stunRes', gem: 'topaz', resRing: 'stunRes', offRing: null },
+  { name: 'Slow', off: 'chilling', field: 'slowPct', res: 'slowRes', gem: 'sapphire', resRing: 'slowRes', offRing: null },
+];
+
+function specialsSection(o) {
+  const n = o.quick ? 1500 : 6000; // fights per cell per day
+  const WINDOW = 3; // reference day +- 3
+  const tier = 'elite';
+  const lv = (over = {}) => Object.fromEntries(Object.keys(cfg.enemies.attributes).map((k) => [k, over[k] || 'normal']));
+  const foe = (day, over) => enemyCombatant(tier, day, lv(over), 'Enemy', cfg);
+  const wins = (gear, rings, day, over, salt, edit = null) => {
+    const adv = adventurerCombatant(gear, rings, cfg);
+    const en = foe(day, over);
+    if (edit) edit(en);
+    const rng = seededRng(mixSeed(777, day, salt));
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      const r = fight(adv, en, rng.next, false, cfg);
+      if (r.win || r.draw) w++;
+    }
+    return (100 * w) / n;
+  };
+  const refDayOf = (gear) => {
+    let best = 2;
+    let bd = Infinity;
+    for (let d = 2; d <= 90; d++) {
+      const adv = adventurerCombatant(gear, {}, cfg);
+      const en = foe(d, {});
+      const rng = seededRng(mixSeed(5, d));
+      let w = 0;
+      for (let i = 0; i < 600; i++) if (fight(adv, en, rng.next, false, cfg).win) w++;
+      const dist = Math.abs((100 * w) / 600 - 55);
+      if (dist < bd) [bd, best] = [dist, d];
+    }
+    return best;
+  };
+  const armorOn = (mat, gem, pieces) => setOf(mat, 'C').map((it) => (ARMOR_SLOTS.slice(0, pieces).includes(it.slot) ? { ...it, gem: { type: gem, grade: 'C' } } : it));
+  const ring = (type, grade) => ringTotals([{ type, grade }]);
+
+  h1(`SPECIALS — enemy specials vs matching defence, and the adventurer's own gems (plain C set vs an ${tier}; ${n} fights x ${2 * WINDOW + 1} days per cell)`);
+  note('Each enemy special is set to Low / Normal / High with all other attributes Normal. "def" = the armor gem at grade C on 3 pieces (chest, helmet, gloves) plus one B ring of the matching resistance.');
+  note('N->H = win points lost going from Normal to High. recovered = how much of that loss the defence wins back at High (2 / 3 / 4 gem pieces + the ring).');
+  const summary = [];
+  for (const mat of ['iron', 'steel', 'mythril']) {
+    const base = setOf(mat, 'C');
+    const ref = refDayOf(base);
+    const days = [];
+    for (let d = ref - WINDOW; d <= ref + WINDOW; d++) if (d >= 2) days.push(d);
+    const W = (gear, rings, over) => mean(days.map((d) => wins(gear, rings, d, over, 1)));
+    h2(`${mat} C full set vs ${tier}, reference day ${ref} (days ${days[0]}-${days[days.length - 1]}); all-Normal enemy: ${f1(W(base, {}, {}))}% win`);
+    const rows = SPECIALS.map((sp) => {
+      const v = cfg.enemies.attributes[sp.off].values;
+      const none = ['low', 'normal', 'high'].map((l) => W(base, {}, { [sp.off]: l }));
+      const rg = ring(sp.resRing, 'B');
+      const def = ['low', 'normal', 'high'].map((l) => W(armorOn(mat, sp.gem, 3), rg, { [sp.off]: l }));
+      const loss = none[1] - none[2];
+      const rec = (p) => (100 * (W(armorOn(mat, sp.gem, p), rg, { [sp.off]: 'high' }) - none[2])) / Math.max(EPS, loss);
+      const recs = [rec(2), def[2] - none[2] > 0 ? (100 * (def[2] - none[2])) / Math.max(EPS, loss) : 0, rec(4)];
+      if (mat === 'steel') summary.push(`${sp.name} -${f0(loss)} / ${f0(recs[1])}%`);
+      return [sp.name, `${v.low}/${v.normal}/${v.high}`, ...none.map(f1), `-${f1(loss)}`, ...def.map(f1), recs.map((x) => `${f0(x)}%`).join(' / ')];
+    });
+    printTable(['special', 'low/normal/high', 'no def L', 'N', 'H', 'N->H', 'def L', 'N', 'H', 'recovered (2/3/4 gems)'], rows);
+  }
+
+  // ---- the adventurer's own offence
+  const mat = 'steel';
+  const base = setOf(mat, 'C');
+  const ref = refDayOf(base);
+  const days = [];
+  for (let d = ref - WINDOW; d <= ref + WINDOW; d++) if (d >= 2) days.push(d);
+  const W = (gear, rings, over, edit = null) => mean(days.map((d) => wins(gear, rings, d, over, 2, edit)));
+  h2(`The adventurer's own specials: win-point gain of a sword gem / one ring over the same ${mat} C set without it, by the enemy's matching resistance (day ${ref}, all else Normal)`);
+  const advRows = [];
+  const gains = (gear, rings, res) => ['low', 'normal', 'high'].map((l) => W(gear, rings, { [res]: l }) - W(base, {}, { [res]: l }));
+  for (const sp of SPECIALS) {
+    const rv = cfg.enemies.attributes[sp.res].values;
+    const eff = cfg.gemEffects[sp.gem].weapon;
+    const key = Object.keys(eff)[0];
+    const highEnemy = cfg.enemies.attributes[sp.off].values.high;
+    for (const g of ['C', 'S']) {
+      const gi = GRADES.indexOf(g);
+      const units = Object.entries(eff).map(([k, a]) => `${a[gi]}${k.endsWith('Dur') ? 's' : '%'}`).join(' / ');
+      const gn = gains(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: g } }), {}, sp.res);
+      advRows.push([`${sp.gem} sword ${g}`, units, g === 'S' ? `${f0((100 * eff[key][gi]) / highEnemy)}%` : '', `${rv.low}/${rv.normal}/${rv.high}`, ...gn.map((x) => (x >= 0 ? '+' : '') + f1(x))]);
+    }
+    if (sp.offRing) {
+      for (const g of ['B', 'S']) {
+        const val = cfg.rings.types[sp.offRing].values[GRADES.indexOf(g)];
+        const gn = gains(base, ring(sp.offRing, g), sp.res);
+        advRows.push([`${sp.offRing} ring ${g}`, `${val}%`, '', `${rv.low}/${rv.normal}/${rv.high}`, ...gn.map((x) => (x >= 0 ? '+' : '') + f1(x))]);
+      }
+    }
+  }
+  printTable(['gem / ring', 'effect', 'S / enemy High', 'enemy resist L/N/H', 'gain vs L', 'N', 'H'], advRows);
+  note('"S / enemy High" = the S gem\'s main number as a share of the enemy\'s High value for the same special (target: below 100%, a little weaker).');
+
+  // ---- enemy special vs the adventurer's equivalent, in win points
+  h2(`Adventurer offence vs the enemy's equivalent special, in win points (${mat} C set vs an all-Normal ${tier}, day ${ref})`);
+  const normalW = W(base, {}, {});
+  const cmpRows = SPECIALS.map((sp) => {
+    const ev = cfg.enemies.attributes[sp.off].values;
+    const absent = W(base, {}, {}, (en) => { en[sp.field] = 0; });
+    const high = W(base, {}, { [sp.off]: 'high' });
+    const eff = cfg.gemEffects[sp.gem].weapon;
+    const mainKey = Object.keys(eff)[0];
+    const gS = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'S' } }), {}, {}) - normalW;
+    const gC = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'C' } }), {}, {}) - normalW;
+    const costN = absent - normalW;
+    const costH = absent - high;
+    const unit = (g) => Object.entries(eff).map(([k, a]) => `${a[GRADES.indexOf(g)]}${k.endsWith('Dur') ? 's' : '%'}`).join('/');
+    return [sp.name, `${ev.normal} / ${ev.high}`, `-${f1(costN)} / -${f1(costH)}`, `${sp.gem} C ${unit('C')} | S ${unit('S')}`, `+${f1(gC)} / +${f1(gS)}`, `${f0((100 * eff[mainKey][4]) / ev.high)}%`, `${f0((100 * gS) / costN)}% / ${f0((100 * gS) / costH)}%`];
+  });
+  printTable(['special', 'enemy Normal / High', 'enemy costs you vs none (Normal / High)', 'adventurer gem (C | S)', 'gem gain (C / S)', 'S value / enemy High', 'S gain / enemy cost (Normal / High)'], cmpRows);
+  note('Target: the adventurer\'s top gem is a little weaker than the enemy\'s High special, both in the number shown (S value / enemy High, below 100%) and in win points (S gain below the enemy\'s High cost, about the enemy\'s Normal cost).');
+
+  // ---- defensive rings in their matchup
+  h2(`Defensive and other adventurer rings: gain of ONE ring (B / S) vs an all-Normal ${tier} and vs an ${tier} with the matching attribute High (${mat} C set, day ${ref})`);
+  const rrows = [];
+  const base0 = W(base, {}, {});
+  for (const t of ADV_RINGS) {
+    const sp = SPECIALS.find((x) => x.resRing === t);
+    const bH = sp ? W(base, {}, { [sp.off]: 'high' }) : null;
+    const cell = (g) => `${f1(W(base, ring(t, g), {}) - base0)}${sp ? ` / ${f1(W(base, ring(t, g), { [sp.off]: 'high' }) - bH)}` : ''}`;
+    rrows.push([t, cfg.rings.types[t].values[2], cfg.rings.types[t].values[4], cell('B'), cell('S')]);
+  }
+  printTable(['ring', 'B value', 'S value', 'B: normal / vs High', 'S: normal / vs High'], rrows);
+  console.log(`\nSPECIALS SUMMARY (steel C, N->H loss / recovered by 3 gems + B ring) | ${summary.join(' | ')}`);
+}
+
+// ============================================================ ESTIMATOR =====
+// How accurate is the in-game win-chance estimate at a given size (guesses x test fights)? A plain steel C set
+// vs random elites on three days chosen so the average true win chance is about 55 / 75 / 90%. For each
+// enemy: its TRUE win chance (4000 fights against its real attributes) and the estimate made when only a
+// share of its attributes is visible (enemy scouting: the base is CONFIG.intel.tracks.enemySight.base; 50 and
+// 100 show what better scouting does). Every estimate is made 3 times with different random draws.
+//   repeat sd  = how much the same estimate wobbles between presses (sampling noise; shrinks with size)
+//   error sd   = typical miss of the estimate vs the true chance (adds the hidden-attribute guesswork,
+//                which more guesses do not remove)
+//   >10 pts    = share of estimates that miss by more than 10 points
+// Sizes: 10x10 = start of the game; 13x13 / 16x16 = a C / S Foresight ring (+3 / +6); 20x20 = 1 Battle
+// simulation intel point (+10); 29x29 = 2 points (+10 +9); 40x30 = the 1.1 estimate.
+function estimatorSection(o) {
+  const M = o.quick ? 40 : 200; // enemies per target
+  const tier = 'elite';
+  const gear = setOf('steel', 'C');
+  const sizes = [[10, 10], [13, 13], [16, 16], [20, 20], [29, 29], [40, 30]];
+  const base = cfg.intel.tracks.enemySight.base;
+  const sights = [...new Set([base, 50, 100])];
+  const lvOf = (rng) => rollLevels(rng, tier, cfg);
+  const trueWin = (day, levels, n, seed) => {
+    const adv = adventurerCombatant(gear, {}, cfg);
+    const en = enemyCombatant(tier, day, levels, 'Enemy', cfg);
+    const rng = seededRng(seed);
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      const r = fight(adv, en, rng.next, false, cfg);
+      if (r.win || r.draw) w++;
+    }
+    return (100 * w) / n;
+  };
+  const dayFor = (target) => {
+    let best = 2;
+    let bd = Infinity;
+    for (let d = 2; d <= 90; d++) {
+      const rng = seededRng(mixSeed(5, d));
+      let t = 0;
+      for (let i = 0; i < 30; i++) t += trueWin(d, lvOf(rng), 150, mixSeed(6, d, i));
+      const dist = Math.abs(t / 30 - target);
+      if (dist < bd) [bd, best] = [dist, d];
+    }
+    return best;
+  };
+  h1(`ESTIMATOR — how far off is the win-chance estimate? (steel C set vs random ${tier}s; ${M} enemies per target, 3 estimates each)`);
+  note('Sizes are guesses x test fights. 13x13 / 16x16 = a C / S Foresight ring, 20x20 = 1 Battle simulation intel point, 29x29 = 2 points, 40x30 = what 1.1 used.');
+  note(`Sight = the share of the enemy's attributes visible (enemy scouting; ${base}% is the starting value). repeat sd = wobble of the same estimate between presses; error sd = miss vs the true chance (includes the guesswork about hidden attributes).`);
+  const summary = [];
+  for (const target of [55, 75, 90]) {
+    const day = dayFor(target);
+    const rng = seededRng(mixSeed(1234, target));
+    const enemies = [];
+    for (let i = 0; i < M; i++) {
+      const levels = lvOf(rng);
+      enemies.push({ levels, truth: trueWin(day, levels, 4000, mixSeed(9, target, i)), sightRoll: Object.fromEntries(Object.keys(levels).map((k) => [k, rng.float(0, 100)])) });
+    }
+    const mt = mean(enemies.map((e) => e.truth));
+    const sdT = Math.sqrt(mean(enemies.map((e) => (e.truth - mt) ** 2)));
+    h2(`target ~${target}%: steel C set vs ${tier} on day ${day}; mean true win ${f1(mt)}% (true spread sd ${f1(sdT)})`);
+    const rows = sizes.map(([S, E]) => {
+      const cells = [];
+      for (const sight of sights) {
+        const errs = [];
+        const reps = [];
+        let hi = 0;
+        let falseSafe = 0;
+        enemies.forEach((e, i) => {
+          const known = {};
+          for (const k of Object.keys(e.levels)) if (e.sightRoll[k] < sight) known[k] = e.levels[k];
+          const ests = [0, 1, 2].map((r) => estimateWinChanceSync({ gearItems: gear, ringTotals: {}, tier, day, known, seed: 1000 * i + r + 1 }, { samples: S, evalFights: E, fightsPerLoadout: E }, cfg).winPct);
+          const m = mean(ests);
+          reps.push(Math.sqrt(sum(ests.map((x) => (x - m) ** 2)) / 2));
+          errs.push(ests[0] - e.truth);
+          if (ests[0] >= 90) {
+            hi++;
+            if (e.truth < 80) falseSafe++;
+          }
+        });
+        const me = mean(errs);
+        const sdE = Math.sqrt(mean(errs.map((x) => (x - me) ** 2)));
+        const repSd = Math.sqrt(mean(reps.map((x) => x * x)));
+        const over10 = (100 * errs.filter((x) => Math.abs(x) > 10).length) / errs.length;
+        cells.push(f1(repSd), f1(sdE), `${f0(over10)}%`);
+        if (target === 90 && sight === base) summary.push({ S, E, falseSafe: hi ? (100 * falseSafe) / hi : NaN, hi });
+        if (sight === base) summary.push({ S, E, target, repSd, sdE, over10 });
+      }
+      return [`${S}x${E}`, ...cells];
+    });
+    printTable(['size', ...sights.flatMap((sg) => [`sight ${sg}%: repeat sd`, 'error sd', '>10 pts'])], rows);
+    if (target === 90) {
+      const fs = summary.filter((x) => x.falseSafe !== undefined && x.target === undefined);
+      note(`Risk at 90%: of the estimates >= 90 (sight ${base}%), the share whose true chance is under 80: ` + fs.map((x) => `${x.S}x${x.E} ${Number.isFinite(x.falseSafe) ? f0(x.falseSafe) + '%' : '-'}`).join(', ') + '.');
+    }
+  }
+  const line = (S, E) => {
+    const xs = summary.filter((x) => x.target && x.S === S && x.E === E);
+    return `${S}x${E}: repeat sd ${f1(mean(xs.map((x) => x.repSd)))}, error sd ${f1(mean(xs.map((x) => x.sdE)))}`;
+  };
+  console.log(`\nESTIMATOR SUMMARY (mean over the 55/75/90 targets, sight ${base}%, points) | ${sizes.map(([S, E]) => line(S, E)).join(' | ')}`);
 }
 
 // ================================================================== BOT =====
@@ -1031,12 +1325,12 @@ function botParams(T, o) {
   }
   const ringW = {};
   for (const t of ADV_RINGS) ringW[t] = Math.max(0.01, T.rings[t].B) / cfg.rings.types[t].values[2];
-  const smithW = { travelTime: 1, searchTime: 1, searchEff: 0.5, reveal: 0.4, processTime: 1, oreGrade: 1.2, gemGrade: 0.3 };
+  const smithW = { travelTime: 1, searchTime: 1, searchEff: 0.5, reveal: 0.4, processTime: 1, oreGrade: 1.2, gemGrade: 0.3, foresight: 1 };
   const ablate = new Set(o.ablate || []);
   const gemOrder = ablate.has('gems') ? [] : GEMS.filter((g) => Math.max(gemSword[g], gemArmor[g]) >= 2).sort((a, b) => Math.max(gemSword[b], gemArmor[b]) - Math.max(gemSword[a], gemArmor[a]));
   return {
     slotW, gemSword, gemArmor, ringW, smithW, gemOrder, ablate,
-    minWin: o.minwin, future: o.future, immortal: !!o.immortal, carry: o.carry,
+    minWin: o.minwin, future: o.future, immortal: !!o.immortal, carry: o.carry, estimator: o.estimator ?? 'bot',
     simOpts: o.quick ? { samples: 8, fightsPerLoadout: 1, evalFights: 15 } : { samples: 24, fightsPerLoadout: 1, evalFights: 25 },
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
     verifyTop: 3,
@@ -1367,7 +1661,6 @@ function procPerFoundItem(st, P, dist, vf) {
 // earlier trips) count at full value and need no search, only the walk; searches fill the rest of the bag.
 function chooseField(st, ctx, vf, from, carrying = []) {
   const P = ctx.P;
-  const sMin = searchMinutes(st);
   // camp time already committed (processing what is carried + smithing) and the rough processing
   // time of each item a search will add, so the planned haul still becomes gear today
   const committed = campReserve(st, P, carrying);
@@ -1389,10 +1682,12 @@ function chooseField(st, ctx, vf, from, carrying = []) {
     const left = space - pileTake.length;
     let nNeed = 0;
     let searchGain = 0;
+    let sMin = 0;
     const opts = left > 0 ? centerOptions(st, field, vf, ctx.wasDebris).sort((a, b) => b.rate - a.rate) : [];
     if (opts.length) {
       const top0 = opts.slice(0, 4);
-      const itemsPerSearch = mean(top0.map((x) => (x.items * sMin) / x.minutes));
+      sMin = mean(top0.map((x) => x.minutes)); // minutes of a typical good search here (fresh cells cost extra)
+      const itemsPerSearch = mean(top0.map((x) => x.items));
       const perSearch = sMin + Math.min(P.reserveCap, itemsPerSearch * procPerFoundItem(st, P, c.dist, vf));
       const nAvail = Math.floor(avail / perSearch);
       if (nAvail >= 1) {
@@ -1494,17 +1789,31 @@ function choosePlan(st, ctx, rec) {
   const primary = SLOTS.map((s) => packed.filter((g) => g.slot === s).sort((a, b) => score(b, P) - score(a, P))[0]).filter(Boolean);
   const est = (gear, e, i, salt, opts) => estimateWinChanceSync({ gearItems: gear, ringTotals: rings, tier: e.tier, day: e.day, known: knownLevels(st, e), seed: mixSeed(ctx.seed, st.day, i, salt) }, opts).winPct;
   const evOf = (x) => (x.p / 100) * (cfg.enemies.tiers[x.tier].score + P.future);
-  const evals = st.roster.enemies.map((e, i) => {
-    const x = { i, tier: e.tier, p: est(primary, e, i, 1, P.simOpts) };
-    x.ev = evOf(x);
-    return x;
-  });
-  const order = [...evals].sort((a, b) => b.ev - a.ev);
-  for (const x of order.slice(0, P.verifyTop)) {
-    x.p = est(packed, st.roster.enemies[x.i], x.i, 2, P.verifyOpts);
-    x.ev = evOf(x);
+  let evals;
+  let pool;
+  if (P.estimator === 'game') {
+    // The in-game "estimate win chances" button: every enemy, all packed gear, the game's own counts
+    // (CONFIG.sim + Battle simulation intel + Foresight rings). Its noise is part of the risk.
+    const gopts = gameSimOpts(st);
+    evals = st.roster.enemies.map((e, i) => {
+      const x = { i, tier: e.tier, p: est(packed, e, i, 3, gopts) };
+      x.ev = evOf(x);
+      return x;
+    });
+    pool = [...evals];
+  } else {
+    evals = st.roster.enemies.map((e, i) => {
+      const x = { i, tier: e.tier, p: est(primary, e, i, 1, P.simOpts) };
+      x.ev = evOf(x);
+      return x;
+    });
+    const order = [...evals].sort((a, b) => b.ev - a.ev);
+    for (const x of order.slice(0, P.verifyTop)) {
+      x.p = est(packed, st.roster.enemies[x.i], x.i, 2, P.verifyOpts);
+      x.ev = evOf(x);
+    }
+    pool = order.slice(0, P.verifyTop);
   }
-  const pool = order.slice(0, P.verifyTop);
   const safe = pool.filter((x) => x.p >= P.minWin);
   const pick = safe.length ? safe.reduce((a, b) => (b.ev > a.ev ? b : a)) : pool.reduce((a, b) => (b.p > a.p ? b : a));
   const bestP = {};
@@ -1878,24 +2187,142 @@ function botSection(o, T) {
   return recs;
 }
 
+
+// ============================================================ BENCHMARK =====
+// The difficulty benchmark: the careful bot on a FIXED list of seeds (mixSeed(31337, 0..N-1); the same
+// seeds in every version), reporting the survival curve = % of runs still alive at the end of day d.
+// Only the game changes between versions, so the curve shows how tough each version is. The numbers
+// that matter are the alive% columns and the median life; the mean score is secondary.
+// Noise: with 100 runs one alive% has a standard error of up to 5 points (so compare versions by the
+// shape of the curve, and treat differences under about 10 points as noise).
+const BENCH_DAYS = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 100];
+const BENCH_SEED_BASE = 31337;
+
+// Runs benchmark seeds i = from, from + step, ... (< N) and returns light records.
+function benchRuns(o, N, D, P, shard) {
+  const [from, step] = shard || [0, 1];
+  const out = [];
+  for (let i = from; i < N; i += step) {
+    const r = runBot(mixSeed(BENCH_SEED_BASE, i), D, P);
+    out.push({ i, deathDay: r.deathDay, lastDay: r.lastDay, score: r.score, wins: r.wins });
+  }
+  return out;
+}
+
+// --jobs: the same command in k child processes, each running every k-th seed; results are merged
+// (a run only depends on its seed and the config, so this equals one process).
+function benchViaChildren(o, N) {
+  const argv = process.argv.slice(2);
+  const base = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--jobs' || argv[i] === '--seeds') i += 1; // skipped here: children get --seeds N and their --shard
+    else if (argv[i].startsWith('--jobs=') || argv[i].startsWith('--seeds=')) continue;
+    else base.push(argv[i]);
+  }
+  const script = fileURLToPath(import.meta.url);
+  const children = [];
+  for (let k = 0; k < o.jobs; k++) {
+    children.push(new Promise((resolve, reject) => {
+      const c = spawn(process.execPath, [script, ...base, '--seeds', String(N), '--shard', `${k}/${o.jobs}`, '--emit-json'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      c.stdout.on('data', (d) => (out += d));
+      c.on('error', reject);
+      c.on('close', (code) => {
+        const line = out.split('\n').find((l) => l.startsWith('BENCH_JSON '));
+        if (code !== 0 || !line) reject(new Error(`benchmark child ${k} failed (exit ${code})`));
+        else resolve(JSON.parse(line.slice('BENCH_JSON '.length)));
+      });
+    }));
+  }
+  return Promise.all(children).then((parts) => parts.flat());
+}
+
+async function benchmarkSection(o) {
+  const N = o.seeds ?? (o.quick ? 6 : 100);
+  const D = o.quick ? Math.min(o.days, 40) : o.days;
+  const estimator = o.estimator ?? 'game';
+  if (o.emitJson) {
+    const VT = valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
+    const P = botParams(VT, { ...o, estimator });
+    console.log('BENCH_JSON ' + JSON.stringify(benchRuns(o, N, D, P, o.shard)));
+    return null;
+  }
+  const t0 = Date.now();
+  const sim0 = gameSimOpts(newGame(1));
+  const estText = estimator === 'game'
+    ? `in-game estimate (${sim0.samples ?? cfg.sim.samples} guesses x ${sim0.evalFights ?? cfg.sim.evalFights} test fights, gear picked with ${sim0.fightsPerLoadout ?? cfg.sim.fightsPerLoadout} fights per loadout${simMod.simCounts ? ", plus the bot's Foresight rings" : ''})`
+    : "the bot's own two-stage estimate (24 guesses x 25 fights screen, top 3 re-checked with 30 x 30)";
+  h1(`BENCHMARK — version ${VERSION}: careful bot, ${N} fixed seeds x up to ${D} days`);
+  note(`Seeds: mixSeed(${BENCH_SEED_BASE}, 0..${N - 1}). Estimator: ${estText}. The bot fights an enemy only if its estimate is >= ${o.minwin}% (else the best one).`);
+  let recs;
+  if (o.jobs > 1) recs = await benchViaChildren(o, N);
+  else {
+    const VT = valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
+    const P = botParams(VT, { ...o, estimator });
+    recs = benchRuns(o, N, D, P, null);
+  }
+  recs.sort((a, b) => a.i - b.i);
+  if (recs.length !== N) throw new Error(`benchmark: expected ${N} runs, got ${recs.length}`);
+  note(`(${((Date.now() - t0) / 1000).toFixed(1)}s${o.jobs > 1 ? `, ${o.jobs} processes` : ''})`);
+
+  const alive = (r, d) => r.lastDay >= d && !(r.deathDay != null && r.deathDay <= d);
+  const alivePct = (d) => (100 * recs.filter((r) => alive(r, d)).length) / N;
+  const days = BENCH_DAYS.filter((d) => d <= D);
+  const life = recs.map((r) => r.deathDay ?? Infinity).sort((a, b) => a - b);
+  const q = (p) => {
+    const v = quantile(life, p);
+    return v === Infinity ? `>${D}` : f1(v);
+  };
+  const medLife = median(life);
+  const medText = medLife === Infinity ? `>${D}` : f1(medLife);
+  const meanScore = mean(recs.map((r) => r.score));
+
+  h2('Survival curve: % of runs alive at the end of day d');
+  printTable(['day', ...days.map(String), 'median life', 'mean score'], [['% alive', ...days.map((d) => f0(alivePct(d))), medText, f0(meanScore)]]);
+  const fine = [];
+  for (let d = 5; d <= D; d += 5) fine.push(d);
+  note('Every 5 days: ' + fine.map((d) => `d${d} ${f0(alivePct(d))}`).join(' | '));
+  note(`Life (day of death; runs alive at day ${D} count as >${D}): p10 ${q(0.1)}, p25 ${q(0.25)}, median ${medText}, p75 ${q(0.75)}, p90 ${q(0.9)}.`);
+  const deaths = recs.filter((r) => r.deathDay != null);
+  const bins = [[2, 2], [3, 9], [10, 19], [20, 29], [30, 39], [40, 49], [50, 59], [60, 79], [80, 200]].filter(([a]) => a <= D);
+  note(`Deaths ${deaths.length}/${N}. By day: ` + bins.map(([a, b]) => `${a === b ? a : `${a}-${b}`}: ${deaths.filter((r) => r.deathDay >= a && r.deathDay <= b).length}`).join(', ') + '.');
+  const scores = recs.map((r) => r.score);
+  note(`Score: mean ${f0(meanScore)}, median ${f0(median(scores))}, min ${Math.min(...scores)}, max ${Math.max(...scores)}. ` +
+    `Wins per run: ${TIERS.map((t) => `${t} ${f1(mean(recs.map((r) => r.wins[t])))}`).join(', ')}.`);
+  note(`Noise: one alive% has a standard error of ${f1(50 / Math.sqrt(N))} points at 50% (100 runs: 5); treat differences under about 10 points as noise.`);
+
+  const estShort = estimator === 'game' ? `game ${sim0.samples ?? cfg.sim.samples}x${sim0.evalFights ?? cfg.sim.evalFights}` : 'bot';
+  console.log(`\nBENCHMARK | v${VERSION} | seeds ${N} | alive ${days.map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')} | median life ${medText} | mean score ${f0(meanScore)} | estimator ${estShort}`);
+  console.log('\nMarkdown row for docs/BENCHMARKS.md (add your own notes at the end):');
+  console.log(`| ${VERSION} | ${new Date().toISOString().slice(0, 10)} | ${N} | ${BENCH_DAYS.map((d) => (d <= D ? f0(alivePct(d)) : '-')).join(' | ')} | ${medText} | ${f0(meanScore)} | estimator ${estShort} |`);
+  return recs;
+}
+
 // ================================================================= MAIN =====
-function main() {
+async function main() {
   const o = ARGS;
   if (o.help) {
     console.log(readHelp());
     return;
   }
-  if (SET_LOG.length) console.log(`WHAT-IF overrides (memory only):\n${SET_LOG.map((x) => `  ${x}`).join('\n')}`);
+  if (SET_LOG.length && !o.emitJson) console.log(`WHAT-IF overrides (memory only):\n${SET_LOG.map((x) => `  ${x}`).join('\n')}`);
   const t0 = Date.now();
   let T = null;
-  const run = (name, fn) => {
+  const run = async (name, fn) => {
     const t = Date.now();
-    fn();
+    await fn();
     console.log(`\n[${name}: ${((Date.now() - t) / 1000).toFixed(1)}s]`);
   };
-  if (o.section === 'all' || o.section === 'economy') run('economy', () => economySection(o));
-  if (o.section === 'all' || o.section === 'power') run('power', () => (T = powerSection(o, null)));
-  if (o.section === 'all' || o.section === 'bot') run('bot', () => botSection(o, T));
+  if (o.emitJson) {
+    await benchmarkSection(o);
+    return;
+  }
+  if (o.section === 'all' || o.section === 'economy') await run('economy', () => economySection(o));
+  if (o.section === 'all' || o.section === 'power') await run('power', () => (T = powerSection(o, null)));
+  if (o.section === 'all' || o.section === 'bot') await run('bot', () => botSection(o, T));
+  if (o.section === 'benchmark') await run('benchmark', () => benchmarkSection(o));
+  if (o.section === 'specials') await run('specials', () => specialsSection(o));
+  if (o.section === 'estimator') await run('estimator', () => estimatorSection(o));
   console.log(`\n[total ${((Date.now() - t0) / 1000).toFixed(1)}s]`);
 }
 
@@ -1911,8 +2338,13 @@ function readHelp() {
 }
 
 export {
-  applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, botSection,
+  applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, botSection, benchmarkSection,
   centerOptions, chooseField, makeValueFn, campReserve, winPct, setOf, mkItem,
 };
 
-if (IS_MAIN) main();
+if (IS_MAIN) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

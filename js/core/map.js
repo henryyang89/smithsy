@@ -86,7 +86,7 @@ export function rollCell(rng, dist, cfg = CONFIG) {
       items.push({ t, d: rng.float(0, 100) }); // d = depth: found once "searched %" passes it
     }
   }
-  return { debris, boulder: false, searched: 0, items, revealed: false };
+  return { debris, boulder: false, searched: 0, items, revealed: false, touched: false };
 }
 
 // A cell covered by a boulder: can never be cleared or searched.
@@ -129,6 +129,11 @@ export function fieldProgress(field) {
 // A cell that still needs work (debris to clear or unsearched part left).
 export const cellOpen = (c) => !c.boulder && (c.debris > EPS || c.searched < 100 - EPS);
 
+// A "fresh" cell has never been worked on: no search has cleared debris from it or searched it
+// (`touched` is set by the first search that works on it; older saves have no flag, so any cell
+// with searched > 0 counts as touched). Searching fresh cells costs extra time (field.freshCellMin).
+export const cellFresh = (c) => cellOpen(c) && !c.touched && c.searched === 0;
+
 // Cells covered by a 3x3 search centered at (cx, cy), clipped to the field.
 export function areaCells(cx, cy, cfg = CONFIG) {
   const out = [];
@@ -155,8 +160,18 @@ export function returnMinutes(state, from = state.location, items = state.bag.le
   return travelMinutes(state, from, state.map.camp, items, cfg);
 }
 
-export function searchMinutes(state, cfg = CONFIG) {
-  return round1(reduced(cfg.field.searchMin, smithBonuses(state, cfg).searchTimePct, cfg.processing.maxTimeReduction));
+// Fresh (never worked on) cells in the 3x3 search area centered at (cx, cy) of `field`.
+export function freshCellCount(field, cx, cy, cfg = CONFIG) {
+  if (!field) return 0;
+  return areaCells(cx, cy, cfg).filter((i) => cellFresh(field.cells[i])).length;
+}
+
+// Minutes for one 3x3 search: the base time, plus freshCellMin per fresh cell in the area (only when the
+// area's center cx, cy is given; without it this is the base time), then the search-time reductions.
+export function searchMinutes(state, cfg = CONFIG, cx, cy) {
+  let base = cfg.field.searchMin;
+  if (cx !== undefined && cy !== undefined) base += (cfg.field.freshCellMin || 0) * freshCellCount(currentField(state), cx, cy, cfg);
+  return round1(reduced(base, smithBonuses(state, cfg).searchTimePct, cfg.processing.maxTimeReduction));
 }
 
 // Average % of each cell searched per search (base x bonuses). Each cell rolls +/- searchRandomness.
@@ -251,7 +266,8 @@ export function search(state, cx, cy, cfg = CONFIG) {
   if (err) return err;
   const field = currentField(state);
   if (!field) return { ok: false, msg: 'You are at camp. Travel to a field first.' };
-  const minutes = searchMinutes(state, cfg);
+  const freshCells = freshCellCount(field, cx, cy, cfg); // counted before this search touches them
+  const minutes = searchMinutes(state, cfg, cx, cy);
   if (!fitsWithReturn(state, minutes, cfg)) return { ok: false, msg: `Not enough time to search and still get back by ${endClock(cfg)}.` };
   const idxs = areaCells(cx, cy, cfg);
   const open = idxs.filter((i) => cellOpen(field.cells[i]));
@@ -269,6 +285,7 @@ export function search(state, cx, cy, cfg = CONFIG) {
   for (const i of open) {
     const cell = field.cells[i];
     let effort = r > 0 ? clamp(eff + rng.float(-r, r), 0, 100) : eff;
+    if (effort > EPS) cell.touched = true; // the first search that works on a cell ends its fresh cost
     if (cell.debris > EPS) {
       const power = effort * clearMult;
       const used = Math.min(cell.debris, power);
@@ -309,7 +326,7 @@ export function search(state, cx, cy, cfg = CONFIG) {
   if (debrisCleared > 0) msg += ` Cleared ${round1(debrisCleared)} debris${cellsCleared ? ` (${cellsCleared} cell(s) now clear)` : ''}.`;
   if (revealed) msg += ` Ore sight revealed ${revealed} cell(s).`;
   if (skipped) msg += ` ${skipped} cell(s) skipped (done or boulder).`;
-  return { ok: true, msg, notes, found, revealed, debrisCleared, cellsCleared, searchedCells, minutes };
+  return { ok: true, msg, notes, found, revealed, debrisCleared, cellsCleared, searchedCells, minutes, freshCells };
 }
 
 // ------------------------------------------------------------ carrying ----

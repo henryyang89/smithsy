@@ -54,7 +54,7 @@ export const approx = (actual, expected, eps = 1e-9) => Math.abs(actual - expect
 
 // A field cell with given items: [{ t, d }]. debris = remaining thickness (0 = clear).
 export function cell(items = [], extra = {}) {
-  return { debris: 0, boulder: false, searched: 0, items: items.map((i) => ({ ...i })), revealed: false, ...extra };
+  return { debris: 0, boulder: false, searched: 0, items: items.map((i) => ({ ...i })), revealed: false, touched: false, ...extra };
 }
 
 // A boulder cell (never searched or cleared).

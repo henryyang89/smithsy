@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { CONFIG, ORES, GEMS, BARS, GRADES } from '../js/config.js';
 import {
   newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, resolveBattle, rosterView, serialize, deserialize,
-  adventurerRingTotals, logResult, addLog, packedSlotsSummary, migrateV1, SAVE_VERSION, MAX_LOG,
+  adventurerRingTotals, logResult, addLog, packedSlotsSummary, migrateV1, migrateV2, SAVE_VERSION, SAVE_KEY, LEGACY_SAVE_KEYS, MAX_LOG,
 } from '../js/core/game.js';
 import { ringLabel } from '../js/core/rings.js';
 import { repair } from '../js/core/gear.js';
@@ -16,7 +16,11 @@ const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds,
 // Fight outcomes fixed by config, so these tests check the day flow, not the balance.
 const WIN = cfgWith(WEAK_ENEMIES);
 const LOSE = cfgWith(DEADLY_ENEMIES);
-const { min: LOSS_MIN, max: LOSS_MAX } = CONFIG.gear.durabilityLoss;
+// Durability loss per used item in a fight against a normal enemy with no Gear care: the roll x the tier multiplier, to one decimal, at least 1.
+const { min: ROLL_MIN, max: ROLL_MAX } = CONFIG.gear.durabilityLoss;
+const NORMAL_MULT = CONFIG.gear.durabilityLoss.tierMult?.normal ?? 1;
+const LOSS_MIN = Math.max(1, Math.round(ROLL_MIN * NORMAL_MULT * 10) / 10);
+const LOSS_MAX = Math.max(1, Math.round(ROLL_MAX * NORMAL_MULT * 10) / 10);
 const rosterSize = Object.values(CONFIG.enemies.tiers).reduce((a, t) => a + t.count, 0);
 
 // Day 1 -> plan -> confirm. Returns the state on day 2 (adventurer away).
@@ -200,7 +204,7 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
   }
   assert.equal(unpacked.durability, 100);
   assert.equal(rep.wear.length, 5);
-  for (const w of rep.wear) assert.ok(w.loss >= LOSS_MIN && w.loss <= LOSS_MAX && w.left === 100 - w.loss);
+  for (const w of rep.wear) assert.ok(w.loss >= LOSS_MIN && w.loss <= LOSS_MAX && w.left === Math.round((100 - w.loss) * 10) / 10);
   assert.equal(s.battles.length, 1);
   assert.ok(rep.log.length > 0);
   assert.equal(rep.enemy.name, enemy.name);
@@ -212,15 +216,15 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
 test('gear at 0% durability is destroyed after the fight', () => {
   const s = game(11);
   const set = fullSet(s, 'mythril', 'S');
-  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: LOSS_MIN });
-  for (const g of set) g.durability = LOSS_MIN; // every fight costs at least durabilityLoss.min
+  const spare = addGear(s, 'sword', 'copper', 'D', null, { durability: 1 });
+  for (const g of set) g.durability = 1; // every fight costs every used item at least 1%
   toDay2(s, (st) => plan(tierIndex(st, 'normal'), [...set.map((g) => g.id), spare.id]), WIN);
   const rep = endDay(s, WIN).report;
   assert.equal(rep.win, true);
   assert.equal(rep.destroyed.length, 5);
   for (const g of set) assert.ok(!s.gear.includes(g), `${g.slot} should be gone`);
   assert.ok(s.gear.includes(spare), 'unused item survives');
-  assert.equal(spare.durability, LOSS_MIN);
+  assert.equal(spare.durability, 1);
   for (const w of rep.wear) assert.equal(w.left, 0);
 });
 
@@ -447,12 +451,21 @@ test('deserialize rejects other save versions and junk', () => {
   assert.throws(() => deserialize('{not json'));
 });
 
-test('versions: the game version is exported; saves are version 2 (v1.1 field model)', () => {
+test('versions: the game version is exported; saves are version 3 with their own key (v1.2)', () => {
   assert.equal(typeof VERSION, 'string');
   assert.match(VERSION, /^\d+\.\d+$/);
-  assert.ok(Number(VERSION) >= 1.1, VERSION);
-  assert.ok(SAVE_VERSION >= 2);
+  assert.equal(VERSION, '1.2');
+  assert.equal(SAVE_VERSION, 3);
   assert.equal(newGame(1).version, SAVE_VERSION);
+});
+
+test('save keys: the current key carries the save version, older formats are read from the legacy keys (newest first)', () => {
+  assert.equal(SAVE_KEY, 'smithsy-save-v3');
+  assert.ok(SAVE_KEY.endsWith(`-v${SAVE_VERSION}`));
+  assert.deepEqual(LEGACY_SAVE_KEYS, ['smithsy-save-v2', 'smithsy-save-v1']);
+  assert.ok(!LEGACY_SAVE_KEYS.includes(SAVE_KEY), 'an older cached page keeps writing to its own key, never over the new save');
+  // every format older than the current one has a key
+  for (let v = 1; v < SAVE_VERSION; v++) assert.ok(LEGACY_SAVE_KEYS.includes(`smithsy-save-v${v}`), `v${v}`);
 });
 
 // ------------------------------------------------------------ v1.0 saves ----
@@ -484,7 +497,7 @@ test('migrateV1: ground items -> the field\'s pile, debris true/false -> thickne
   const wasDebris = Object.fromEntries(keys.map((k) => [k, v1.map.fields[k].cells.map((c) => c.debris)]));
   assert.ok(Object.values(wasDebris).flat().some((d) => d === true), 'some v1 debris to convert');
   const m = migrateV1(structuredClone(v1));
-  assert.equal(m.version, SAVE_VERSION);
+  assert.equal(m.version, 2, 'migrateV1 makes a v1.1 (version 2) save; deserialize carries on to the current version');
   assert.equal('loadMark' in m, false);
   assert.deepEqual(m.map.fields[keys[0]].pile, ['ore:copper', 'gem:ruby', 'ore:mythril']);
   assert.deepEqual(m.map.fields[keys[1]].pile, ['gem:diamond']);
@@ -547,6 +560,69 @@ test('deserialize accepts a v1.0 save, migrates it, and the game plays on', () =
   assert.deepEqual(deserialize(serialize(back)), back);
 });
 
+
+// ------------------------------------------------------------ v1.1 saves ----
+// What v1.1 saved: version 2, no Gear care skill, no Battle simulation intel entry, whole-number durability.
+function toV2(s) {
+  const v2 = JSON.parse(serialize(s));
+  v2.version = 2;
+  delete v2.skills.gearCare;
+  delete v2.intel.spent.simDepth;
+  return v2;
+}
+
+test('migrateV2: a v1.1 save (version 2) becomes version 3 with the new skill and intel track at zero, nothing else changed', () => {
+  const s = game(41);
+  fullSet(s, 'iron', 'C')[0].durability = 64;
+  s.skills.searchTime = { xp: 12, level: 2 };
+  s.intel.spent.enemySight = 3;
+  const v2 = toV2(s);
+  const m = migrateV2(structuredClone(v2));
+  assert.equal(m.version, 3);
+  assert.deepEqual(m.skills.gearCare, { xp: 0, level: 0 });
+  assert.equal(m.intel.spent.simDepth, 0);
+  assert.deepEqual(m.skills.searchTime, { xp: 12, level: 2 });
+  assert.equal(m.intel.spent.enemySight, 3);
+  assert.deepEqual(m.gear, s.gear, 'gear, with its whole-number durability, is untouched');
+  assert.deepEqual(m.map, s.map);
+  assert.deepEqual(m.storage, s.storage);
+  assert.deepEqual(m, s, 'equal to the current game it was made from');
+});
+
+test('deserialize: a v1.1 save (version 2) loads as the current version and the game plays on', () => {
+  const s = game(42);
+  const set = fullSet(s, 'mythril', 'S');
+  const back = deserialize(JSON.stringify(toV2(s)));
+  assert.equal(back.version, SAVE_VERSION);
+  assert.deepEqual(back, s);
+  assert.equal(JSON.parse(serialize(back)).version, SAVE_VERSION, 'and it is saved as the current version');
+  assert.equal(endDay(back, WIN).ok, true);
+  assert.equal(confirmPlan(back, plan(tierIndex(back, 'normal'), set.map((g) => g.id)), WIN).ok, true);
+  const rep = endDay(back, WIN).report;
+  assert.equal(rep.win, true);
+  assert.ok(rep.wear.every((w) => w.left === Math.round((100 - w.loss) * 10) / 10));
+});
+
+test('deserialize: a v1.0 save goes v1 -> v2 -> v3 in one load (field model and the v1.2 skill / intel track)', () => {
+  const s = game(43);
+  const v1 = toV1(s);
+  delete v1.skills.gearCare;
+  delete v1.intel.spent.simDepth;
+  const back = deserialize(JSON.stringify(v1));
+  assert.equal(back.version, SAVE_VERSION);
+  assert.deepEqual(back.skills.gearCare, { xp: 0, level: 0 });
+  assert.equal(back.intel.spent.simDepth, 0);
+  for (const f of Object.values(back.map.fields)) {
+    assert.ok(Array.isArray(f.pile));
+    for (const c of f.cells) assert.equal(typeof c.debris, 'number');
+  }
+  assert.equal('loadMark' in back, false);
+});
+
+test('deserialize still refuses a save from a newer format or a version it has never heard of', () => {
+  const s = game(44);
+  for (const v of [SAVE_VERSION + 1, SAVE_VERSION + 10, 0, -1]) assert.throws(() => deserialize(JSON.stringify({ ...s, version: v })), /Incompatible/, `version ${v}`);
+});
 
 // ------------------------------------------------------------------- log ----
 test('log: logResult logs successes and notes; the log is capped', () => {

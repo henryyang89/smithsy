@@ -6,7 +6,7 @@ one enemy every day with what you made. Pick fights wisely: one lost fight ends 
 stronger every day.
 
 It is a static site (plain HTML + ES modules, no build step, no dependencies) and saves in your browser.
-Current version: **1.1** (shown in the game's top bar and in Help; see [Versions & rollback](#versions--rollback)).
+Current version: **1.2** (shown in the game's top bar and in Help; see [Versions & rollback](#versions--rollback)).
 
 **Play:** <https://henryyang89.github.io/smithsy/> (once GitHub Pages is switched on, see below).
 
@@ -40,16 +40,17 @@ as is. All paths in the game are relative, so it works from the `/smithsy/` sub-
 ## Versions & rollback
 
 - The version number lives in `js/version.js` and shows in the top bar and in Help. The tenths place goes
-  up for small changes (1.1, 1.2, …), the ones place for big ones (2.0). The live version is 1.0 until
-  1.1 is merged into `main`.
+  up for small changes (1.1, 1.2, …), the ones place for big ones (2.0). The live version is 1.1 until
+  1.2 is merged into `main`.
 - **[`CHANGELOG.md`](CHANGELOG.md)** lists what changed in each version and has the step-by-step
   **rollback** instructions (open a pull request from `release/vX.Y` into `main`, or revert the bad
   version's pull request).
 - Every release is kept on GitHub as a branch named `release/vX.Y` (branches instead of tags, because tags
   can't be pushed from the environment the game is built in), so any version can be looked at, played
   locally or put back.
-- Saves: v1.1 reads v1.0 saves and converts them (see [Save data](#save-data)); v1.1 saves use a new
-  storage key, so going back to v1.0 neither breaks nor overwrites them.
+- Saves: each version's save format has its own storage key. v1.2 reads v1.1 and v1.0 saves and converts
+  them (see [Save data](#save-data)); v1.2 saves use a new key (`smithsy-save-v3`), so going back to 1.1
+  or 1.0 neither breaks nor overwrites them (but they cannot read a 1.2 save).
 
 ## Start-up problems (blank page, older Firefox)
 
@@ -57,17 +58,18 @@ If the game has not started a few seconds after the page loads, a red box **"Smi
 this browser"** appears with the error messages, the browser version and the page address. Please copy
 that text and send it to the developer. Reloading or trying another browser may help.
 
-Version 1.1 removed the `||=` shorthand, which Firefox before version 79 cannot read (one possible cause
-of a blank page there). The game still uses `?.` and `??`, so it needs at least Firefox 74, Chrome/Edge 80
-or Safari 13.1. Whether `||=` was the cause of the blank page reported in Firefox is not confirmed yet: the
-text from the start-up box will tell.
+The game is developed and played in Chrome. Version 1.1 removed the `||=` shorthand, which Firefox before
+version 79 cannot read (one possible cause of a blank page there), but Firefox has not been checked since
+that report and the cause is not confirmed. The game still uses `?.` and `??`, so it needs at least Firefox
+74, Chrome/Edge 80 or Safari 13.1.
 
 ## How to play
 
 **The day.** Each day runs from 8:00 to 18:00 (600 minutes). Only actions cost time: travelling,
 searching, refining, cutting, smithing and repairing by day (repairs at night are free of time). The top
 bar shows the version, the day, the clock, where you are, your bag (and, in a field, that field's pile),
-your score, and the **End day** button. The day does **not** end by itself at 18:00: walk back to camp and
+your score, and the **End day** button; a thin **bar along its bottom edge** shows how much of the work day
+is left (it turns yellow, then red). The day does **not** end by itself at 18:00: walk back to camp and
 press **End day** (it only works at camp).
 
 **Day loop**
@@ -79,7 +81,9 @@ press **End day** (it only works at camp).
    it. Each search digs about a third into every cell (35% ± 5, rolled separately for each cell, shown as
    "% searched"), so about three searches finish a cell (sometimes four); hidden ores and gems are found
    once the search passes their depth. Search efficiency rings and the skill raise the average; the map
-   shows your current range.
+   shows your current range. A search takes 30 minutes **plus 2 minutes for every fresh cell** in its 3x3
+   area (a cell nobody has worked on yet, marked with a small dot; the search panel shows the total), so
+   finish an area before moving on.
    - **Debris** (brown striped cells, the number is how much is left, 20–60 to start) is cleared by
      searching: a search spends that cell's effort on the debris first, and any leftover effort searches
      the cell in the same search. The Debris clearing skill makes each search clear more.
@@ -108,19 +112,26 @@ press **End day** (it only works at camp).
    (it costs time, and only gear at home, not the gear the adventurer took today), but repairs at night
    are free of time (steps 4 and 5).
 3. **Adventurer tab.** See today's fight, your gear and **tomorrow's roster** of 7 enemies (2 normal,
-   3 elite, 2 champion). Most enemy attributes are hidden until you scout them with intel.
+   3 elite, 2 champion) as one comparison table: one enemy per column, offense rows first, then the
+   defense rows. Most enemy attributes are hidden until you scout them with intel.
 4. **End day** (at camp). If the adventurer fought today you get the battle report: full combat log, gear
    wear, **Repair** buttons for the gear just used, and the ring reward. A loss is game over.
-5. **Plan tomorrow.** Pick one enemy, pack up to 2 items per gear slot (the adventurer uses the best one
-   for each slot once the real enemy is known), choose up to 10 adventurer rings, check the **Matchup**
-   table (hit chances, damage per hit, attack speed, damage per second, HP and a rough time to win or lose;
-   hidden attributes show as ranges), and optionally run the win-chance simulation. Confirm to start the
-   next day. **Repair** any gear here before packing: at night (battle report and plan screen) repairs
-   cost materials but no time. Packed gear is away all day and cannot be repaired; only the items
-   actually used lose durability.
+5. **Plan tomorrow.** Pick one enemy (click its column in the roster table), pack up to 2 items per gear
+   slot (the adventurer uses the best one for each slot once the real enemy is known), choose up to 10
+   adventurer rings, check the **Matchup** table (hit chances, damage per hit, attack speed, damage per
+   second, HP and a rough time to win or lose; hidden attributes show as ranges), and optionally press
+   **Estimate all**: one button that simulates every enemy of the roster with your current gear and rings
+   (10 guesses of the hidden attributes x 10 test fights each) and fills the table's win-estimate row. The
+   estimate is small on purpose, so each result shows its margin ("62% ± 12"); the **Battle simulation**
+   intel track and **Foresight** smith rings add guesses and test fights, and changing the gear or rings
+   cancels a run in progress. Confirm to start the next day. **Repair** any gear here before packing: at
+   night (battle report and plan screen) repairs cost materials but no time. Packed gear is away all day
+   and cannot be repaired; only the items actually used lose durability.
 
-**Repairs** always go back to 100% and cost 35% of the item's bars (and gem) for a full repair, scaled by
-the % repaired. If you do not have enough bars or gems of the item's own grade, the lowest higher grade you
+**Wear and repairs.** Each fight, every item the adventurer used loses about 10% durability (a roll of
+8-12%, times 1.1 against an elite and 1.2 against a champion, times one minus the **Gear care** skill; shown
+with one decimal). **Repairs** always go back to 100% and cost 35% of the item's bars (and gem) for a full
+repair, scaled by the % repaired. If you do not have enough bars or gems of the item's own grade, the lowest higher grade you
 have enough of is used instead, with a warning; it gives no benefit (the item keeps its grade), and grades
 are never mixed within one repair.
 
@@ -131,8 +142,10 @@ While the battle report, the plan screen or the game-over screen is open, the **
 once; swap them at the start of a day or while planning at night). Adventurer rings marked as worn there are only the default selection for tonight's plan; the plan
 screen decides what the adventurer actually wears, and changes never affect today's fight.
 **Skills & Intel**: skills level up automatically as you work (a level-10 skill is as strong as a C-grade
-ring of the same kind; debris clearing, the refining/cutting failure skills and the gem grade skills have
-no ring); an intel point arrives every 5 days and improves enemy scouting, ring scouting or ore sight.
+ring of the same kind; debris clearing, the refining/cutting failure skills, the gem grade skills and
+**Gear care** (1% less wear per level, XP from fights you survive) have no ring); an intel point arrives
+every 5 days and improves enemy scouting, ring scouting, ore sight or **Battle simulation** (more guesses
+and test fights in the win estimate).
 **Log**: everything that happened. **Help**: rules plus a live reference of every number in the game, the
 version number and a link to the changelog.
 
@@ -148,24 +161,27 @@ CHANGELOG.md          what changed in each version, and how to roll back
 css/style.css         shared styles; css/ui-*.css per screen
 js/config.js          EVERY tunable number (the place to rebalance)
 js/version.js         the version number shown in the game (bump it for each release)
-js/main.js            UI shell: top bar, tabs, side log, phase screens, save/load (v1.0 save migration, backups)
+js/main.js            UI shell: top bar (with the work-day bar), tabs, side log, phase screens, save/load
+                      (older-save migration, backups)
 js/core/              game logic, no DOM (runs in the browser and in Node)
-  game.js             state, day flow, battle resolution, save format (v1.0 -> v1.1 migration)
+  game.js             state, day flow, battle resolution, save format (v1.0 -> v1.1 -> v1.2 migrations)
   map.js              world map, fields, travel, search (clears debris), boulders, field piles and
                       choosing what to carry, regrowth (off)
   processing.js       refining and cutting, grade odds (gem novice -> master tables)
-  gear.js             gear stats, smithing, repair (night = free, higher-grade substitutes)
+  gear.js             gear stats, smithing, wear (wearLoss), repair (night = free, higher-grade substitutes)
   combat.js           combat stats, hit chance, attack-bar fight simulation with log
-  sim.js              best-gear choice and win-chance estimate
+  sim.js              best-gear choice, win-chance estimate and its margin, simCounts (intel + Foresight)
   enemies.js          rosters, attributes, enemy stats
   rings.js skills.js intel.js bonuses.js rng.js util.js
 js/ui/                one module per screen (mapview, workshop, adventurer, ringsview,
                       skillsview, logview, help, endday) + repairui.js (repair widgets shared
                       by the workshop and the night screens) + dom.js helpers
-tests/                unit tests for the core (node:test), 274 tests
-tools/balance.mjs     balance report (economy, power curve, bot playthrough, what-ifs)
+tests/                unit tests for the core (node:test), 325 tests in 16 files
+tools/balance.mjs     balance report (economy, power curve, bot playthrough, difficulty benchmark, specials,
+                      estimator accuracy, what-ifs)
 docs/SPEC.md          requirements and design decisions
 docs/BALANCE.md       every number explained: formulas, examples, tuning notes, current results
+docs/BENCHMARKS.md    difficulty of each version: survival curve of 100 fixed games per version
 HANDOFF.md            notes for picking the project up in a new session
 package.json          script shortcuts only (npm test, npm run balance); no dependencies
 ```
@@ -206,22 +222,34 @@ There are no dependencies to install; `package.json` only holds these script sho
 - **bot**: a scripted careful player runs whole games through the real game API (it repairs at night, for
   free; in a field it searches, then chooses what to carry and leaves the rest in the pile); shows
   survival, score, material progression, the daily time split, field piles, repairs, how fast it uses up
-  the map's finite supply ("Map supply"), rings, skills and intel (about 2–3 minutes for 40 runs).
+  the map's finite supply ("Map supply"), rings, skills and intel (about 2 minutes for 40 runs).
+- **benchmark** (separate, not part of `all`; v1.2): the difficulty of this version as one number you can
+  compare with older versions. The careful bot plays 100 fixed games (the same seeds in every version)
+  with the in-game "Estimate all" numbers, and the report shows the **share of runs still alive at day 5,
+  10, 15, ... 100**, the median life and the mean score, plus a ready-made row for
+  [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) (about 2 minutes with `--jobs 3`).
+- **specials** (v1.2): how dangerous each enemy special (magic, piercing, stun, slow) is, how much the
+  matching armor gem and ring win back, and how the adventurer's own gems and rings compare (about 10 s).
+- **estimator** (v1.2): how far off the win-chance estimate is at 10 x 10, with Foresight rings or Battle
+  simulation points, and at 1.1's 40 x 30, at several scouting levels (about 30 s).
 
 ```sh
-node tools/balance.mjs                                  # all sections (or: npm run balance)
-node tools/balance.mjs --section power                  # one section: economy | power | bot | all
+node tools/balance.mjs                                  # economy + power + bot (or: npm run balance)
+node tools/balance.mjs --section power                  # one section: economy | power | bot | benchmark | specials | estimator | all
 node tools/balance.mjs --section bot --seeds 40         # 40 bot runs (default 20)
 node tools/balance.mjs --section bot --immortal         # bot can't lose: how long the finite map lasts
+node tools/balance.mjs --section benchmark --jobs 3     # difficulty benchmark: 100 fixed games, survival by day
 node tools/balance.mjs --quick                          # small samples, smoke test in a few seconds
 node tools/balance.mjs --help                           # full option list
 ```
 
 | Flag | What it does |
 |---|---|
-| `--section S` | `economy`, `power`, `bot` or `all` (default `all`) |
-| `--seeds N` | economy: generated maps (default 100); bot: runs (default 20; use 40+ to compare close what-ifs) |
-| `--days N` | bot: last day to play (default 80) |
+| `--section S` | `economy`, `power`, `bot`, `benchmark`, `specials`, `estimator` or `all` (= economy + power + bot; default) |
+| `--seeds N` | economy: generated maps (default 100); bot: runs (default 20; use 40+ to compare close what-ifs); benchmark: runs (default 100, the fixed seed list `mixSeed(31337, 0..N-1)`) |
+| `--days N` | bot: last day to play (default 80); benchmark: default 100 |
+| `--estimator game\|bot` | benchmark (and bot): how the bot estimates win chances. `game` (benchmark default) = the in-game Estimate-all numbers of that version; `bot` (bot-section default) = the bot's own larger, version-independent estimate |
+| `--jobs N` | benchmark: run the seeds in N parallel processes (same numbers as 1 process) |
 | `--samples N` | power: hidden-attribute guesses per cell (default 100, × 50 fights each) |
 | `--minwin P` | bot: lowest estimated win % it accepts for a fight (default 90) |
 | `--future F` | bot: points one survival is worth when choosing fights (default 1000; lower = greedier) |
@@ -243,20 +271,24 @@ node tools/balance.mjs --section bot --seeds 40 --ablate rings,skills
 node tools/balance.mjs --section bot --seeds 40 --set field.regrowPctPerDay=5   # turn regrowth back on
 ```
 
-Each section ends with a one-line `ECONOMY SUMMARY`, `POWER SUMMARY` or `BOT SUMMARY`; run the baseline and
-the what-if with the same flags and compare those lines. The current results and how to read them are in
-`docs/BALANCE.md` ("Balance targets and current results").
+Each section ends with a one-line `ECONOMY SUMMARY`, `POWER SUMMARY`, `BOT SUMMARY`, `SPECIALS SUMMARY`,
+`ESTIMATOR SUMMARY` or `BENCHMARK` line; run the baseline and the what-if with the same flags and compare
+those lines. The current results and how to read them are in `docs/BALANCE.md` ("Balance targets and
+current results"); the version-to-version difficulty table is in `docs/BENCHMARKS.md`.
 
 ## Save data
 
-The game saves automatically after every action in your browser's `localStorage` (key `smithsy-save-v2`;
+The game saves automatically after every action in your browser's `localStorage` (key `smithsy-save-v3`;
 best score in `smithsy-best-v1`). Saves stay on your device and are per browser and per site address.
 **New game** (top bar, or after a game over) replaces the current run; the best score is kept. To wipe
 everything, clear the site's data in your browser.
 
-- **v1.0 saves** (key `smithsy-save-v1`) are converted the first time v1.1 loads: items lying on the
-  ground move to their field's pile, each remaining debris cell gets a thickness of 40, and old maps get
-  no boulders. The game says so in a message. The old key is left untouched.
+- **v1.1 saves** (key `smithsy-save-v2`) are converted the first time v1.2 starts without a v1.2 save: the
+  Gear care skill and the Battle simulation intel track are added at zero (durability stored as whole
+  numbers stays valid). **v1.0 saves** (key `smithsy-save-v1`) first go through the v1.1 conversion (items
+  lying on the ground move to their field's pile, each remaining debris cell gets a thickness of 40, and
+  old maps get no boulders). The game says so in a message. The old keys are left untouched, so an older
+  version still finds its own save; it cannot read a v1.2 save, and it does not overwrite one either.
 - **A save that can't be loaded** is kept as a backup (key `smithsy-save-backup-<time>`, never deleted)
   and a new game starts, with a message, instead of a blank page.
 
@@ -267,4 +299,6 @@ For debugging, the browser console has `window.smithsy` (`ctx`, `Game`, `CONFIG`
 - [`CHANGELOG.md`](CHANGELOG.md): what changed in each version and how to roll back.
 - [`docs/SPEC.md`](docs/SPEC.md): what the game does and the design decisions behind it.
 - [`docs/BALANCE.md`](docs/BALANCE.md): the tuning handbook and current balance results.
+- [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md): how tough each version is, as a survival curve of the
+  careful bot on 100 fixed games, and how to add a version's row.
 - [`HANDOFF.md`](HANDOFF.md): project status, known concerns and a session log.

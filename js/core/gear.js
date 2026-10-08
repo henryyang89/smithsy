@@ -137,6 +137,19 @@ export function craft(state, spec, cfg = CONFIG) {
   return { ok: true, item, minutes, msg: `Crafted ${gearName(item)} (${minutes}m).` };
 }
 
+// Durability one used item loses in one fight: the roll x the enemy tier's multiplier x (1 - Gear care %),
+// kept to one decimal (so every Gear care level changes the loss), at least 1. Shared by resolveBattle
+// (core/game.js) and the UI's wear ranges so they can never disagree.
+export function wearLoss(base, tierMult = 1, carePct = 0) {
+  const red = Math.min(100, Math.max(0, carePct));
+  return Math.max(1, Math.round(base * tierMult * (1 - red / 100) * 10) / 10);
+}
+
+// Durability after losing `loss`, kept to one decimal (no float drift) and never below 0.
+export function wornDurability(durability, loss) {
+  return Math.max(0, Math.round((durability - loss) * 10) / 10);
+}
+
 // Round up to 0.01 (tiny tolerance for float noise). Math.max avoids returning -0 for a 0 amount.
 const ceil2 = (v) => Math.max(0, Math.ceil(v * 100 - 1e-7) / 100);
 

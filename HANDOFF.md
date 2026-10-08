@@ -8,30 +8,34 @@ night plan your adventurer's next fight (1 enemy from a roster of 7). A loss is 
 endless. Plain HTML + ES modules, no build step, hosted on GitHub Pages, **deployed from `main`**
 (<https://henryyang89.github.io/smithsy/>, folder `/ (root)`; see README). Save in localStorage.
 
-**Version:** this branch is **1.1** (`js/version.js`, shown in the top bar and Help). The live game on
-`main` is 1.0 until 1.1 is merged. What changed per version and how to roll back: `CHANGELOG.md`.
+**Version:** this branch is **1.2** (`js/version.js`, shown in the top bar and Help). The live game on
+`main` is 1.1 (pull request #2) until 1.2 is merged; `release/v1.0` and `release/v1.1` exist on GitHub. What
+changed per version and how to roll back: `CHANGELOG.md`. State when this was written: 1.2 is on the work
+branch (commits e446ef7 features, cd61042 balance); the review fixes and the docs refresh are uncommitted
+changes on top (`git status`).
 
 ## Where things are
 | Path | What |
 |---|---|
 | `js/config.js` | **Every tunable number.** Edit here to rebalance. |
-| `js/version.js` | `VERSION` shown in the top bar and Help ('1.1'). Bump it for every release (see "Release process"). |
+| `js/version.js` | `VERSION` shown in the top bar and Help ('1.2'). Bump it for every release (see "Release process"). |
 | `CHANGELOG.md` | What changed in each version (player terms) and the rollback steps. Read it, add to it each release. |
 | `index.html` | Page shell + a plain-script start-up diagnostics box (shows captured errors and the browser if the game has not started a few seconds after load). |
-| `docs/BALANCE.md` | Explains every number, formula, worked examples, tuning notes, current balance results. |
+| `docs/BALANCE.md` | Explains every number, formula, worked examples, tuning notes, current balance results (1.2). |
+| `docs/BENCHMARKS.md` | **Difficulty of each version** as a survival curve: the share of 100 fixed simulated games (careful bot) still alive at day 5, 10, ... 100, per version, plus "Is 10 x 10 too low?" (accuracy of the win estimate) and how to add a version's row. Read before changing balance; re-run `--section benchmark` after. |
 | `docs/SPEC.md` | Requirements + all design decisions agreed with the user. |
-| `js/core/` | DOM-free game logic (works in Node). `game.js` = state, day flow, battle resolution, save (`SAVE_KEY` `smithsy-save-v2`, `SAVE_VERSION` 2, `migrateV1` for v1.0 saves). |
-| `js/core/map.js` | World map, fields (`generateField`: debris thickness, 1 boulder), travel (with an optional carry selection), search (depth mechanic, 35% ± 5 per cell; clears debris first via `debrisClearMult`; finds go to the field's `pile`), carrying (`defaultCarry`, `setCarry`, `moveToPile`, `takeFromPile`, `projectedLoad`, `fitsWithReturn`), `fieldProgress` (boulders excluded), nightly regrowth (off). |
+| `js/core/` | DOM-free game logic (works in Node). `game.js` = state, day flow, battle resolution (wear via `wearLoss`, Gear care XP), save (`SAVE_KEY` `smithsy-save-v3`, `SAVE_VERSION` 3, `LEGACY_SAVE_KEYS` `smithsy-save-v2` / `smithsy-save-v1`, `migrateV1` → v2, `migrateV2` → v3, `addMissingKeys`). |
+| `js/core/map.js` | World map, fields (`generateField`: debris thickness, 1 boulder), travel (with an optional carry selection), search (depth mechanic, 35% ± 5 per cell; clears debris first via `debrisClearMult`; finds go to the field's `pile`; **fresh cells**: `cellFresh`, `freshCellCount`, `searchMinutes(state, cfg, cx, cy)` = base + `field.freshCellMin` per fresh cell, cells get `touched` when a search works on them), carrying (`defaultCarry`, `setCarry`, `moveToPile`, `takeFromPile`, `projectedLoad`, `fitsWithReturn`), `fieldProgress` (boulders excluded), nightly regrowth (off). |
 | `js/core/processing.js` | Refining/cutting, grade distributions (bars: fail reduction + upgrade luck; gems: `blendCutTable` novice → master, then Gem luck), `GRADE_ORDER` F, D, C, B, A, S (low → high). |
-| `js/core/gear.js` | Gear stats, crafting, repair (`isNight`, `repairPlan`: free at night, higher-grade substitutes; `substituteWarning`). |
+| `js/core/gear.js` | Gear stats, crafting, wear (`wearLoss`, `wornDurability`: durability kept to one decimal, shared by the fight and the UI), repair (`isNight`, `repairPlan`: free at night, higher-grade substitutes; `substituteWarning`). |
 | `js/core/combat.js` | Combatant stats, hit chance S-curve, event-driven attack-bar fight sim with log. |
-| `js/core/sim.js` | Best-gear selection and win-chance estimate (samples hidden enemy attributes). |
+| `js/core/sim.js` | Best-gear selection and win-chance estimate (samples hidden enemy attributes). 1.2: `simCounts` (10 x 10 base + Battle simulation intel + floor of the Foresight ring total), `winStandardError` (the margin: the estimate returns `se` and `perGuess`), and `estimateWinChance` stops and resolves `null` when `onProgress` returns `false`. |
 | `js/core/enemies.js` | Roster generation, attribute levels, visibility, enemy stats. |
-| `js/core/rings.js`, `skills.js`, `intel.js`, `bonuses.js` | Rings (stacking), skills (XP), intel points, combined smith bonuses. |
-| `js/main.js` | UI shell (top bar with version and pile count, tabs, side log, phase screens, save/load: reads `smithsy-save-v2`, else migrates `smithsy-save-v1`; a save that can't be loaded is kept as `smithsy-save-backup-<time>` and a new game starts; a render error offers "Start a new game"). |
-| `js/ui/*.js` | One module per screen; `mapview.js` = world map (pile badges), field grid (debris numbers, boulders), pile and bag panels and the "Choose what to carry" step; `workshop.js` also shows the gem novice/master tables; `endday.js` = battle report + plan screen (incl. Matchup table and night repairs); `repairui.js` = repair widgets shared by the workshop and the night screens; `skillsview.js` also holds the skill-vs-ring helpers used by Help; `dom.js` = tiny `h()` helper. |
-| `tests/` | `npm test` (= `node --test tests/*.test.mjs`), 274 tests in 15 files (+ `helpers.mjs`); `carry.test.mjs` (new in 1.1, 19 tests) covers piles, carry choice, travel with a carry and the projected-load time rule. |
-| `tools/balance.mjs` | Balance report: economy (incl. map size, debris effort, trips found vs carried, gem novice/master odds), power curve, bot playthrough (incl. field piles and "Map supply"); `--set` what-ifs, `--ablate` systems, `--immortal`, `--carry value\|default`. |
+| `js/core/rings.js`, `skills.js`, `intel.js`, `bonuses.js` | Rings (stacking; 18 types incl. the smith ring Foresight), skills (XP; Gear care is an activity skill whose XP comes from fights), intel points (incl. the count track `simDepth` = Battle simulation), combined smith bonuses (`gearCarePct`). |
+| `js/main.js` | UI shell (top bar with version, pile count and the work-day bar (`timeBar`, a 4 px strip on the bar's bottom edge), tabs, side log, phase screens, save/load: tries `smithsy-save-v3`, else migrates `smithsy-save-v2`, else `smithsy-save-v1`; a save that can't be loaded is kept as `smithsy-save-backup-<time>` and a new game starts; a render error offers "Start a new game"; `newGame` cancels a running Estimate all). |
+| `js/ui/*.js` | One module per screen; `mapview.js` = world map (pile badges), field grid (debris numbers, boulders), pile and bag panels and the "Choose what to carry" step; `workshop.js` also shows the gem novice/master tables; `endday.js` = battle report + plan screen (incl. the roster comparison table `rosterTable`, **Estimate all** (`startEstimateAll`, `cancelRun`, `estKey`), the ± margin (`marginPts`), the Matchup table, wear text (`wearRange`, `wearText`) and night repairs); `adventurer.js` shows the same roster table; `repairui.js` = repair widgets shared by the workshop and the night screens; `skillsview.js` also holds the skill-vs-ring helpers used by Help; `dom.js` = tiny `h()` helper. |
+| `tests/` | `npm test` (= `node --test tests/*.test.mjs`), **325 tests in 16 files** (+ `helpers.mjs`); `carry.test.mjs` (1.1, 19 tests) covers piles, carry choice and the projected-load rule; `durability.test.mjs` (new in 1.2, 20 tests) covers wear, Gear care, decimal durability and the v1.0/v1.1 save upgrades; the estimate margin, cancellation, `simCounts` and Foresight/Battle simulation are in `sim.test.mjs`, `rings.test.mjs`, `skills-intel.test.mjs`, the fresh-cell rule in `field.test.mjs`, save v3 in `game.test.mjs`. |
+| `tools/balance.mjs` | Balance report: economy (incl. map size, debris effort, trips found vs carried, gem novice/master odds), power curve, bot playthrough (incl. field piles and "Map supply"), and (1.2) **benchmark** (survival curve on fixed seeds, `--jobs`, `--estimator game\|bot`), **specials** (enemy specials vs the matching defence and the adventurer's gems) and **estimator** (accuracy of the win estimate); `--set` what-ifs, `--ablate` systems, `--immortal`, `--carry value\|default`. The tool also runs on older versions (it reads optional exports such as `freshCellCount`/`simCounts` from the modules), which is how 1.1's benchmark row was made. |
 
 ## Release process
 1. Bump `VERSION` in `js/version.js` (tenths for small changes, ones for big ones: user decision) and add a
@@ -47,6 +51,10 @@ endless. Plain HTML + ES modules, no build step, hosted on GitHub Pages, **deplo
 6. If the save format changes: bump `SAVE_VERSION`, use a new `SAVE_KEY` and add a migration like
    `migrateV1`, so an older cached page can never overwrite a newer save.
 
+The release process is unchanged in 1.2. Step 6 was followed for the new save format (key `smithsy-save-v3`,
+`LEGACY_SAVE_KEYS` = v2 then v1, `migrateV2`). For step 2, the difficulty check after a balance change is
+`node tools/balance.mjs --section benchmark --jobs 3` compared with the rows in `docs/BENCHMARKS.md`.
+
 ## Design decisions (from Q&A with the user)
 - One enemy per day from a new daily roster (2 normal, 3 elite, 2 champion). No skipping.
 - Loss = game over. Endless, score-based. No fight time limit (internal safety cap only; counts as a
@@ -57,7 +65,8 @@ endless. Plain HTML + ES modules, no build step, hosted on GitHub Pages, **deplo
   (at night all gear is home and repairs are free, see below).
 - When the fight starts the adventurer sees the real attributes and uses the best packed item per slot.
 - Optional win-chance simulation (player clicks); samples hidden attributes respecting tier counts and
-  optimizes the gear for each sample.
+  optimizes the gear for each sample. Since 1.2 one **Estimate all** button runs it for the whole roster at
+  10 guesses x 10 test fights per enemy, with a ± margin (session 6 decisions below).
 - Adventurer brings home a ring only. 20-slot bag (1 item per slot) for carrying; since session 5 finds go
   to a pile at the field and the player chooses what to carry when leaving. Unlimited camp storage.
 - Persistent 5x5 map, camp in center, 4 blocked cells; travel time by path distance; map shows how much
@@ -89,12 +98,13 @@ Adjustments the user asked for in session 3 (commits 4f45334, 5bcae94):
 Adjustment the user asked for in session 4 (commit 1e53a91):
 - **Enemy tiers share base stats** ("Champions shouldn't have higher HP, damage, or defense than the elites
   or normals. The win rate is too low."): all three tiers now have base HP 80, damage 8, defense 20% (was
-  normal 80/8/20, elite 80/9/25, champion 90/10/30). Tiers differ only by attribute levels (normal 6 low /
+  normal 80/8/20, elite 80/9/25, champion 90/10/30; defense is 25% since 1.2). Tiers differ only by attribute levels (normal 6 low /
   6 normal; elite 3 low / 6 normal / 3 high; champion 6 normal / 6 high), score (10 / 25 / 50) and ring
   grades (D–B / C–A / B–S). Target the user chose: champions ~30–40% win with on-pace gear, elites ~60–70%,
   normals 90%+, erring on the high side because the user wanted higher win rates. Result with plain C sets
-  late in each material window (iron C day 10, steel C day 20, mythril C day 40): champions 48 / 32 / 21%,
-  elites 83 / 74 / 63%, normals 99 / 95 / 92% (details in BALANCE "Balance targets and current results").
+  late in each material window (iron C day 10, steel C day 20, mythril C day 40; the 1.1 numbers): champions
+  48 / 32 / 21%, elites 83 / 74 / 63%, normals 99 / 95 / 92% (1.2: see BALANCE "Balance targets and current
+  results").
 
 Decisions from the user, session 5 (version 1.1; commits e8886d2, 247909d). The change requests:
 1. **Choose what to bring back** instead of the ground items and the time-limited pick-up rule.
@@ -119,6 +129,32 @@ The user's answers to the follow-up questions:
 - **Merging:** auto-merge into `main` when the change is easy to roll back. Every release is kept as a
   branch `release/vX.Y` (git tags can't be pushed from this environment); rollback steps in CHANGELOG.
 
+Decisions from the user, session 6 (version 1.2; commits e446ef7, cd61042, then the review fixes). The
+change requests:
+1. **Durability about 10% per fight**, scaling slightly with the enemy's tier, plus a passive **Gear care**
+   skill (XP from the fights the adventurer survives).
+2. **Tune magic, piercing, stun and slow** so each is dangerous and resistances matter; the adventurer's
+   offense should be a little weaker than the enemy's.
+3. **Win-chance estimate: 10 guesses x 10 test fights per enemy**, raised by a new intel track (**Battle
+   simulation**) and a new ring (**Foresight**).
+4. **One "Estimate all" button.**
+5. **Roster comparison table:** one enemy per column, offense rows first, then defense rows.
+6. **A visual day bar** in the top bar.
+7. **Unarmed damage** so that an unarmed adventurer beats a normal enemy on day 2 about 50-65% of the time
+   (swords raised too: unarmed 11, sword 16).
+8. **+2 minutes per never-searched ("fresh") cell** in a search.
+9. **Benchmark difficulty** by the % of simulated runs alive at each day
+   (`tools/balance.mjs --section benchmark`, `docs/BENCHMARKS.md`), so versions can be compared.
+10. **Firefox is ignored** (the user uses Chrome).
+
+Review fixes on top (reviewers plus an independent verifier; nine findings, all fixed): durability kept to
+**one decimal** (so every Gear care level counts), the estimate's **± margin** (also in the confirm bar and
+the low-win warning), **Estimate-all cancellation** (gear/ring change, confirm, new roster, new game; a
+stale result is never painted), a **thin** day bar (absolute strip, the top bar keeps its height), the
+**save key v3** with v2 / v1 migration, the **magic retune** (enemy Magical 10 / 15 / 25, ruby sword 6-18),
+the phone roster's Defense divider repeating the enemy names, "against an elite enemy" grammar, and the
+Adventurer tab's wear note.
+
 ## Interpretations made without asking (flag to user if they disagree)
 - **Search depth model:** each item has a hidden depth 0–100; a cell's "% searched" rises by the search
   efficiency each search, and items are found when % searched passes their depth. For the user's
@@ -131,16 +167,18 @@ The user's answers to the follow-up questions:
   end). Ties: the adventurer attacks first.
 - **Relative pierce resistance:** pierce resistance ignores a % of the attacker's piercing (not points
   subtracted). Piercing ignores a % of the defender's defense.
-- **Enemy daily growth:** HP and damage +3%/day, accuracy and dodge +1%/day (linear), otherwise late-game
-  hit chances saturate. (Tier base stats are no longer an interpretation: equal for all tiers, user
+- **Enemy daily growth:** HP and damage +3.5%/day (3% before 1.2), accuracy and dodge +1%/day (linear),
+  otherwise late-game hit chances saturate. (Tier base stats are no longer an interpretation: equal for all tiers, user
   decision in session 4, see above.)
 - **Enemy Fast / HP steps:** small (±5% speed, 90/100/110% HP) as the user suggested.
 - **Gem rebalance (sword):** ruby 5–15% magic (halved), emerald 20–60 accuracy and diamond 20–60% piercing
   (doubled), topaz 10–20% stun for 1–1.5 s, sapphire unchanged; aimed at ruby ≈ diamond ≈ sapphire swords.
+  (1.2 retuned them against the new enemy specials: ruby 6–18, diamond 15–55, topaz 10–30% for 1–1.5 s,
+  sapphire 10–30% for 1.5–2 s; see BALANCE section 7.)
 - **Processing times:** copper 15, iron 20, steel 25, mythril 30 min per bar; gems 20 min ("slightly more
   time for better ores"); smithing 15 min per bar, +10 min to infuse a gem.
 - **Durability:** only gear actually USED in the fight loses durability (packed-but-unused gear doesn't
-  wear). Repairs by day take 50% of the craft time × fraction repaired (at night: no time, user decision);
+  wear; since 1.2 about 10% a fight, to one decimal, see session 6). Repairs by day take 50% of the craft time × fraction repaired (at night: no time, user decision);
   smithing has no skill.
 - **"Night" = the battle report and plan phases** (`isNight`); the game-over screen is not night. All gear
   is home then (packing is cleared when the day ends and set again when the plan is confirmed), so the
@@ -204,125 +242,184 @@ Interpretations in session 5 (1.1):
   4 s after `load` (15 s fallback), shows a box with the errors, the browser and the page to send to the
   developer.
 
-## Balance status (version 1.1, commits e8886d2 + 247909d)
-Run `node tools/balance.mjs --section economy`, `--section power` and `--section bot --seeds 40`
-(`--immortal` for how long the map lasts); details and tables in `docs/BALANCE.md` → "Balance targets and
-current results".
+Interpretations in session 6 (1.2):
+- **Wear numbers:** a whole-number roll 8-12 (avg 10), multiplier normal 1.0 / elite 1.1 / champion 1.2
+  ("scaling slightly with the enemy tier" gave no numbers), times (1 - Gear care %), kept to one decimal,
+  at least 1%. Gear care is 1% per level (10% at level 10, like a C ring would be), 100 XP per survived
+  fight (win or draw; none on the losing fight), so level 10 comes after 55 fights.
+- **Fresh cell** = an open cell no search has worked on (`touched` false and `searched` 0; clearing some
+  debris counts as working on it). The surcharge is part of the base minutes, so Quick search rings and the
+  Search speed skill reduce it. Cells in v2 saves have no flag, so any cell with searched % is touched.
+- **Specials values** (Magical 10/15/25, Piercing 10/25/60, Stunning 5/15/35 for 1.5 s, Chilling 10/20/40
+  for 2.5 s, resistances 0/20/40) and the gem and ring tables were set by tuning against the `specials`
+  report's four checks (see BALANCE section 7), not given by the user. Enemy defense 20 -> 25% and growth 3
+  -> 3.5% were set to keep the middle of the game in place after sword 16 / unarmed 11 (checked with the
+  benchmark).
+- **Estimate:** the margin is `max(1, round(2 x SE))` points, SE = the spread of the per-guess win fractions
+  / sqrt(guesses); with one guess the binomial error. The three sizes (guesses, test fights, fights per
+  loadout) all rise by the same extra. Battle simulation is a count with the usual +10, +9, ... gains
+  (capped at 100); Foresight rings are 2/3/4/5/6, stacked like all rings, rounded down. Results are cached
+  per exact selection and seeded, so they never change between presses; choosing another enemy column does
+  not cancel a run, any gear/ring/intel/worn-ring change does.
+- **Roster table:** the Defense divider is a row of the enemy names (small, muted, clickable) so a column
+  can still be picked on a phone; the Adventurer tab shows the same table without the estimate row.
+- **Day bar:** yellow at or below 25% of the day left, red at or below 10%; display only.
+- **Benchmark:** the careful bot on `mixSeed(31337, 0..99)`, planning with the in-game estimate of that
+  version (the bot wears Foresight rings but spends intel only on enemy scouting), fighting an enemy only at
+  an estimate of 90% or more. `--estimator bot` swaps in the bot's own larger estimate to separate the game
+  rules from the estimate size.
+- **Saves:** 1.2 reads `smithsy-save-v3`; if none exists it tries `smithsy-save-v2`, then `smithsy-save-v1`,
+  converts once and from then on saves under v3 only (the older key is never touched or re-read).
+
+## Balance status (version 1.2)
+Run `node tools/balance.mjs --section economy`, `--section power`, `--section bot --seeds 40`
+(`--immortal` for how long the map lasts), `--section specials`, `--section estimator` and
+`--section benchmark --jobs 3`; details and tables in `docs/BALANCE.md` → "Balance targets and current
+results" and in `docs/BENCHMARKS.md`.
 
 ```
-ECONOMY SUMMARY | items/search by dist d1:1.89 d2:2.10 d3:2.27 d4:2.41 d5+:2.60 | debris % of effort d1:5 d2:5 d3:5 d4:5
-d5+:5 | one trip d1/d3: 244/302 min for 20.0/20.0 items (found 21.9/22.1, pile left 1.9/2.1) | field min per unit: copper 23,
-iron 53, steel pair 129, mythril 525, any gem 42 | full set >=D work days: copper 1.1, iron 1.9, steel 3.7, mythril 12.7 |
+ECONOMY SUMMARY | items/search by dist d1:1.84 d2:2.05 d3:2.22 d4:2.36 d5+:2.55 | debris % of effort d1:5 d2:5 d3:5 d4:5
+d5+:5 | one trip d1/d3: 312/348 min for 20.0/20.0 items (found 21.5/22.0, pile left 1.5/2.0) | field min per unit: copper 27,
+iron 62, steel pair 115, mythril 666, any gem 49 | full set >=D work days: copper 1.2, iron 2.1, steel 3.4, mythril 15.8 |
 gem cut skill 0: F 15% C+ 40% effect 0.77 of C | map items/run 1541 (mythril 12.4, coal 120) | regrow off
 
-POWER SUMMARY | day-2 ref (Copper C sword + C chest + C boots) n/e/c 93/63/22% | Cu D sword n/e/c 66/26/4% |
-last day >=90% vs normal: Copper B d5, Iron C d10, Steel C d20, Mythril C d40, Mythril S d60 |
->=70% vs elite: Copper B d2, Iron C d10, Steel C d20, Mythril C d30, Mythril S d50 | ceiling vs normal d60/d80 100/97%
+POWER SUMMARY | unarmed d2 vs normal 62% (target 50-65) | day-2 ref (Copper C sword + C chest + C boots) n/e/c 100/94/65% |
+Cu D sword n/e/c 97/76/37% | last day >=90% vs normal: Copper B d10, Iron C d15, Steel C d20, Mythril C d40, Mythril S d60 |
+>=70% vs elite: Copper B d5, Iron C d15, Steel C d20, Mythril C d40, Mythril S d60 | ceiling vs normal d60/d80 100/99%
 
-BOT SUMMARY | alive d10:88% d20:85% d30:83% d40:78% d50:63% d60:3% d80:0% | median life 53.0 | score 1192 |
-d2 typical est n/e/c 94/69/33 | first iron/steel/myth piece d3/9/16 | 3-slot iron/steel/myth d6/11/22 |
-d11-30 fights n/e/c 2/29/69% | mining 60% trips/day 1.3 idle 32m | repair 1.4% bars 0.0% time, 4.8 night/run
-(1.0 subst.) | map found d40:82% d60:93% d80:-% | field: 3.40 found/search, carried 51% of found (10.2/trip, 56
-from old piles), piles at end 591 (2.7 worth), debris 3.9% of effort | gems cut 310.0/run F/D/C+ 13/34/53%, 29.6 infused
+BOT SUMMARY | alive d10:93% d20:90% d30:73% d40:73% d50:58% d60:13% d80:0% | median life 51.5 | score 1219 | d2 typical est
+n/e/c 100/95/76 | first iron/steel/myth piece d4/10/18 | 3-slot iron/steel/myth d7/13/27 | d11-30 fights n/e/c 1/39/60% |
+mining 63% trips/day 1.3 idle 14m | repair 3.8% bars 0.0% time, 15.6 night/run (2.1 subst.) | map found d40:64% d60:91% d80:-% |
+field: 3.29 found/search, carried 56% of found (10.5/trip, 68 from old piles), piles at end 486 (9.5 worth), debris 4.0% of
+effort | gems cut 257.6/run F/D/C+ 13/35/52%, 31.0 infused
+
+SPECIALS SUMMARY (steel C, N->H loss / recovered by 3 gems + B ring) | Magic -11 / 59% | Piercing -12 / 62% | Stun -14 / 82% | Slow -13 / 103%
+
+BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:74% d40:70% d50:46% d60:13% d70:1% d80:0% d100:0% | median life 50.0 | mean score 1228 | estimator game 10x10
 ```
 
-- **1.0 vs 1.1** (both versions on the same 120 bot seeds, because 40 runs are too noisy here):
-  survival the same within noise (median life 53.0 → 52.0; alive at day 40 / 50 / 60: 73 / 58 / 11% →
-  76 / 56 / 13%); gems slightly weaker, so the mean score is 3% lower (1,204 → 1,164; champion wins 14.3 →
-  12.9 per run); mining about 5–10% more efficient (mining minutes per found item on days 1–40 12.5–14.6 →
-  11.6–12.8; economy: field minutes per copper / iron / steel unit −8–9%, items brought home per day +9–12%
-  at distance 1–4); the map runs out about 4–5 days sooner (81% found by day 40 instead of 73%; immortal bot:
-  finds fall to 15 a day on days 41–50 instead of 25). The power section is identical to 1.0 (combat,
-  enemies and gear did not change). The 40-seed run above shows a 10% lower score than 1.0's 40 seeds
-  (1,192 vs 1,323) only because 5 of its runs die on day 2 (noise; 7% die by day 2 over 120 seeds in both
-  versions).
-- **Careful: the economy SUMMARY's items/search changed meaning.** 1.0 counted only debris-free cells and
-  left clearing minutes out (1.78 / 1.88 / 2.13 / 2.30 / 2.45); 1.1 counts whole fields with debris cleared
-  by searching. On the same basis 1.0 was 1.82 / 1.95 / 2.16 / 2.32 / 2.57, so 1.1 finds 1–8% more per
-  30 minutes of field work.
-- **Win rates** (unchanged since session 4, equal tier base stats): plain C sets late in each material
-  window (iron C day 10, steel C day 20, mythril C day 40) win 48 / 32 / 21% vs champions, 83 / 74 / 63% vs
-  elites and 99 / 95 / 92% vs normals (target: champions ~30–40%, elites ~60–70%, normals 90%+, erring
-  high).
-- **Champions are the careful bot's main mid-game pick:** best champion estimate 95–99% on days 7–30,
-  champions are ~70% of its fights on days 11–30 and it wins 14.0 per run; per-fight losses on days 11–40
-  are 0.3–0.6%.
-- Other targets: iron ~day 3–6, steel ~day 9–11, mythril ~day 16–22 (first piece / 3 of 5 slots; mythril a
-  few days earlier than in 1.0); careful-bot median life 53, 31 of 40 deaths after day 40.
-- **Gems:** the bot cuts ~310 gems per run (F 13 / D 34 / C+ 53%) and ends with gem skills of 3.1 (topaz)
-  to 5.8 (emerald), about halfway to the master table. A novice's gems are worth 0.77 of a C gem per cut
-  (1.0's fixed table: 0.98), a master's 1.08.
-- **Field piles:** the bot carries home 51% of what it finds (10.2 items per trip) and ends a run with about
-  590 items in piles, nearly all copper/iron/coal it no longer needs. With the game's own default carry
-  (`--carry default`) it carries everything (15.9 per trip) and does worse: median 50, score 1,054.
-- **Map exhaustion:** with no regrowth coal and mythril run low around day 45–50 (the bot has found 82% of
-  the map by day 40, nearly all its ~13 mythril, and 92% by day 50; with `--immortal` finds drop from ~41 a
-  day on days 31–40 to ~15 on days 41–50 and under 2 after that), so even a perfect player hits a wall
-  around day 55–70. Regrowth at 5% (`CONFIG.field.regrowPctPerDay`) keeps ~28–30 finds a day and gives a
-  median life of 56.5 instead of 53 (45% alive at day 60 instead of 3%).
-- Ablations (40 seeds): `--ablate rings` (median 42.5, score 683), `--ablate gems` (median 43.5, almost
-  every run dead by day 50), `--ablate repair` (median 45, score 1,091) and `--ablate skills` (median 49.5,
-  score 1,062) clearly hurt; intel (52.0) is within noise for survival.
+- **Difficulty of 1.2 equals 1.1** (the point of the tuning). Benchmark, in-game estimate of each version, 200
+  seeds: alive d10 / d30 / d50 / d60 93 / 75 / 51 / 10% (1.1: 88 / 75 / 50 / 10%), median life 51.0 vs 50.0, mean
+  score 1,246 vs 1,158. 100 seeds: 94 / 74 / 46 / 13% vs 85 / 73 / 46 / 5%, median 50.0 vs 48.5. With the bot's
+  own larger estimate (`--estimator bot`): 94 / 78 / 58 / 12% vs 91 / 79 / 60 / 12%, median 52 vs 53. The shape
+  moved only at the start: no day-2 deaths (14 of 200 in 1.1) but more on days 3-19 (34 of 200 vs 23); deaths
+  before day 40 are 62 vs 59.
+- **Bot, 40 seeds (own estimate), 1.1 → 1.2:** median life 53.0 → 51.5, score 1,192 → 1,219, champion wins 14.0 →
+  13.8, first iron / steel / mythril piece day 3 / 9 / 16 → 4 / 10 / 18, 3 of 5 slots 6 / 11 / 22 → 7 / 13 / 27,
+  map found by day 40 / 50 82% / 92% → 64% / 84% (the fresh-cell time slows mining by about 15%: a trip from
+  8:00 takes 244 → 312 minutes at distance 1), repairs per run 4.8 → 15.6 (1.4% → 3.8% of the bars made), items
+  destroyed by wear 1.4 → 4.2 (4.3 of the 10 mythril bars a run), gems cut 310 → 258.
+- **Power curve:** unarmed beats a day-2 normal 62% (target 50-65%); the day-2 reference set wins 100 / 94 / 65%
+  against normal / elite / champion (1.1: 93 / 63 / 22). Plain sets last longer: the last day with 70% against
+  elites is iron C 15, steel C 20, mythril C 40, mythril S 60 (1.1: 10, 20, 30, 50). On-pace plain sets win
+  more than the session-4 targets (steel C on day 20: 99 / 89 / 56% against normal / elite / champion).
+- **Specials** (steel C, elite, day 28): Normal → High costs 11.3 / 12.2 / 14.5 / 13.1 win points for magic /
+  piercing / stun / slow; the matching armor gems (C, 3 pieces) + a B ring win back 59 / 62 / 82 / 103% (mythril
+  set: 48 / 52 / 98 / 98%); the S sword gems are 72 / 92 / 86 / 75% of the enemy's High value. Resistances take
+  about 2 win points (Low → High) off a C ruby or diamond sword gem, 4-7 off a C topaz or sapphire sword and
+  8-12 off an S gem.
+- **Estimator** (steel C vs elites, true chance ~55%): at 10 x 10 and the 10% starting scouting a press-to-press
+  wobble of 6.8 points and a typical miss of 15.0 points; 20 x 20 (one Battle simulation point) 4.2 / 14.2;
+  1.1's 40 x 30 2.7 / 13.9; with 50% of the attributes visible the miss is 11.3 and with all visible 4.6 (at
+  10 x 10), 2.5 (20 x 20). Most of the error is the hidden attributes, so scouting beats simulation size
+  (`docs/BENCHMARKS.md`, "Is 10 x 10 too low?"). The simulation size still matters for survival: a 20 x 20
+  in-game estimate (what one Battle simulation point gives) lifts the 100-seed curve by 9-12 points on days
+  20-50 (median 52 vs 50) and `--estimator bot` by 12 at day 50, so the 10 x 10 noise costs about 2 days of
+  median life. And the displayed ± margin covers the truth only 56% of the time at 10 x 10 and 10% scouting
+  (see Known concerns).
+- **Ablations** (40 seeds, `docs/BALANCE.md`): rings −4 days (median 47.5, champion wins 6.5 instead of 13.8),
+  gems −9.5 days (42.0), repair 51.0, skills 52.0, intel 53.5, `--carry default` 51.5: only rings and gems are
+  clear losses; `--set field.regrowPctPerDay=5` gives median 59.0 and 33% alive at day 60 (13% without).
+- **Map:** 64% found by day 40, 84% by day 50, 91% by day 60; with `--immortal` gear plateaus at mythril B
+  sword and 2.6 of 5 slots in mythril around day 40-60 and finds fall to 13 a day on days 51-60.
 
 ## Known concerns / ideas
-- **Default carry includes junk.** "Rarest first" keeps the bag and then fills *every* free slot, so once
-  the rare items are in, it tops the bag up with copper and iron the player may no longer need (each item
-  +1% travel time). The bot with the game's default carries 15.9 items per trip instead of 10.2 and does
-  worse (median life 50 vs 53, score 1,054 vs 1,192). Options (the user's call): stop the default at the
-  rare items, skip materials with plenty in storage, or a per-type "don't carry" toggle.
+- **Mythril upkeep with 10% wear.** Keeping a full mythril set whole costs about 0.39 mythril bars a fight
+  (3.5% of its 11 bars); the map's ~13 ore (~12 bars) pay for about 30 fights of one set. The bot loses 4.3
+  of the 10 mythril bars it makes to destroyed pieces, cannot repair a worn top item on 26.8 nights a run (no
+  bars of its grade or higher), and the immortal bot ends with 2.6 of 5 mythril slots (1.1: 3.3). Options (the
+  user's call): lower the wear multiplier for mythril or make the tier multipliers smaller, let repairs
+  combine grades, more mythril in the map, regrowth, a faster Gear care.
+- **Deaths shifted from day 2 to days 3-9 (and 10-19).** With no day-2 deaths (14 of 200 in 1.1), 34 of 200 benchmark runs
+  die on days 3-19 (23 in 1.1: days 3-9 14 vs 10, days 10-19 20 vs 13), so deaths before day 40 are 62 vs 59.
+  The new swords make the bot take elites and champions sooner, and its 10 x 10 estimate cannot tell a 97% fight
+  from a 100% one (the bot section's early deaths are fights it estimated at 98-99%). What a bigger estimate
+  buys is in `docs/BENCHMARKS.md`.
+- **Estimator noise is mostly hidden attributes early.** At the 10% starting scouting the typical miss is 15
+  points whatever the size (1.1's 40 x 30: 13.9); only scouting (50% visible: 11.3; all visible: 4.6) fixes it.
+  The shown ± margin covers the simulation noise only (about 2 x the 5-7 point wobble), not the guesswork about
+  attributes you cannot see: in a coverage check (200 elites, steel C set, true chance ~55%) the true chance lay
+  inside the shown margin for only **56%** of 10 x 10 estimates at 10% scouting (69% at 50%, 93% with every
+  attribute visible; 20 x 20 and 40 x 30 are worse at low scouting, 44% and 30%, because their margins shrink).
+  The screen's wording was corrected before the 1.2 release (detail panel, cell tooltip, `estimateHow`, Help:
+  the ± is how far the simulation alone could be off, about 9 times in 10 when every attribute is known;
+  attributes you can't see add more uncertainty); the margin math is unchanged. Still open as options: widen
+  the margin with the number of hidden attributes, a higher starting scouting.
+- **Firefox is unresolved and ignored** (user decision, session 6: the user uses Chrome). The blank page
+  reported in 1.0 was never confirmed to be the `||=` shorthand removed in 1.1; the code still uses `?.` and
+  `??` (Firefox 74+), and the start-up box would show the error. Not tested since.
+- **On-pace plain sets win more than the session-4 targets** (champion ~30-40%, elite ~60-70%): iron C day 15 /
+  steel C day 20 / mythril C day 40 win 97 / 76 / 38%, 99 / 89 / 56%, 98 / 73 / 30% against normal / elite /
+  champion. The benchmark equals 1.1's, so the difficulty probably comes from the specials, the wear upkeep and
+  the noisy estimate rather than from raw plain-set power. Re-aim the targets or the damage scale if that matters.
+- **Resistances matter modestly for C gems.** A High Pierce or Magic resistance takes only about 2 win points off
+  a C ruby or diamond sword gem (8-12 off an S gem); the user's "resistances matter" is met mainly by stun and
+  slow and by S gems. Sapphire armor + a Slow resistance ring win back 103-140% of a High Chilling, which may be
+  too strong; the armor defence for magic (48%) and piercing (52%) on a mythril set is right at the "at least
+  half" line.
+- **Ruby is now the strongest sword gem:** +19.9 win points at S against +13.7 to +15.6 for the other sword
+  gems (steel C set vs a typical elite; `power` report, `docs/BALANCE.md` special-gem table). Retune ruby
+  (`CONFIG.gemEffects.ruby.weapon`) if it should sit with the rest.
+- **Armor-gem recovery vs a High Chilling enemy is 98-140%** (mythril C set with 3-4 armor gems and a B
+  ring; 103-121% on steel C): the defence can win back more than the special cost, maybe too strong.
+- **Mythril armor recovers only about 48% vs High Magical and about 52% vs High Piercing** (3 armor gems and
+  a B ring; the "at least half" line), because the mythril set already has so much defense.
+- **`--ablate repair` and `--ablate skills` are within noise** (median 51.0 and 52.0 vs 51.5; in 1.1 they cost
+  8 and 3.5 days): with 10% wear the bot rebuilds broken pieces, so repair and Gear care show in the bar bill
+  (destroyed items 11.9% of the bars made without repair, 4.8% with), not in survival. Re-run on 200 seeds before
+  concluding anything; the default carry also shows no cost any more (51.5 vs 51.5; the 1.1 concern "Default
+  carry includes junk" is within noise).
+- **Fresh cells in v2 saves:** cells have no `touched` flag, so a debris cell that was partly cleared but has
+  0% searched counts as fresh once more. Harmless, small.
 - **Debris skill XP comes fast early.** XP is 1 per point of debris cleared and the first levels cost
   100 / 200 / 300 XP, so level 1 (+10% clearing power) comes after two or three debris cells and +30%
-  after about 15; each level is worth +10% (other activity skills 0.6–1.2%). The bot ends runs at level 8.7
-  (+87%); at level 10 every debris cell clears in one search. If it should grow slower: lower
+  after about 15; each level is worth +10% (other activity skills 0.6–1.2%). The bot ends runs at level 8.9
+  (+89%); at level 10 every debris cell clears in one search. If it should grow slower: lower
   `CONFIG.skills.activity.debris.perLevel` (the 1 XP per point is fixed in `search` in map.js).
-- **Firefox blank page: cause still unconfirmed.** 1.1 removed the `||=` shorthand (Firefox before 79
-  can't parse it, a likely cause) and added the start-up diagnostics box; we are waiting for the box's text
-  from the user to confirm. The code still uses `?.` and `??`, so Firefox before 74 would still fail (the
-  box would say so).
 - **The gem master table's failure value is not read.** Gem failure is always novice F − cutting skill;
   `CONFIG.cut.<gem>.master.F` only feeds the Help/Workshop label ("master at cutting level N"). Changing
   it alone changes no odds.
 - **The finite map caps runs.** Fields do not regrow (user decision), so a map's ~1,540 items (~13–14
-  mythril, ~122 coal) are the whole run. Coal and mythril run low around day 45–50 (4–5 days sooner than in
-  1.0, because mining is faster) and a perfect player hits a wall around day 55–70; a matched mythril
-  C-or-better set alone needs ~26 mythril on average, twice what a map holds. The careful bot dies around
-  the same time (median 53) and regrowth at 5% would gain it ~3.5 days, so the map is one of its limits.
-  Options (the user's call): turn regrowth back on (`CONFIG.field.regrowPctPerDay`), add mythril, or keep
-  the cap as a natural run length.
+  mythril, ~122 coal) are the whole run. With the fresh-cell time the map lasts a little longer than in 1.1
+  (64% found by day 40, 84% by day 50), coal and mythril still run low around day 40–50 and a perfect player
+  hits a wall around day 60–70; a matched mythril C-or-better set alone needs ~26 mythril on average, twice
+  what a map holds. Regrowth at 5% (`CONFIG.field.regrowPctPerDay`) lifts the bot's median life from 51.5 to
+  59.0 (33% alive at day 60 instead of 13%). Options (the user's call): turn regrowth back on, add mythril, or
+  keep the cap as a natural run length.
 - **Repairs never combine grades.** A repair takes the whole amount from one grade (exact, else the lowest
   higher grade with enough), so 0.30 C + 0.30 B bars cannot pay a 0.42-bar repair and small leftovers of
-  different grades pile up. The bot has no usable bars for a worn top item on ~16 nights per run (mostly
-  mythril once the map's mythril is gone) and still loses 1.4 items per run to wear. Combining grades would
-  need the user's OK.
+  different grades pile up. At 10% wear this matters more (the bot has no usable bars for a worn top item on
+  26.8 nights a run). Combining grades would need the user's OK.
 - **The Return travel skill only applies to trips to camp.** At level 10 it equals a C-grade Travel ring
   in number (6%) and the UI says so, but the ring counts on every trip, so the skill is worth about half a
   ring. Apply it to all travel (or double it) if the user wants an exact match.
-- **Repairs matter.** Free night repairs: 4.8 repairs per run, all at night, 1.4% of bars;
-  `--ablate repair` now costs ~8 days of median life (45 vs 53; 4.5 days in 1.0).
-- **Pierce resistance and stun resistance are low value.** Enemy Piercing ignores at most 25% of your
-  defense and Stunning is 5–15% for 1 s, so the Pierce/Stun resistance rings add ~0.4–1.6 win-% points
-  and diamond/topaz armor almost nothing. Raise enemy Piercing/Stunning values to make them matter. With
-  enemy defense at 20% for every tier, adventurer piercing is also modest now (the diamond sword is fourth
-  of five sword gems; a Piercing ring adds +1.3–1.4).
-- **Late game is mostly mining, then nothing to mine.** The bot's mining share (travel + search) is 62% on
-  days 11–20 and 74–80% on days 21–40; after day 40 the map runs dry and it spends ~255 min a day cutting
-  stockpiled gems and idles ~100 min.
-- **Skills and intel:** `--ablate skills` costs ~3.5 days of median life and ~130 points of score (7.5 days
-  in 1.0; the debris and gem skills now carry part of it). Intel still shows no measurable effect on the
-  bot's survival (the estimate already averages hidden attributes); its score was ~11% lower without it,
-  as in 1.0. Gems clearly pay (`--ablate gems`: median 43.5 instead of 53 and almost every run dies by day
-  50; without gems the bot has nothing worth doing after mythril and idles most of the day).
-- **Win-chance estimate cost:** up to 40 × (32 × 30 + 30) = 39,600 fights per estimate (~0.1 s in Node,
-  longer in the browser, with a progress bar). The real battle's gear choice runs 32 × 200 fights. The bot
-  estimates all 7 enemies daily, so a 40-seed bot run takes ~2–3 min.
+- **Late game is mostly mining, then nothing to mine.** The bot's mining share (travel + search) is 61% on
+  days 11–20 and 69–75% on days 21–40; after day 40 the map runs dry and it spends ~160–175 min a day
+  cutting stockpiled gems.
+- **Intel and skills:** `--ablate intel` is within noise for survival and score (53.5, 1,217). The bot spends
+  every point on enemy scouting (8.5 per run) and never buys Battle simulation.
+- **Win-chance estimate cost:** 3,300 fights per enemy at 10 x 10 (23,100 for the roster; 1.1: 39,600 per
+  enemy), about 0.01 s per enemy in Node, longer in the browser with a progress bar; 20 x 20 is 13,200. The
+  real battle's gear choice runs 32 × 200 fights. The bot estimates all 7 enemies daily with its own larger
+  estimate, so a 40-seed bot run takes ~2 min and a 100-seed benchmark ~2 min with `--jobs 3`.
 - **Champions are the careful bot's main mid-game pick** since the tiers share base stats (session 4): best
-  estimate 95–99% on days 7–30, ~70% of its fights on days 11–30, 14.0 champion wins per run. If the user
-  wants champions to stay a rare, risky pick, the levers are the champion score, its ring grades
-  (`CONFIG.rings.gradeWeights.champion`) or the attribute values, not base stats.
-- Enemy growth is linear and unbounded while gear tops out at mythril S: every run ends (intended).
+  estimate 95–98% on days 7–30, champions are 69% of its fights on days 11–20 and 52% on days 21–30, 13.8
+  champion wins per run. If the user wants champions to stay a rare, risky pick, the levers are the champion
+  score, its ring grades (`CONFIG.rings.gradeWeights.champion`) or the attribute values, not base stats.
+- Enemy growth is linear (3.5%/day) and unbounded while gear tops out at mythril S: every run ends (intended).
 - About 0.7% of maps have a single distance-4+ field (the only mythril source); ~0.01% have none.
-- Bot results are noisy (chaotic runs): compare what-ifs with `--seeds 40` or more; a difference as small
-  as 1.0 vs 1.1 needed 120 seeds.
+- Bot results are noisy (chaotic runs): compare what-ifs with `--seeds 40` or more and difficulty with the
+  benchmark (100-200 seeds); differences under about 10 points on 100 runs are noise.
 
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
@@ -358,7 +455,7 @@ from old piles), piles at end 591 (2.7 worth), debris 3.9% of effort | gems cut 
   five ablations and a regrowth-5% what-if at 40 seeds).
 - Session 4 (commit 1e53a91): user request "Champions shouldn't have higher HP, damage, or defense than
   the elites or normals. The win rate is too low." All three enemy tiers now share base HP 80, damage 8,
-  defense 20% (`CONFIG.enemies.tiers`); tiers differ only by attribute levels, score and ring grades.
+  defense 20% (25% since 1.2) (`CONFIG.enemies.tiers`); tiers differ only by attribute levels, score and ring grades.
 - Session 4 docs refresh: BALANCE.md, SPEC.md and this file updated to commit 1e53a91 (enemy tier tables,
   quick levers, enemy section, defense/pierce/magic examples, matchup example, Appendix A/B/C, gem/ring/
   slot value tables, "Balance targets and current results"); results regenerated (`--section power`,
@@ -384,4 +481,22 @@ from old piles), piles at end 591 (2.7 worth), debris 3.9% of effort | gems cut 
   a second pass: all four files re-checked against the code, every bot/economy/power number re-run and
   matched, two small fixes (184 sapphire cuts for level 10; debris-skill pace about 55 / 140 searches to
   levels 3 / 5).
+- Session 6 (commits e446ef7, cd61042 + review fixes; version 1.2): ten user change requests (see "Decisions
+  from the user, session 6"). Core: durability about 10% a fight with tier multipliers and one-decimal
+  rounding (`wearLoss`, `wornDurability`) and the Gear care skill; fresh cells (`cellFresh`, +2 min each);
+  `simCounts` (Battle simulation intel track + Foresight ring), `winStandardError` and a cancellable
+  `estimateWinChance`; unarmed 11 / sword 16, enemy defense 25%, growth 3.5%, the four specials, gems and
+  rings retuned; save v3 (`migrateV2`, legacy keys v2 and v1). UI: one Estimate all button with the ± margin,
+  the roster comparison table (one enemy per column, offense rows then defense rows, names repeated at the
+  Defense divider), the work-day bar, wear notes. Tools: `--section benchmark` (fixed seeds, `--jobs`,
+  `--estimator`), `specials`, `estimator`; `docs/BENCHMARKS.md`. Balance tuned until the benchmark curve
+  matched 1.1's. Review: reviewers and an independent verifier found nine issues (Estimate-all run hygiene,
+  thin day bar, grammar, margin, phone roster, wear note, decimal durability, magic tuning, save migration),
+  all fixed; 325 tests pass (new `tests/durability.test.mjs`).
+- Session 6 docs refresh: CHANGELOG.md (1.2 section, save table, rollback steps), BENCHMARKS.md (final-config
+  rows on 100 and 200 seeds, `--estimator bot`, the 1.1 baseline kept, "Is 10 x 10 too low?"), BALANCE.md
+  (every changed number, formula and worked example recomputed with the core modules; economy, power,
+  specials, estimator, bot, immortal, five ablations, the carry-default and regrowth-5% what-ifs and the
+  benchmark re-run on the final config), SPEC.md, README.md and this file updated to 1.2. The refresh was
+  interrupted by a usage limit and finished in a second pass.
   (Update this section each session.)

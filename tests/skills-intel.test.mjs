@@ -25,10 +25,12 @@ const INTEL = cfgWith({
 });
 
 // ---------------------------------------------------------------- skills ----
-test('skill list: 6 activity skills + grade/fail per bar and per gem', () => {
+test('skill list: 7 activity skills (incl. Gear care) + grade/fail per bar and per gem', () => {
   const defs = skillDefs();
-  assert.equal(defs.length, 6 + 2 * BARS.length + 2 * GEMS.length);
+  assert.equal(defs.length, 7 + 2 * BARS.length + 2 * GEMS.length);
   const keys = defs.map((d) => d.key);
+  assert.equal(defs.filter((d) => d.group === 'activity').length, 7);
+  assert.ok(keys.includes('gearCare'));
   assert.equal(new Set(keys).size, keys.length);
   for (const b of BARS) assert.ok(keys.includes(`oreGrade_${b}`) && keys.includes(`oreFail_${b}`));
   for (const g of GEMS) assert.ok(keys.includes(`gemGrade_${g}`) && keys.includes(`gemFail_${g}`));
@@ -307,7 +309,45 @@ test('smithBonuses combines rings, skills and intel', () => {
   assert.equal(d.revealPct, CONFIG.intel.tracks.oreSight.base);
 });
 
+test('smithBonuses.gearCarePct = Gear care perLevel x level; rings and intel do not change it', () => {
+  const s = game(1);
+  assert.equal(smithBonuses(s).gearCarePct, 0);
+  const per = CONFIG.skills.activity.gearCare.perLevel;
+  setSkillLevel(s, 'gearCare', 3);
+  addRing(s, 'processTime', 'S', true);
+  addRing(s, 'searchTime', 'S', true);
+  s.intel.spent.enemySight = 5;
+  assert.ok(approx(smithBonuses(s).gearCarePct, 3 * per));
+  setSkillLevel(s, 'gearCare', CONFIG.skills.maxLevel);
+  assert.ok(approx(smithBonuses(s).gearCarePct, CONFIG.skills.maxLevel * per));
+  // pinned: 2% per level
+  const two = cfgWith({ skills: { activity: { gearCare: { perLevel: 2 } } } });
+  assert.equal(smithBonuses(s, two).gearCarePct, 2 * CONFIG.skills.maxLevel);
+  // a save without the skill (not yet repaired by deserialize) reads as 0
+  delete s.skills.gearCare;
+  assert.equal(smithBonuses(s).gearCarePct, 0);
+});
+
 // ----------------------------------------------------------------- intel ----
+test('Battle simulation (simDepth) intel track: a count of extra guesses / test fights that grows like the other tracks', () => {
+  const t = CONFIG.intel.tracks.simDepth;
+  assert.ok(t && t.name && t.desc);
+  assert.ok(t.base >= 0);
+  assert.equal(newIntel().spent.simDepth, 0);
+  assert.equal(intelChanceFor('simDepth', 0), Math.min(CONFIG.intel.maxChance, t.base));
+  // pinned: base 0 + the shared gains 10, 9, 8, ... (then 1 each), capped at maxChance like every track
+  const P = cfgWith(INTEL, { intel: { tracks: { simDepth: { base: 0 } } } });
+  assert.deepEqual([0, 1, 2, 3, 10].map((n) => intelChanceFor('simDepth', n, P)), [0, 10, 19, 27, 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3 + 2 + 1]);
+  assert.equal(intelChanceFor('simDepth', 1000, P), P.intel.maxChance);
+  const s = game(1);
+  s.intel.points = 2;
+  assert.equal(spendIntel(s, 'simDepth', P).ok, true);
+  assert.equal(intelChance(s, 'simDepth', P), 10);
+  assert.equal(nextIntelGain(s, 'simDepth', P), 9);
+  assert.equal(s.intel.points, 1);
+  assert.equal(intelChance(s, 'enemySight', P), P.intel.tracks.enemySight.base, 'other tracks unchanged');
+});
+
 test('newIntel: no points, nothing spent on any track', () => {
   const i = newIntel();
   assert.equal(i.points, 0);

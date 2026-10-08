@@ -3,16 +3,17 @@
 import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../config.js';
 import { rngFor, seededRng, mixSeed } from './rng.js';
 import { generateMap, atCamp, regrowFields } from './map.js';
-import { newSkills } from './skills.js';
+import { newSkills, skillDefs, addXp } from './skills.js';
 import { newIntel } from './intel.js';
+import { smithBonuses } from './bonuses.js';
 import { generateRoster, enemyCombatant, knownLevels } from './enemies.js';
 import { ringTotals, ringDef, wornRings, ringLabel } from './rings.js';
 import { adventurerCombatant, fight } from './combat.js';
 import { loadouts, bestLoadout } from './sim.js';
-import { gearName } from './gear.js';
+import { gearName, wearLoss, wornDurability } from './gear.js';
 import { formatClock } from './util.js';
 
-export const SAVE_VERSION = 2; // 2 = v1.1: field piles, debris thickness, boulders
+export const SAVE_VERSION = 3; // 3 = v1.2 (decimal durability, Gear care, Battle simulation); 2 = v1.1 (field piles, debris thickness, boulders); 1 = v1.0
 export const MAX_LOG = 300;
 export const MAX_BATTLES = 20;
 
@@ -156,13 +157,20 @@ export function resolveBattle(state, cfg = CONFIG) {
   const result = fight(adv, enemyC, rng.next, true, cfg);
   state.stats.fights += 1;
 
-  // durability loss on the items actually used
+  // durability loss on the items actually used: roll x enemy tier multiplier x (1 - Gear care %), to one decimal
+  const dl = cfg.gear.durabilityLoss;
+  const tierMult = (dl.tierMult && dl.tierMult[e.tier]) || 1;
+  const skillRed = Math.min(100, smithBonuses(state, cfg).gearCarePct); // % less loss from the Gear care skill
   const wear = [];
   for (const g of used) {
-    const loss = rng.int(cfg.gear.durabilityLoss.min, cfg.gear.durabilityLoss.max);
-    g.durability = Math.max(0, g.durability - loss);
-    wear.push({ id: g.id, name: gearName(g), loss, left: g.durability });
+    const base = rng.int(dl.min, dl.max);
+    const loss = wearLoss(base, tierMult, skillRed);
+    g.durability = wornDurability(g.durability, loss);
+    wear.push({ id: g.id, name: gearName(g), loss, base, tierMult, skillRed, left: g.durability });
   }
+  // Gear care XP for every fight the adventurer survives (win or draw)
+  const notes = [];
+  if (result.win || result.draw) addXp(state, 'gearCare', cfg.skills.gearCareXpPerFight, notes, cfg);
   const destroyed = state.gear.filter((g) => g.durability <= 0).map(gearName);
   state.gear = state.gear.filter((g) => g.durability > 0);
   for (const g of state.gear) g.packed = false;
@@ -189,6 +197,7 @@ export function resolveBattle(state, cfg = CONFIG) {
     usedIds: used.map((g) => g.id),
     usedNames: used.map(gearName),
     wear,
+    notes,
     destroyed,
     ring: ring ? { ...ring } : null,
     ringText: ring ? ringLabel(ring, cfg) : null,
@@ -206,6 +215,7 @@ export function resolveBattle(state, cfg = CONFIG) {
       ? `The fight with ${e.name} was called off after ${result.time.toFixed(1)}s: a draw (the adventurer survives, no ring).`
       : `The adventurer fell to ${e.name} after ${result.time.toFixed(1)}s.`);
   if (destroyed.length) addLog(state, `Destroyed (0% durability): ${destroyed.join(', ')}.`);
+  for (const n of notes) addLog(state, n);
   state.plan = null;
   return report;
 }
@@ -216,25 +226,39 @@ export function rosterView(state, cfg = CONFIG) {
 }
 
 // ------------------------------------------------------------- save/load ----
-// v1.1 saves use a new key so an old cached v1.0 page can never overwrite them; v1.0 saves are read
-// from the legacy key once and migrated.
-export const SAVE_KEY = 'smithsy-save-v2';
-export const LEGACY_SAVE_KEYS = ['smithsy-save-v1'];
+// Each save format has its own key, so an old cached page can never overwrite a newer save. Older saves
+// are read from the legacy keys (newest first) and migrated step by step: v1 -> v2 -> v3. The legacy keys
+// are left alone, so going back to an older version still finds its own save.
+export const SAVE_KEY = 'smithsy-save-v3';
+export const LEGACY_SAVE_KEYS = ['smithsy-save-v2', 'smithsy-save-v1'];
 export const BEST_KEY = 'smithsy-best-v1';
 
 export function serialize(state) {
   return JSON.stringify(state);
 }
 
-export function deserialize(text) {
+export function deserialize(text, cfg = CONFIG) {
   const s = JSON.parse(text);
   if (!s || typeof s.version !== 'number') throw new Error('Incompatible save');
-  if (s.version === 1) migrateV1(s);
+  if (s.version === 1) migrateV1(s, cfg); // -> 2
+  if (s.version === 2) migrateV2(s, cfg); // -> 3
   if (s.version !== SAVE_VERSION) throw new Error('Incompatible save');
+  addMissingKeys(s, cfg);
+  return s;
+}
+
+// Saves from an older version lack skills / intel tracks added since (v1.2: Gear care, Battle simulation).
+export function addMissingKeys(s, cfg = CONFIG) {
+  if (s.skills) for (const d of skillDefs(cfg)) if (!s.skills[d.key]) s.skills[d.key] = { xp: 0, level: 0 };
+  if (s.intel) {
+    if (!s.intel.spent) s.intel.spent = {};
+    for (const k of Object.keys(cfg.intel.tracks)) if (typeof s.intel.spent[k] !== 'number') s.intel.spent[k] = 0;
+  }
   return s;
 }
 
 // v1.0 saves: per-cell ground items -> the field's pile; debris true/false -> thickness; no boulders.
+// Result is a version-2 save (deserialize carries on to version 3).
 export function migrateV1(s, cfg = CONFIG) {
   const mid = Math.round((cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2);
   for (const f of Object.values(s.map.fields)) {
@@ -248,6 +272,14 @@ export function migrateV1(s, cfg = CONFIG) {
   }
   delete s.loadMark;
   s.version = 2;
+  return s;
+}
+
+// v1.1 saves (version 2) -> v1.2 (version 3): adds the Gear care skill and the Battle simulation intel
+// track at zero. Durability already stored as whole numbers stays valid (v1.2 wear has one decimal).
+export function migrateV2(s, cfg = CONFIG) {
+  addMissingKeys(s, cfg);
+  s.version = 3;
   return s;
 }
 
