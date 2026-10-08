@@ -1,6 +1,6 @@
 import { CONFIG, TIERS, LEVELS } from '../config.js';
 import { rollRing } from './rings.js';
-import { intelChance } from './intel.js';
+import { intelValue } from './intel.js';
 
 export const ATTR_KEYS = Object.keys(CONFIG.enemies.attributes);
 
@@ -40,15 +40,15 @@ export function generateRoster(rng, day, cfg = CONFIG) {
 }
 
 export function attrVisible(state, enemy, attr, cfg = CONFIG) {
-  return enemy.sight[attr] < intelChance(state, 'enemySight', cfg);
+  return enemy.sight[attr] < intelValue(state, 'enemySight', cfg);
 }
 
 export function ringTypeVisible(state, enemy, cfg = CONFIG) {
-  return enemy.ringTypeRoll < intelChance(state, 'ringTypeSight', cfg);
+  return enemy.ringTypeRoll < intelValue(state, 'ringTypeSight', cfg);
 }
 
 export function ringGradeVisible(state, enemy, cfg = CONFIG) {
-  return enemy.ringGradeRoll < intelChance(state, 'ringGradeSight', cfg);
+  return enemy.ringGradeRoll < intelValue(state, 'ringGradeSight', cfg);
 }
 
 // Known attribute levels (others undefined) as the player sees them.

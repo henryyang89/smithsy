@@ -34,8 +34,8 @@
 //              object keys and array indices; '*' matches every key/index at that level; the value is
 //              parsed as JSON (numbers, arrays, objects) and falls back to a plain string, e.g.
 //                --set map.travelMinPerStep=30
-//                --set field.oreWeights.1.mythril=0          (array index)
-//                --set 'field.oreWeights.*.mythril=2'        (every row)
+//                --set field.byDistance.1.gemShare=0         (array index)
+//                --set 'field.byDistance.*.ores.mythril=2'   (every row)
 //                --set 'gear.durabilityLoss={"min":2,"max":4}'
 //                --set 'refine.mythril.input={"mythril":2}'
 //              js/config.js itself is never changed.
@@ -64,7 +64,7 @@
 //   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
 //            cut, smith, rings, intel; at night: free repairs, then the plan) and reports survival,
 //            score, gear over time, the daily time split, rings, skills, the tiers it chose and how
-//            much of the map's finite supply it has used (fields only regrow if regrowPctPerDay > 0).
+//            much of the map's finite supply it has used (fields never refill).
 //            In a field it searches (clearing debris on the way) until what is worth carrying fills the
 //            bag, chooses what to carry (--carry) and leaves the rest in the field's pile; its trip choice
 //            values items lying in piles (no search needed), so it comes back for them when worth it.
@@ -78,7 +78,7 @@ import { newGame, endDay, acknowledgeReport, confirmPlan } from '../js/core/game
 import {
   key, sameLoc, atCamp, currentField, areaCells, travelMinutes, returnMinutes, searchMinutes,
   searchEfficiencyRange, debrisClearMult, projectedLoad, fieldProgress, cellOpen,
-  travel, search, defaultCarry,
+  travel, search, defaultCarry, distanceRow, sightValue, sightShare, seenItems,
 } from '../js/core/map.js';
 import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
 import { gearStats, craftMinutes, craft, repairInfo, repairPlan, repair, isNight } from '../js/core/gear.js';
@@ -86,7 +86,7 @@ import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js'
 import { estimateWinChanceSync } from '../js/core/sim.js';
 import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
 import { adventurerCombatant, fight } from '../js/core/combat.js';
-import { spendIntel, intelChance } from '../js/core/intel.js';
+import { spendIntel, intelValue } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { itemXp } from '../js/core/skills.js';
 import { seededRng, mixSeed } from '../js/core/rng.js';
@@ -270,8 +270,7 @@ const gameSimOpts = (st) => (simMod.simCounts ? simMod.simCounts(st) : {});
 
 // Expected loot of one cell, from the documented field formula.
 function lootPct(dist, debris) {
-  const L = cfg.field.lootChance;
-  return Math.min(L.max, L.base + L.perDistance * (dist - 1)) + (debris ? cfg.field.debrisLootBonus : 0);
+  return distanceRow(dist).loot + (debris ? cfg.field.debrisLootBonus : 0);
 }
 const ITEMS_PER_LOOT_CELL = (() => {
   let w = 0;
@@ -287,13 +286,12 @@ const cellPrior = (dist, debris) => (lootPct(dist, debris) / 100) * ITEMS_PER_LO
 // Share of items of each type ('ore:copper', 'gem:ruby', ...) at a field distance.
 function itemShares(dist) {
   const f = cfg.field;
-  const oreW = f.oreWeights[Math.max(0, Math.min(dist, f.oreWeights.length) - 1)];
-  const gemW = f.gemWeights[Math.max(0, Math.min(dist, f.gemWeights.length) - 1)];
-  const so = sum(Object.values(oreW));
-  const sg = sum(Object.values(gemW));
+  const row = distanceRow(dist);
+  const so = sum(Object.values(row.ores));
+  const sg = sum(Object.values(f.gemWeights));
   const out = {};
-  for (const [k, v] of Object.entries(oreW)) out[`ore:${k}`] = ((f.oreShare / 100) * v) / so;
-  for (const [k, v] of Object.entries(gemW)) out[`gem:${k}`] = ((1 - f.oreShare / 100) * v) / sg;
+  for (const [k, v] of Object.entries(row.ores)) out[`ore:${k}`] = ((1 - row.gemShare / 100) * v) / so;
+  for (const [k, v] of Object.entries(f.gemWeights)) out[`gem:${k}`] = ((row.gemShare / 100) * v) / sg;
   return out;
 }
 
@@ -307,8 +305,10 @@ function expectedSearched(lo, hi, left) {
 }
 
 // Search options for every 3x3 center of a field, using only what the player can see:
-// revealed cells show their remaining items; every other cell uses the expected loot for the
-// field's distance (richer if the cell has or had debris). Boulders and finished cells are skipped.
+// the items the bot's sight shows count one by one; for the unseen part of a cell it uses the expected loot
+// for the field's distance per item type, scaled by the share of that type the sight does NOT show
+// (cellPrior x share_t x left/100 x (1 - sightShare(t, sight))); richer if the cell has or had debris.
+// Boulders and finished cells are skipped.
 // A cell's remaining value is spread evenly over the search effort it still needs: its debris
 // (thickness / debris clear multiplier, cleared first) plus its unsearched %. Items have uniform
 // hidden depths, so this is exact for the searched part and amortises debris clearing as progress
@@ -322,21 +322,26 @@ function centerOptions(st, field, vf, wasDebris) {
   const sMin = searchMinutes(st); // base minutes of a search (with the search-time reductions)
   const freshMin = cfg.field.freshCellMin || 0; // 1.2+: extra base minutes per never-searched cell in the 3x3
   const shares = itemShares(field.dist);
-  let avgVal = 0;
-  for (const [t, s] of Object.entries(shares)) avgVal += s * vf(t);
+  const sight = sightValue(st);
+  // value of the average unseen item of a type-mix at this sight: sum over types of share x (1 - sightShare) x value
+  let unseenVal = 0;
+  let unseenItems = 0;
+  for (const [t, s] of Object.entries(shares)) {
+    const u = s * (1 - sightShare(t, sight));
+    unseenVal += u * vf(t);
+    unseenItems += u;
+  }
   const cv = field.cells.map((c) => {
     if (!cellOpen(c)) return null;
     if (c.debris > EPS) wasDebris.add(c);
     const left = 100 - c.searched;
     const need = c.debris / mult + left;
     const frac = expectedSearched(lo, hi, need) / need;
-    if (c.revealed) {
-      let v = 0;
-      for (const it of c.items) v += vf(it.t);
-      return { items: c.items.length * frac, val: v * frac, debris: c.debris > EPS };
-    }
-    const it = (cellPrior(field.dist, wasDebris.has(c)) * left) / 100;
-    return { items: it * frac, val: it * avgVal * frac, debris: c.debris > EPS };
+    const seen = seenItems(c, sight);
+    let v = 0;
+    for (const it of seen) v += vf(it.t);
+    const prior = (cellPrior(field.dist, wasDebris.has(c)) * left) / 100;
+    return { items: (seen.length + prior * unseenItems) * frac, val: (v + prior * unseenVal) * frac, debris: c.debris > EPS };
   });
   const out = [];
   for (let cy = 0; cy < n; cy++) {
@@ -474,9 +479,10 @@ function runTrip(st, target, p) {
 }
 
 // ============================================================== ECONOMY =====
-const BUCKETS = [1, 2, 3, 4, 5];
-const bucketOf = (d) => Math.min(5, d);
-const bucketLabel = (b) => (b === 5 ? '5+' : String(b));
+const NB = cfg.field.byDistance.length; // buckets 1..NB; farther fields count in the last (the game uses the last row for them)
+const BUCKETS = Array.from({ length: NB }, (_, i) => i + 1);
+const bucketOf = (d) => Math.min(NB, d);
+const bucketLabel = (b) => (b === NB ? `${NB}+` : String(b));
 
 function fieldsAt(st, b) {
   return st.map.cells.filter((c) => c.type === 'field' && bucketOf(c.dist) === b);
@@ -538,17 +544,17 @@ function economySection(o) {
   }
   h2('1a. What a field holds, by distance from camp (generated maps)');
   printTable(
-    ['dist', 'fields/map', 'items/field', 'ores', 'gems', 'boulders', 'debris cells', 'mean thickness', 'items under debris'],
+    ['dist', 'fields/map', 'items/field', 'ores', 'gems', 'gem %', 'boulders', 'debris cells', 'mean thickness', 'items under debris'],
     BUCKETS.map((b) => {
       const a = agg[b];
       const per = (v) => (a.fields ? v / a.fields : NaN);
       const ores = sum(Object.entries(a.types).filter(([t]) => t.startsWith('ore:')).map(([, v]) => v));
-      return [bucketLabel(b), f2(a.fields / N), f1(per(a.items)), f1(per(ores)), f1(per(a.items - ores)), f1(per(a.boulders)), f1(per(a.debrisCells)),
+      return [bucketLabel(b), f2(a.fields / N), f1(per(a.items)), f1(per(ores)), f1(per(a.items - ores)), f0((100 * (a.items - ores)) / Math.max(1, a.items)), f1(per(a.boulders)), f1(per(a.debrisCells)),
         f0(a.debrisCells ? a.debrisAmt / a.debrisCells : NaN), f1(per(a.debrisItems))];
     }),
   );
   note(`Debris thickness ${cfg.field.debrisAmount.min}-${cfg.field.debrisAmount.max} search effort (a search gives each cell ~${cfg.field.searchEfficiency}); ` +
-    `boulders (${cfg.field.boulders || 0}/field) can never be searched and hold nothing.`);
+    `boulders (${cfg.field.byDistance.map((r) => r.boulders).join('/')} per field at distance 1..${NB}+) can never be searched and hold nothing.`);
   const totals = {};
   for (const b of BUCKETS) for (const [t, v] of Object.entries(agg[b].types)) totals[t] = (totals[t] || 0) + v;
   note(`Whole map, per run: ${f0(sum(Object.values(totals)) / N)} items = ` +
@@ -556,19 +562,15 @@ function economySection(o) {
   {
     const cellsPerMap = sum(BUCKETS.map((b) => agg[b].fields)) / N * cfg.field.size ** 2;
     const itemsPerMap = sum(Object.values(totals)) / N;
-    const r = cfg.field.regrowPctPerDay || 0;
-    if (r > 0) {
-      note(`Regrowth: each searched cell has ${r}%/night to refill. On a fully searched map that is ~${f0((cellsPerMap * r) / 100)} fresh cells ` +
-        `(~${f1((itemsPerMap * r) / 100)} items) per night across all fields, i.e. the long-run supply cap once the map is spent.`);
-    } else {
-      note(`Regrowth: OFF (field.regrowPctPerDay = 0). Fields never refill: the ~${f0(itemsPerMap)} items in ${f0(cellsPerMap)} cells are the whole ` +
-        `supply of a run (ore: ${ORES.map((x) => `${x} ${f0((totals[`ore:${x}`] || 0) / N)}`).join(', ')}). The bot's "Map supply" table shows how fast it is used.`);
-    }
+    note(`Fields never refill: the ~${f0(itemsPerMap)} items in ${f0(cellsPerMap)} cells are the whole ` +
+      `supply of a run (ore: ${ORES.map((x) => `${x} ${f0((totals[`ore:${x}`] || 0) / N)}`).join(', ')}). The bot's "Map supply" table shows how fast it is used.`);
   }
+  let searchesPerCell = NaN;
   {
     // Searches needed to finish one cell (each search rolls eff +/- searchRandomness for that cell).
     const rng = seededRng(mixSeed(4040, 1));
     const r = cfg.field.searchRandomness || 0;
+    const meanKs = [];
     const rows = [0, cfg.skills.activity.searchEff.perLevel * cfg.skills.maxLevel, cfg.rings.types.searchEff.values[1], cfg.rings.types.searchEff.values[4],
       cfg.rings.types.searchEff.values[4] + cfg.skills.activity.searchEff.perLevel * cfg.skills.maxLevel].map((bonus) => {
       const eff = cfg.field.searchEfficiency * (1 + bonus / 100);
@@ -584,10 +586,12 @@ function economySection(o) {
         hist[k] = (hist[k] || 0) + 1;
       }
       const meanK = sum(Object.entries(hist).map(([k, c]) => Number(k) * c)) / T;
+      meanKs.push(meanK);
       return `+${f0(bonus)}% -> ${f1(Math.max(0, eff - r))}-${f1(Math.min(100, eff + r))}% per search, ${f2(meanK)} searches (` +
         Object.entries(hist).sort((a, b) => a[0] - b[0]).map(([k, c]) => `${k}: ${f0((100 * c) / T)}%`).join(', ') + ')';
     });
-    note(`Searches to finish a cell, by search-efficiency bonus (0 / skill ${cfg.skills.maxLevel} / C ring / S ring / S ring + skill ${cfg.skills.maxLevel}):\n  ` + rows.join('\n  '));
+    note(`Searches per clear cell, by search-efficiency bonus (0 / skill ${cfg.skills.maxLevel} / C ring / S ring / S ring + skill ${cfg.skills.maxLevel}):\n  ` + rows.join('\n  '));
+    searchesPerCell = meanKs[0]; // at +0% efficiency
     // ... and a debris cell (mean thickness), by debris skill level
     const dm = (cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2;
     const dRows = [0, 5, 10].map((lv) => {
@@ -661,7 +665,7 @@ function economySection(o) {
   note('Debris is cleared by searching: each search gives each open cell an effort roll; on a debris cell it clears\n' +
     'debris first (x debris skill) and the rest searches the cell. "debris % of effort" = effort spent on debris /\n' +
     '(debris + searching) effort; "debris min" charges that share of each search\'s minutes to debris. "min/item" charges\n' +
-    'the base search time plus the fresh-cell surcharge (freshCellMin per never-searched cell, once per cell: about 126 min\n' +
+    `the base search time plus the fresh-cell surcharge (freshCellMin per never-searched cell, once per cell: about ${f0((cfg.field.freshCellMin || 0) * cfg.field.size ** 2)} min\n` +
     'per field), with no search-skill speed-up.\n' +
     'Items left = still hidden when no search can add anything (only boulders are never searched, and they hold nothing).');
 
@@ -861,7 +865,7 @@ function economySection(o) {
     ` | full set >=D work days: ${BARS.map((b) => `${b} ${f1(setDays[b])}`).join(', ')}` +
     ` | gem cut skill 0: F ${f0(gemCut.novice.F)}% C+ ${f0(gemCut.novice.S + gemCut.novice.A + gemCut.novice.B + gemCut.novice.C)}% effect ${f2(gemCut.eff0)} of C` +
     ` | map items/run ${f0(sum(Object.values(totals)) / N)} (mythril ${f1((totals['ore:mythril'] || 0) / N)}, coal ${f0((totals['ore:coal'] || 0) / N)})` +
-    ` | regrow ${cfg.field.regrowPctPerDay > 0 ? `${cfg.field.regrowPctPerDay}%/night` : 'off'}`);
+    ` | searches per clear cell ${f2(searchesPerCell)}`);
   return { bestMin };
 }
 
@@ -1305,8 +1309,8 @@ function estimatorSection(o) {
 }
 
 // ================================================================== BOT =====
-// A careful scripted player. It only sees what a player sees (visible enemy attributes, revealed
-// cells, expected field loot) and uses the same API as the UI. Heuristics, not an optimiser.
+// A careful scripted player. It only sees what a player sees (visible enemy attributes, the items its sight
+// shows, expected field loot) and uses the same API as the UI. Heuristics, not an optimiser.
 const MAT_RANK = { none: 0, copper: 1, iron: 2, steel: 3, mythril: 4 };
 // Grade a bar of this material must reach to still be worth gathering for an upgrade.
 // The best material keeps being worth chasing up to A grade; older materials up to B.
@@ -1759,7 +1763,7 @@ function spareTime(st, ctx, rec) {
 function spendIntelPoints(st, P) {
   if (P.ablate.has('intel')) return;
   for (let guard = 0; guard < 20 && st.intel.points >= 1; guard++) {
-    const track = intelChance(st, 'enemySight') < 80 ? 'enemySight' : intelChance(st, 'oreSight') < 40 ? 'oreSight' : 'ringTypeSight';
+    const track = intelValue(st, 'enemySight') < 80 ? 'enemySight' : intelValue(st, 'oreSight') < 40 ? 'oreSight' : 'ringTypeSight';
     if (!spendIntel(st, track).ok) break;
   }
 }
@@ -2113,12 +2117,11 @@ function botSection(o, T) {
     ` deferred because only a higher grade was in stock: ${f1(mean(recs.map((r) => r.subDeferred)))} item-nights/run.`);
   note(`Repair blocked (a worn top-2 item below ${P.repairBelow}% with no bars of its material at its grade or higher): ` +
     `${f1(mean(recs.map((r) => Object.keys(r.repairBlocked).length)))} nights/run, ${f1(mean(recs.map((r) => sum(Object.values(r.repairBlocked)))))} item-nights/run.`);
-  note('Trips per run by field distance: ' + [1, 2, 3, 4, 5].map((d) => `d${d === 5 ? '5+' : d} ${f1(mean(recs.map((r) => r.tripDist.filter((x) => Math.min(5, x) === d).length)))}`).join(', ') +
+  note('Trips per run by field distance: ' + BUCKETS.map((d) => `d${bucketLabel(d)} ${f1(mean(recs.map((r) => r.tripDist.filter((x) => bucketOf(x) === d).length)))}`).join(', ') +
     `; mean trip distance ${f2(mean(recs.flatMap((r) => r.tripDist)))}.`);
 
-  // ---- map supply (finite when regrowPctPerDay = 0)
-  const regrow = cfg.field.regrowPctPerDay || 0;
-  h2(`Map supply (${regrow > 0 ? `regrowth ${regrow}%/night` : 'no regrowth: the map is the whole supply'}; runs alive on that day; window = the 10 days up to it)`);
+  // ---- map supply (finite: fields never refill)
+  h2('Map supply (the map is the whole supply; runs alive on that day; window = the 10 days up to it)');
   const start = {
     items: mean(recs.map((r) => r.mapStart.hidden)),
     ore: Object.fromEntries(ORES.map((o) => [o, mean(recs.map((r) => r.mapStart.ore[o]))])),

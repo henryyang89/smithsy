@@ -6,7 +6,7 @@ import { CONFIG, BARS, GEMS, SLOTS, GRADES, ORES } from '../js/config.js';
 import { seededRng } from '../js/core/rng.js';
 import { newGame, endDay, acknowledgeReport, confirmPlan, serialize, deserialize } from '../js/core/game.js';
 import {
-  travel, search, setCarry, defaultCarry, moveToPile, takeFromPile, projectedLoad, returnMinutes, atCamp, currentField,
+  travel, search, setCarry, defaultCarry, moveToPile, takeFromPile, projectedLoad, returnMinutes, atCamp, currentField, distanceRow,
 } from '../js/core/map.js';
 import { refine, cut } from '../js/core/processing.js';
 import { craft, repair, canCraft } from '../js/core/gear.js';
@@ -48,12 +48,14 @@ function checkInvariants(s, ctx, cfg = CONFIG) {
   for (const f of Object.values(s.map.fields)) {
     assert.ok(Array.isArray(f.pile), `pile ${where}`);
     for (const t of f.pile) assert.ok(validItem(t), `pile item ${t} ${where}`);
-    assert.equal(f.cells.filter((c) => c.boulder).length, cfg.field.boulders, `boulders ${where}`);
+    assert.equal(f.cells.filter((c) => c.boulder).length, distanceRow(f.dist, cfg).boulders, `boulders ${where}`);
     for (const c of f.cells) {
       assert.ok(c.searched >= 0 && c.searched <= 100, `searched ${c.searched} ${where}`);
       assert.ok(Number.isFinite(c.debris) && c.debris >= 0, `debris ${c.debris} ${where}`);
       assert.ok(!(c.debris > 0 && c.searched > 0), `searched debris cell ${where}`);
       if (c.boulder) assert.ok(c.searched === 0 && c.debris === 0 && c.items.length === 0, `boulder changed ${where}`);
+      assert.equal('revealed' in c, false, `cell has a revealed flag ${where}`);
+      for (const it of c.items) assert.ok(Number.isInteger(it.s) && it.s >= 1 && it.s <= 100, `sight threshold ${it.s} ${where}`);
     }
   }
 }
@@ -210,8 +212,7 @@ function playRuns(seeds, days, cfg = CONFIG) {
 }
 
 test('random playthroughs keep every invariant and never throw (long runs: the adventurer always wins)', () => {
-  // regrowth turned up so fields reset during the run too
-  const cfg = cfgWith(WEAK_ENEMIES, { field: { regrowPctPerDay: 25 } });
+  const cfg = cfgWith(WEAK_ENEMIES);
   const seeds = Array.from({ length: 8 }, (_, i) => i + 1);
   const days = 14;
   const { daysPlayed, fights, nightRepairs } = playRuns(seeds, days, cfg);

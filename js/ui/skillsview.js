@@ -3,7 +3,7 @@
 import { h, num, bar } from './dom.js';
 import { BARS, GEMS, GRADES } from '../config.js';
 import { skillDefs, xpToNext, skillBonus, itemXp } from '../core/skills.js';
-import { spendIntel, intelChance, intelChanceFor, nextIntelGain, gainForPoint } from '../core/intel.js';
+import { spendIntel, intelValue, nextIntelGain, trackValueText } from '../core/intel.js';
 import { smithRingTotals } from '../core/rings.js';
 import { simCounts } from '../core/sim.js';
 
@@ -14,19 +14,17 @@ const GROUPS = [
 ];
 
 // ------------------------------------------------------- intel track values ----
-// Most intel tracks are chances (%). "Battle simulation" is a COUNT: its value is the number of extra
-// guesses and extra test fights per enemy in the win-chance estimate.
-const COUNT_TRACKS = new Set(['simDepth']);
-export const isCountTrack = (key) => COUNT_TRACKS.has(key);
-// "35%" for a chance track, "+10" for a count track.
-export const trackValueText = (key, v) => (isCountTrack(key) ? `+${v}` : `${v}%`);
+// Each track has a unit (config intel.tracks[..].unit): '%' (a chance), 'sight' (sight points) or 'count'
+// ("Battle simulation": the number of extra guesses and test fights per enemy in the win-chance estimate).
+// trackValueText (core/intel.js) writes a value in its unit: "25%", "20 sight", "+3".
 
-// Spend an intel point; the core message says "now 10%", which is wrong for a count track, so reword it.
+// Spend an intel point. The core message says "Battle simulation is now +2."; for the count track it also says
+// what that means for the win-chance estimate.
 export function spendIntelAction(ctx, key) {
   const res = spendIntel(ctx.state, key, ctx.cfg);
-  if (res.ok && isCountTrack(key)) {
+  if (res.ok && ctx.cfg.intel.tracks[key].unit === 'count') {
     const c = simCounts(ctx.state, ctx.cfg);
-    res.msg = `${ctx.cfg.intel.tracks[key].name} is now ${trackValueText(key, intelChance(ctx.state, key, ctx.cfg))}: the win-chance estimate uses ${c.samples} guesses x ${c.evalFights} test fights per enemy.`;
+    res.msg = `${res.msg} The win-chance estimate uses ${c.samples} guesses x ${c.evalFights} test fights per enemy.`;
   }
   return res;
 }
@@ -224,18 +222,10 @@ function intelPanel(ctx) {
   const ringReveal = smithRingTotals(state, cfg).reveal || 0;
 
   const rows = Object.entries(ic.tracks).map(([key, t]) => {
-    const count = isCountTrack(key);
-    const val = (v) => trackValueText(key, v);
+    const val = (v) => trackValueText(key, v, cfg);
     const spent = state.intel.spent[key] || 0;
-    const cur = intelChance(state, key, cfg);
+    const cur = intelValue(state, key, cfg);
     const gain = nextIntelGain(state, key, cfg);
-    const preview = [];
-    for (let i = 1; i <= 5; i++) {
-      const c = intelChanceFor(key, spent + i, cfg);
-      if (preview.length && c === preview[preview.length - 1]) break;
-      preview.push(c);
-      if (c >= ic.maxChance) break;
-    }
     const canSpend = pts >= 1 && gain > 0;
     const btn = h('button', {
       class: canSpend ? 'small primary' : 'small',
@@ -244,31 +234,23 @@ function intelPanel(ctx) {
       onclick: () => ctx.act(() => spendIntelAction(ctx, key), { toast: true }),
     }, 'Spend 1 point');
     let extra = null;
-    if (key === 'oreSight' && ringReveal > 0) extra = h('div', { class: 'mi-note ok' }, `+ ${num(ringReveal, 2)} from Ore sight rings = ${num(cur + ringReveal, 2)}% per searched cell`);
-    if (count) {
+    if (key === 'oreSight' && ringReveal > 0) extra = h('div', { class: 'mi-note ok' }, `+ ${num(ringReveal, 2)} from Ore sight rings = ${num(cur + ringReveal, 2)} sight`);
+    if (t.unit === 'count') {
       const c = simCounts(state, cfg);
       extra = h('div', { class: 'mi-note ok' }, `${c.samples} guesses x ${c.evalFights} test fights per enemy now (base ${cfg.sim.samples}, +${cur} from intel${c.extra - cur > 0 ? `, +${c.extra - cur} from Foresight rings` : ''})`);
     }
     return [
       h('div', {}, h('b', {}, t.name), h('div', { class: 'mi-note' }, t.desc)),
-      { v: count ? `+${t.base}` : `${t.base}%`, cls: 'num' },
       { v: String(spent), cls: 'num' },
-      count
-        ? h('div', { class: 'mi-chance' }, h('b', { class: 'mi-xpnum' }, val(cur)), extra)
-        : h('div', { class: 'mi-chance' }, h('div', { class: 'mi-xp' }, bar(cur, 'mi-xpbar'), h('b', { class: 'mi-xpnum' }, `${cur}%`)), extra),
+      t.unit === '%'
+        ? h('div', { class: 'mi-chance' }, h('div', { class: 'mi-xp' }, bar(cur, 'mi-xpbar'), h('b', { class: 'mi-xpnum' }, val(cur))), extra)
+        : h('div', { class: 'mi-chance' }, h('b', { class: 'mi-xpnum' }, val(cur)), extra),
       gain > 0
-        ? h('div', {},
-          count ? [h('b', { class: 'ok' }, val(cur + gain)), cur > 0 ? h('span', { class: 'muted' }, ` (+${gain} more)`) : null] : [h('b', { class: 'ok' }, `+${gain}`), ` → ${val(cur + gain)}`],
-          h('div', { class: 'mi-note' }, `then ${preview.slice(1).map((c) => val(c)).join(', ') || 'max'}`))
+        ? h('div', {}, h('b', { class: 'ok' }, `+${gain}`), ` → ${val(cur + gain)}`)
         : h('span', { class: 'muted' }, 'max'),
       btn,
     ];
   });
-
-  // Gains schedule: 1st point +10, 2nd +9, ... then minGain.
-  const n = ic.gainsPerPoint.length;
-  const schedHead = ['Point', ...ic.gainsPerPoint.map((_, i) => ({ v: ordinal(i + 1), cls: 'num' })), { v: `${ordinal(n + 1)}+`, cls: 'num' }];
-  const schedRow = ['Gain', ...ic.gainsPerPoint.map((_, i) => ({ v: `+${gainForPoint(i + 1, cfg)}`, cls: 'num' })), { v: `+${gainForPoint(n + 1, cfg)}`, cls: 'num' }];
 
   return h('section', { class: 'panel' },
     h('h3', {}, 'Intel'),
@@ -277,15 +259,9 @@ function intelPanel(ctx) {
       kpi('Next point', `Day ${nextDay}`, inDays === 0 ? 'at the end of today' : `in ${inDays} day${inDays === 1 ? '' : 's'}`),
       kpi('Rate', `1 per ${dpp} days`, `end of day ${dpp}, ${dpp * 2}, ${dpp * 3}, ...`)),
     h('p', { class: 'mi-note' },
-      `You earn 1 intel point every ${dpp} days. Spend it on one track. Each track counts its own points with diminishing returns (table below), up to ${ic.maxChance}% (or +${ic.maxChance} for Battle simulation). `,
+      `You earn 1 intel point every ${dpp} days. Spend it on one track; each track has its own steps. `,
       'Scouting is applied at once, including to the roster you can already see: each enemy\'s hidden rolls are fixed, so a higher chance reveals more of the same roster.'),
-    tbl(['Track', { v: 'Base', cls: 'num' }, { v: 'Points spent', cls: 'num' }, 'Now', 'Next point', 'Spend'], rows, 'mi-intel'),
-    h('p', { class: 'mi-note' }, `Battle simulation is not a chance: its value is the number of extra guesses and extra test fights per enemy in the plan screen's win-chance estimate (on top of the base ${cfg.sim.samples} x ${cfg.sim.evalFights}). Foresight smith rings add to it too.`),
-    h('h4', {}, 'Gain per point spent on a track'),
-    tbl(schedHead, [schedRow], 'mi-compact mi-sched'));
+    tbl(['Track', { v: 'Points spent', cls: 'num' }, 'Now', 'Next point', 'Spend'], rows, 'mi-intel'),
+    h('p', { class: 'mi-note' }, `Ore sight is your sight: the higher it is, the more of the items still in the ground you see in a field (Map tab). Battle simulation is not a chance: its value is the number of extra guesses and extra test fights per enemy in the plan screen's win-chance estimate (on top of the base ${cfg.sim.samples} x ${cfg.sim.evalFights}). Foresight smith rings add to it too.`));
 }
 
-function ordinal(n) {
-  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
-  return `${n}${s}`;
-}

@@ -13,7 +13,8 @@ const EXPECTED = Object.fromEntries(TIERS.map((t) => [t, { low: 0, normal: 0, hi
 const ATTR = CONFIG.enemies.attributes;
 const val = (attr, level) => ATTR[attr].values[level];
 // Pinned intel numbers for the visibility test.
-const INTEL = cfgWith({ intel: { gainsPerPoint: [10, 9, 8, 7, 6, 5, 4, 3, 2], minGain: 1, maxChance: 100, tracks: { enemySight: { base: 25 }, ringTypeSight: { base: 25 }, ringGradeSight: { base: 25 } } } });
+const STEPS = { gains: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1], max: 100 };
+const INTEL = cfgWith({ intel: { tracks: { enemySight: { base: 25, ...STEPS }, ringTypeSight: { base: 25, ...STEPS }, ringGradeSight: { base: 25, ...STEPS } } } });
 
 test('12 attributes in 6 offense|defense pairs', () => {
   assert.equal(ATTR_KEYS.length, 12);

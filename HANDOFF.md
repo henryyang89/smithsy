@@ -421,6 +421,79 @@ BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:
 - Bot results are noisy (chaotic runs): compare what-ifs with `--seeds 40` or more and difficulty with the
   benchmark (100-200 seeds); differences under about 10 points on 100 runs are noise.
 
+## Plan deviations
+Where the 2.0 implementation (`docs/PLAN-2.0.md`, authoritative) was changed or read narrowly. Each entry says
+what was done instead and which batch it touches.
+
+**Batch 1 (foundation: version and saves, intel schema, world map, fields, sight, regrowth removal)**
+- **No `tierMult` / `gradeMult` yet (B4).** Section 10 says the intel multipliers are B4 and the request map files
+  R22 / R23 under B4, so `intel.tracks.enemySight` and `ringGradeSight` have no multiplier keys, and their `desc`
+  does not promise "a little less for elites". `enemySightFor`, `ringGradeSightFor` and `hiddenGradeOdds` are B4
+  too. B4 adds the keys together with the code that reads them (section 5 has the values).
+- **`canSpendIntel` and `trackValueText(track, value, cfg)` are in `js/core/intel.js` now.** `canSpendIntel` is only
+  used by tests until the B4 gate. `js/ui/skillsview.js` no longer exports `trackValueText` or `isCountTrack`
+  (the unit is `intel.tracks[..].unit`); its `spendIntelAction` adds the guesses x test fights sentence to the core
+  message for the count track.
+- **`expectedSearches(state, cfg)` (new, `js/core/map.js`).** The Map UI said "3-4 searches finish a cell"
+  (`ceil(100 / efficiency)` over the efficiency range); R37 wants "about 4". The new function is the exact expected
+  number (Irwin-Hall sum of the per-search rolls: 3.98 at +0%, 3.44 at +12%), and the camp / action panels say
+  "about N searches". It matches the economy tool's simulation. `searchesToFinish(lo, hi)` is the same maths for a
+  given per-search range with no player bonuses (Help uses it, so Help's "about N searches finish a cell" follows
+  `field.searchEfficiency` / `searchRandomness` instead of a fixed 4), and `searchesText` formats the number.
+- **Intel UI trimmed.** The single gains schedule (`gainsPerPoint`) no longer exists, so the Skills tab's "gain per
+  point" table and the "then 28%, 34% ..." preview are gone (R18: no full schedule); the intel table shows points
+  spent, the current value (with the Ore sight ring part), the next gain and a Spend button. B4 reworks the layout.
+  The plan screen's intel list shows all six tracks (it used `PLAN_TRACKS`, now `Object.keys(cfg.intel.tracks)`).
+- **Map UI.** "What the fields hold, by distance" is a closed `<details>` with the plan's columns (the old
+  "Searched" column is dropped; the world map tiles already show it); a plot background (light grey) and an 8 px gap
+  make the 3x3 plots visible. The camp panel keeps its "Carrying" row (the plan's row list does not mention it).
+  A debris cell that holds a seen item shows the item tag (+N) with a smaller debris number below it (sight sees
+  through debris, section 4.3). The cell's hover tip lists the seen items rarest first (the same one as the tag),
+  with their item names ("Raw ruby, Iron ore x2") rather than the plan's example "Iron ore, Ruby", to match the
+  selected-cell panel. The sight tip says "all the copper, about 80% of the iron, ...". On phones (480 px and
+  narrower) the world-map tiles drop their "dist N" line, so the note under the map says the distance shows "on a
+  wider screen".
+- **Start-up note** says `Smithsy ${VERSION} starts a fresh game: ...` instead of a literal "2.0".
+- **`boulderCell()`** has `touched: false` like every other cell (Cell shape, section 6). Saves are per version, so
+  `cellFresh` is just "open and not touched" (no fallback for cells without the flag), and the battle report screen
+  assumes `packedIds` / `usedIds` exist.
+- **Sim sizes are still 10 / 10 / 10 (B3 makes them 5 / 5 / 5)**, but `simDepth` already has the new schema
+  (`gains: [1]`, `max: 3`), so a 1.2-style estimate gets at most +3 from intel until B3. `tests/sim.test.mjs` only
+  had its pinned intel config rewritten to the new schema (a B1 consequence); the B3 rows are untouched.
+- **Docs.** README: the regrowth lines are gone, and the map / sight / save paragraphs that B1 made false were
+  rewritten; its other numbers (skills, repairs, estimate) are B7's. HANDOFF's file table, save keys and release
+  step 6 are B7's too, so they still describe 1.2. `CHANGELOG.md` has no 2.0 section yet (B7).
+- **`tools/balance.mjs` only runs on 2.0 trees now** (it imports `distanceRow`, `sightValue`, `sightShare`,
+  `seenItems` directly; the 1.2-era optional-export guards that are still there are harmless). Economy buckets are
+  1..6+ and its SUMMARY ends with `searches per clear cell`. The bot only had `intelChance` renamed (it still spends
+  intel by its own short list: no R45 gate until B4) and its field search uses sight (`centerOptions`).
+- **Batch 1 open notes**
+  - [minor] Dead CSS left behind by the removed 1.2 UI: nothing in js/ uses `.mv-empty` / `.mv-done .mv-empty`
+    (css/ui-map.css:103-104), `.mv-odds th.mv-group` (css/ui-map.css:192) or `.mi-sched` (css/ui-misc.css:77).
+    Check: `grep -rn "mv-empty\|mv-group\|mi-sched" js` finds nothing. Expected: delete them.
+  - [minor] Camp panel Debris row reads awkwardly: js/ui/mapview.js:419 builds `Boulders (${bMin}-${bMax}, more far
+    away per field) can never be searched.` Wording only, for example "2-4 boulders per field (more far from camp)
+    can never be searched."
+  - [minor] The 'request pins' test hard-codes CONFIG numbers (documented exception to the house rule): 
+    tests/spec-guards.test.mjs:103-115 asserts map.size 7, field.size 9, boulders 2-4, gemShare 15/25,
+    groupSight.base 20 and oreSight.base 0. Listed in 'Tests (B1)' as deliberate; flagged so the user can accept or
+    reject the exception.
+
+**Tests (B1)**
+- Hand-built geometry tests (`map.test.mjs` travel / pathSteps, `carry.test.mjs`) are pinned to a 5x5 map with
+  `cfgWith({ map: { size: 5 } })` instead of moving every coordinate to the 7x7 map; `field.test.mjs` pins its
+  field size to 9 (`PIN`) and lost its `NO_REVEAL` / `ALL_REVEAL` configs (there is no reveal chance any more).
+- `spec-guards.test.mjs` bans the cell property `revealed` (`.revealed`, `revealed:` / `revealed =`) and `revealPct`
+  in `js/`, not the English word (the battle report says "Enemy attributes (revealed)"). The CHANGELOG guard only
+  checks a 2.0 section once it exists (B7).
+- Tests do not hard-code CONFIG numbers (house rule), with one exception: `spec-guards.test.mjs` has a single "request
+  pins" test for the numbers the user asked for in their own words (7x7 map, 9x9 fields, boulders 2 to 4, gem share
+  15% to 25%, 20% base banner chance, sight 0 on day 1, about 4 searches per cell). Retuning one of those is a decision
+  for the user, so it fails there alone. Every other test derives its numbers from CONFIG or pins them with `cfgWith`.
+- `ui-render.test.mjs` renders the screens on `tests/fakedom.mjs` with `ctx.ui.estimates === 'off'` (nothing reads
+  it before B4). Hand-checked in headless Chromium too: boot, the old-save start-up note (old key untouched), the
+  7x7 map, the 9 plots, seen-item tags with sight, no console errors, no horizontal scroll at 390 px.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),

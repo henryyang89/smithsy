@@ -12,11 +12,10 @@ import { game, cfgWith, customMap, blankField, cell, idx, fieldAt, fieldOf, DAY_
 
 // Pinned numbers: the hand-computed minutes below hold whatever CONFIG says.
 const CFG = cfgWith({
-  map: { travelMinPerStep: 20, loadPenaltyPerItem: 1 },
+  map: { size: 5, travelMinPerStep: 20, loadPenaltyPerItem: 1 }, // a small hand-built map (camp at 2,2) whatever the game's map size is
   bag: { slots: 20 },
   field: { size: 8, searchMin: 30, freshCellMin: 0, searchEfficiency: 25, searchRandomness: 0 }, // freshCellMin 0: these tests are about the base search time
   processing: { maxTimeReduction: 75 },
-  intel: { tracks: { oreSight: { base: 0 } } },
 });
 const SLOTS = CFG.bag.slots;
 const NEAR = { x: 2, y: 3 }; // distance 1 (camp is at 2,2; a wall above it)

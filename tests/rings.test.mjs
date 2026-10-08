@@ -44,8 +44,12 @@ test('ringLabel: "Name G (value + description)", no space before a "%" descripti
   assert.equal(ringLabel({ type: 'speed', grade: 'C' }, RC), 'Speed C (2.5% attack speed)');
   assert.equal(ringLabel({ type: 'accuracy', grade: 'S' }, RC), 'Accuracy S (10 accuracy rating)');
   assert.equal(ringLabel({ type: 'health', grade: 'D' }, RC), 'Health D (3% max HP)');
-  const custom = cfgWith({ rings: { types: { reveal: { name: 'Ore sight', values: [1, 2, 3, 4, 5], desc: '% (points) chance to see' } } } });
-  assert.equal(ringLabel({ type: 'reveal', grade: 'B' }, custom), 'Ore sight B (3% (points) chance to see)');
+  const custom = cfgWith({ rings: { types: { reveal: { name: 'Ore sight', values: [1, 2, 3, 4, 5], desc: 'sight' } } } });
+  assert.equal(ringLabel({ type: 'reveal', grade: 'B' }, custom), 'Ore sight B (3 sight)');
+  // the real Ore sight ring adds sight points (no chance any more): "Ore sight S (30 sight)"
+  const reveal = CONFIG.rings.types.reveal;
+  assert.equal(reveal.desc, 'sight');
+  assert.equal(ringLabel({ type: 'reveal', grade: 'S' }), `${reveal.name} S (${reveal.values[4]} sight)`);
   // every type and grade with the default config
   for (const [type, d] of Object.entries(CONFIG.rings.types)) {
     for (const g of GRADES) {

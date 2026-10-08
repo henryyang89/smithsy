@@ -5,7 +5,7 @@ import { SLOTS } from '../config.js';
 import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
 import { wornRings, ringContributions, ringDef, ringValue } from '../core/rings.js';
-import { intelChance } from '../core/intel.js';
+import { intelValue, trackValueText } from '../core/intel.js';
 import { cap } from '../core/util.js';
 import { enemyCard, rosterTable, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
 
@@ -123,7 +123,7 @@ function rosterPanel(ctx) {
   const cfg = ctx.cfg;
   const r = s.roster;
   if (!r) return section('Tomorrow\'s roster', h('p', { class: 'muted' }, 'No roster.'));
-  const chance = (t) => h('b', {}, `${intelChance(s, t, cfg)}%`);
+  const chance = (t) => h('b', {}, trackValueText(t, intelValue(s, t, cfg), cfg));
   return section(`Tomorrow's roster (fight on day ${r.day})`,
     h('p', { class: 'adv-tight muted adv-small' },
       'You choose one of these enemies when you end the day. Scouting: each attribute visible ', chance('enemySight'),

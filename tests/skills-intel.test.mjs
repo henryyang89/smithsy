@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG, BARS, GEMS } from '../js/config.js';
 import { skillDefs, newSkills, xpToNext, addXp, skillBonus, itemXp } from '../js/core/skills.js';
-import { newIntel, gainForPoint, intelChanceFor, intelChance, nextIntelGain, spendIntel } from '../js/core/intel.js';
+import { newIntel, gainForPoint, intelValueFor, intelValue, nextIntelGain, spendIntel, trackValueText, canSpendIntel } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { debrisClearMult, searchMinutes, searchEfficiency, returnMinutes, search } from '../js/core/map.js';
 import { refineDistribution, cutDistribution, blendCutTable, refineMinutes, cutMinutes, GRADE_ORDER } from '../js/core/processing.js';
@@ -17,10 +17,14 @@ const SK = cfgWith({
   },
   rings: { types: { processTime: { values: [5, 6, 7, 8, 10] }, oreGrade: { values: [2, 3, 4, 5, 6] }, gemGrade: { values: [2, 3, 4, 5, 6] } } },
 });
+// Every track gets the same pinned steps (10, 9, 8, ... 2, then 1 for every later point), max 100.
+const STEPS = { gains: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1], max: 100 };
 const INTEL = cfgWith({
   intel: {
-    gainsPerPoint: [10, 9, 8, 7, 6, 5, 4, 3, 2], minGain: 1, maxChance: 100,
-    tracks: { oreSight: { base: 10 }, enemySight: { base: 25 }, ringTypeSight: { base: 25 }, ringGradeSight: { base: 25 } },
+    tracks: {
+      oreSight: { base: 10, ...STEPS }, enemySight: { base: 25, ...STEPS }, ringTypeSight: { base: 25, ...STEPS }, ringGradeSight: { base: 25, ...STEPS },
+      groupSight: { base: 20, ...STEPS }, simDepth: { base: 0, ...STEPS },
+    },
   },
 });
 
@@ -292,7 +296,8 @@ test('smithBonuses combines rings, skills and intel', () => {
   assert.equal(b.oreUpgrade('iron'), 5);
   assert.ok(approx(b.gemFailRed('diamond'), 0.9));
   assert.equal(b.gemFailRed('ruby'), 0);
-  assert.equal(b.revealPct, SK.intel.tracks.oreSight.base);
+  assert.equal('revealPct' in b, false, 'no ore sight chance any more');
+  assert.equal(b.sight, SK.intel.tracks.oreSight.base, 'sight = Ore sight intel (base) + Ore sight rings (none worn)');
   assert.equal(b.travelPct, 0);
   // default config: same sums
   const A = CONFIG.skills.activity;
@@ -306,7 +311,18 @@ test('smithBonuses combines rings, skills and intel', () => {
   assert.ok(approx(d.gemBlend('topaz'), P.gemGrade.perLevel * 4));
   assert.ok(approx(d.gemUpgrade('topaz'), ringVal('gemGrade', 'C')));
   assert.ok(approx(d.debrisPct, CONFIG.skills.activity.debris.perLevel * 3));
-  assert.equal(d.revealPct, CONFIG.intel.tracks.oreSight.base);
+  assert.equal(d.sight, CONFIG.intel.tracks.oreSight.base);
+});
+
+test('smithBonuses.sight = Ore sight intel + Ore sight rings', () => {
+  const s = game(1);
+  assert.equal(smithBonuses(s).sight, 0, 'a new game has no sight');
+  s.intel.spent.oreSight = 2;
+  assert.equal(smithBonuses(s, INTEL).sight, intelValueFor('oreSight', 2, INTEL));
+  assert.equal(smithBonuses(s, INTEL).sight, 10 + 10 + 9);
+  addRing(s, 'reveal', 'C', true);
+  assert.equal(smithBonuses(s, INTEL).sight, 10 + 10 + 9 + ringVal('reveal', 'C', INTEL));
+  assert.equal(smithBonuses(s).sight, intelValue(s, 'oreSight') + ringVal('reveal', 'C'));
 });
 
 test('smithBonuses.gearCarePct = Gear care perLevel x level; rings and intel do not change it', () => {
@@ -329,85 +345,183 @@ test('smithBonuses.gearCarePct = Gear care perLevel x level; rings and intel do 
 });
 
 // ----------------------------------------------------------------- intel ----
+const TRACKS = ['oreSight', 'enemySight', 'ringTypeSight', 'ringGradeSight', 'groupSight', 'simDepth'];
+
+test('config: six intel tracks, each with a unit, base, gains list, max and description', () => {
+  assert.deepEqual(Object.keys(CONFIG.intel.tracks), TRACKS);
+  for (const [k, t] of Object.entries(CONFIG.intel.tracks)) {
+    assert.ok(t.name && t.desc, k);
+    assert.ok(['%', 'sight', 'count'].includes(t.unit), `${k}: unit ${t.unit}`);
+    assert.ok(Array.isArray(t.gains) && t.gains.length >= 1, `${k}: gains list`);
+    assert.ok(t.base >= 0 && t.max > t.base, `${k}: base < max`);
+  }
+  assert.equal(CONFIG.intel.tracks.oreSight.unit, 'sight');
+  assert.equal(CONFIG.intel.tracks.simDepth.unit, 'count');
+  for (const k of ['enemySight', 'ringTypeSight', 'ringGradeSight', 'groupSight']) assert.equal(CONFIG.intel.tracks[k].unit, '%', k);
+});
+
 test('Battle simulation (simDepth) intel track: a count of extra guesses / test fights that grows like the other tracks', () => {
   const t = CONFIG.intel.tracks.simDepth;
   assert.ok(t && t.name && t.desc);
   assert.ok(t.base >= 0);
   assert.equal(newIntel().spent.simDepth, 0);
-  assert.equal(intelChanceFor('simDepth', 0), Math.min(CONFIG.intel.maxChance, t.base));
-  // pinned: base 0 + the shared gains 10, 9, 8, ... (then 1 each), capped at maxChance like every track
-  const P = cfgWith(INTEL, { intel: { tracks: { simDepth: { base: 0 } } } });
-  assert.deepEqual([0, 1, 2, 3, 10].map((n) => intelChanceFor('simDepth', n, P)), [0, 10, 19, 27, 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3 + 2 + 1]);
-  assert.equal(intelChanceFor('simDepth', 1000, P), P.intel.maxChance);
+  assert.equal(intelValueFor('simDepth', 0), Math.min(t.max, t.base));
+  // pinned: base 0 + the steps 10, 9, 8, ... (then 1 each), capped at the track's max
+  const P = cfgWith(INTEL, { intel: { tracks: { simDepth: { base: 0, max: 100 } } } });
+  assert.deepEqual([0, 1, 2, 3, 10].map((n) => intelValueFor('simDepth', n, P)), [0, 10, 19, 27, 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3 + 2 + 1]);
+  assert.equal(intelValueFor('simDepth', 1000, P), P.intel.tracks.simDepth.max);
   const s = game(1);
   s.intel.points = 2;
   assert.equal(spendIntel(s, 'simDepth', P).ok, true);
-  assert.equal(intelChance(s, 'simDepth', P), 10);
+  assert.equal(intelValue(s, 'simDepth', P), 10);
   assert.equal(nextIntelGain(s, 'simDepth', P), 9);
   assert.equal(s.intel.points, 1);
-  assert.equal(intelChance(s, 'enemySight', P), P.intel.tracks.enemySight.base, 'other tracks unchanged');
+  assert.equal(intelValue(s, 'enemySight', P), P.intel.tracks.enemySight.base, 'other tracks unchanged');
 });
 
 test('newIntel: no points, nothing spent on any track', () => {
   const i = newIntel();
   assert.equal(i.points, 0);
-  assert.deepEqual(Object.keys(i.spent).sort(), Object.keys(CONFIG.intel.tracks).sort());
+  assert.deepEqual(Object.keys(i.spent).sort(), [...TRACKS].sort());
   for (const v of Object.values(i.spent)) assert.equal(v, 0);
 });
 
-test('intel gains: +10, +9, +8, ... +2, then +1 per point', () => {
-  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => gainForPoint(n, INTEL)), [10, 9, 8, 7, 6, 5, 4, 3, 2]);
-  for (let n = 10; n < 60; n++) assert.equal(gainForPoint(n, INTEL), 1);
-  // default config: the table, then minGain; gains never increase
-  const { gainsPerPoint, minGain } = CONFIG.intel;
-  gainsPerPoint.forEach((g, i) => assert.equal(gainForPoint(i + 1), g));
-  assert.equal(gainForPoint(gainsPerPoint.length + 1), minGain);
-  for (let n = 2; n < 40; n++) assert.ok(gainForPoint(n) <= gainForPoint(n - 1), 'diminishing returns');
+test('gainForPoint follows each track\'s list, then repeats the last value', () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => gainForPoint('enemySight', n, INTEL)), [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+  for (let n = 11; n < 60; n++) assert.equal(gainForPoint('enemySight', n, INTEL), 1, 'the last value repeats');
+  // every track of the default config: its own list, then the last value forever
+  for (const [k, t] of Object.entries(CONFIG.intel.tracks)) {
+    t.gains.forEach((g, i) => assert.equal(gainForPoint(k, i + 1), g, `${k} point ${i + 1}`));
+    for (let n = t.gains.length + 1; n < t.gains.length + 10; n++) assert.equal(gainForPoint(k, n), t.gains[t.gains.length - 1], `${k} point ${n}`);
+  }
+  // tracks have different lists (R44: the gain per point varies by track)
+  const lists = new Set(Object.values(CONFIG.intel.tracks).map((t) => JSON.stringify(t.gains)));
+  assert.ok(lists.size >= 4, 'tracks do not all share one list');
+  // a one-entry list repeats from the first point
+  const flat = cfgWith(INTEL, { intel: { tracks: { groupSight: { gains: [7] } } } });
+  assert.deepEqual([1, 2, 50].map((n) => gainForPoint('groupSight', n, flat)), [7, 7, 7]);
 });
 
-test('intel chance: base + cumulative gains, capped at maxChance', () => {
-  assert.equal(intelChanceFor('enemySight', 0, INTEL), 25);
-  assert.equal(intelChanceFor('enemySight', 1, INTEL), 35);
-  assert.equal(intelChanceFor('enemySight', 2, INTEL), 44);
-  assert.equal(intelChanceFor('enemySight', 9, INTEL), 25 + 54);
-  assert.equal(intelChanceFor('enemySight', 10, INTEL), 80);
-  assert.equal(intelChanceFor('enemySight', 30, INTEL), 100);
-  assert.equal(intelChanceFor('enemySight', 31, INTEL), 100);
-  assert.equal(intelChanceFor('enemySight', 500, INTEL), 100);
-  assert.equal(intelChanceFor('oreSight', 9, INTEL), 64);
-  assert.equal(intelChanceFor('oreSight', 45, INTEL), 100);
-  assert.equal(intelChanceFor('oreSight', 44, INTEL), 99);
-  assert.equal(intelChanceFor('oreSight', 45, cfgWith(INTEL, { intel: { maxChance: 90 } })), 90);
-  // default config: every track starts at its base and ends at maxChance
+test('every default gains list is positive and never increases (diminishing returns, in steps)', () => {
   for (const [k, t] of Object.entries(CONFIG.intel.tracks)) {
-    assert.equal(intelChanceFor(k, 0), Math.min(CONFIG.intel.maxChance, t.base));
-    assert.equal(intelChanceFor(k, 1000), CONFIG.intel.maxChance);
+    assert.ok(t.gains.every((g) => g > 0), `${k}: every gain is above 0`);
+    for (let i = 1; i < t.gains.length; i++) assert.ok(t.gains[i] <= t.gains[i - 1], `${k}: gain ${i + 1} is not above gain ${i}`);
+    for (let n = 2; n < t.gains.length + 5; n++) assert.ok(gainForPoint(k, n) <= gainForPoint(k, n - 1), `${k} point ${n}`);
+  }
+  // "in steps": the scouting tracks repeat each value for three points (3 points per step), only simDepth is flat
+  for (const k of ['enemySight', 'ringTypeSight', 'ringGradeSight', 'groupSight', 'oreSight']) {
+    const g = CONFIG.intel.tracks[k].gains;
+    assert.equal(g[0], g[1], `${k}: first step lasts at least 2 points`);
+    assert.equal(g[0], g[2], `${k}: first step lasts 3 points`);
+    assert.ok(g[3] < g[0], `${k}: then it drops`);
   }
 });
 
-test('spendIntel uses a point, raises the track, and stops at the maximum', () => {
+test('intelValueFor: base + cumulative gains of the points spent, capped at the track\'s max', () => {
+  assert.equal(intelValueFor('enemySight', 0, INTEL), 25);
+  assert.equal(intelValueFor('enemySight', 1, INTEL), 35);
+  assert.equal(intelValueFor('enemySight', 2, INTEL), 44);
+  assert.equal(intelValueFor('enemySight', 9, INTEL), 25 + 54);
+  assert.equal(intelValueFor('enemySight', 10, INTEL), 80);
+  assert.equal(intelValueFor('enemySight', 30, INTEL), 100);
+  assert.equal(intelValueFor('enemySight', 31, INTEL), 100);
+  assert.equal(intelValueFor('enemySight', 500, INTEL), 100);
+  assert.equal(intelValueFor('oreSight', 9, INTEL), 64);
+  assert.equal(intelValueFor('oreSight', 45, INTEL), 100);
+  assert.equal(intelValueFor('oreSight', 44, INTEL), 99);
+  // the cap is the track's own max
+  assert.equal(intelValueFor('oreSight', 45, cfgWith(INTEL, { intel: { tracks: { oreSight: { max: 90 } } } })), 90);
+  assert.equal(intelValueFor('enemySight', 45, cfgWith(INTEL, { intel: { tracks: { oreSight: { max: 90 } } } })), 100, 'other tracks keep theirs');
+  // a base above the max is cut down to it
+  assert.equal(intelValueFor('groupSight', 0, cfgWith(INTEL, { intel: { tracks: { groupSight: { base: 50, max: 40 } } } })), 40);
+  // default config: every track starts at its base and ends at its max
+  for (const [k, t] of Object.entries(CONFIG.intel.tracks)) {
+    assert.equal(intelValueFor(k, 0), Math.min(t.max, t.base));
+    assert.equal(intelValueFor(k, 1000), t.max);
+  }
+  // a stepped list (three points per step), pinned here: 10, 10, 10, 8, 8, 8, 6, 6, 6, then 4 for every later point
+  const stepped = cfgWith({ intel: { tracks: { oreSight: { base: 0, gains: [10, 10, 10, 8, 8, 8, 6, 6, 6, 4], max: 100 } } } });
+  assert.deepEqual([0, 1, 3, 4, 6, 7, 9, 10, 11].map((n) => intelValueFor('oreSight', n, stepped)), [0, 10, 30, 38, 54, 60, 72, 76, 80]);
+  assert.equal(intelValueFor('oreSight', 1000, stepped), 100);
+});
+
+test('intelValue reads the points spent on the track from the game', () => {
+  const s = game(1);
+  assert.equal(intelValue(s, 'enemySight', INTEL), 25);
+  s.intel.spent.enemySight = 2;
+  assert.equal(intelValue(s, 'enemySight', INTEL), 44);
+  delete s.intel.spent.enemySight;
+  assert.equal(intelValue(s, 'enemySight', INTEL), 25, 'a track with no entry counts as nothing spent');
+});
+
+test('trackValueText writes a value in the track\'s unit: % for a chance, sight, +N for a count', () => {
+  assert.equal(trackValueText('enemySight', 25), '25%');
+  assert.equal(trackValueText('groupSight', 30), '30%');
+  assert.equal(trackValueText('oreSight', 20), '20 sight');
+  assert.equal(trackValueText('oreSight', 0), '0 sight');
+  assert.equal(trackValueText('simDepth', 3), '+3');
+  assert.equal(trackValueText('simDepth', 0), '+0');
+  const odd = cfgWith({ intel: { tracks: { enemySight: { unit: 'sight' } } } });
+  assert.equal(trackValueText('enemySight', 7, odd), '7 sight', 'the unit comes from the config');
+});
+
+test('spendIntel uses a point, raises the track, says the new value in the track\'s unit, and stops at the maximum', () => {
   const s = game(1);
   assert.equal(spendIntel(s, 'enemySight', INTEL).ok, false, 'no points');
   assert.equal(spendIntel(s, 'bogus', INTEL).ok, false, 'unknown track');
-  s.intel.points = 3;
+  s.intel.points = 5;
   assert.equal(nextIntelGain(s, 'enemySight', INTEL), 10);
   const r = spendIntel(s, 'enemySight', INTEL);
   assert.equal(r.ok, true);
-  assert.match(r.msg, /35%/);
-  assert.equal(s.intel.points, 2);
+  assert.equal(r.msg, 'Enemy scouting is now 35%.');
+  assert.equal(s.intel.points, 4);
   assert.equal(s.intel.spent.enemySight, 1);
-  assert.equal(intelChance(s, 'enemySight', INTEL), 35);
+  assert.equal(intelValue(s, 'enemySight', INTEL), 35);
   assert.equal(nextIntelGain(s, 'enemySight', INTEL), 9);
   assert.equal(nextIntelGain(s, 'ringTypeSight', INTEL), 10, 'tracks are independent');
-  // at the cap
+  // messages per unit
+  assert.equal(spendIntel(s, 'oreSight', INTEL).msg, 'Ore sight is now 20 sight.');
+  assert.equal(spendIntel(s, 'simDepth', INTEL).msg, 'Battle simulation is now +10.');
+  assert.equal(spendIntel(s, 'groupSight', INTEL).msg, 'Banner scouting is now 30%.');
+  assert.equal(s.intel.points, 1);
+  // at the max
   s.intel.spent.ringGradeSight = 30;
-  assert.equal(intelChance(s, 'ringGradeSight', INTEL), 100);
+  assert.equal(intelValue(s, 'ringGradeSight', INTEL), 100);
   assert.equal(nextIntelGain(s, 'ringGradeSight', INTEL), 0);
   const capped = spendIntel(s, 'ringGradeSight', INTEL);
   assert.equal(capped.ok, false);
   assert.match(capped.msg, /maximum/);
-  assert.equal(s.intel.points, 2, 'point not consumed at the cap');
-  // the last point before the cap only adds what is left
+  assert.equal(s.intel.points, 1, 'point not consumed at the max');
+  // the last point before the max only adds what is left
   s.intel.spent.ringTypeSight = 29; // 99%
   assert.equal(nextIntelGain(s, 'ringTypeSight', INTEL), 1);
+});
+
+test('spendIntel refuses at the default config\'s max too (Battle simulation: +1 per point up to its max)', () => {
+  const t = CONFIG.intel.tracks.simDepth;
+  const s = game(1);
+  s.intel.points = t.max + 3;
+  for (let i = 1; i <= t.max; i++) {
+    assert.equal(spendIntel(s, 'simDepth').ok, true, `point ${i}`);
+    assert.equal(intelValue(s, 'simDepth'), Math.min(t.max, t.base + i * t.gains[0]));
+  }
+  const r = spendIntel(s, 'simDepth');
+  assert.equal(r.ok, false);
+  assert.match(r.msg, /maximum/);
+  assert.equal(s.intel.points, 3);
+});
+
+test('canSpendIntel: a point and a track that can still gain', () => {
+  const s = game(1);
+  assert.equal(canSpendIntel(s), false, 'no points');
+  s.intel.points = 1;
+  assert.equal(canSpendIntel(s), true);
+  // every track maxed: nothing to spend a point on
+  for (const k of TRACKS) s.intel.spent[k] = 1000;
+  assert.equal(canSpendIntel(s), false);
+  // one track below its max is enough
+  s.intel.spent.groupSight = 0;
+  assert.equal(canSpendIntel(s), true);
+  s.intel.points = 0;
+  assert.equal(canSpendIntel(s), false);
 });

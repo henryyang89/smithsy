@@ -1,14 +1,17 @@
-// Map tab: the 5x5 world map, the 8x8 field grid with its actions, the field's pile, the bag and the
-// "choose what to carry" step when you leave a field.
+// Map tab: the 7x7 world map, the 9x9 field grid (9 plots of 3x3) with its actions, the field's pile, the bag and
+// the "choose what to carry" step when you leave a field.
 // All game-state changes go through core functions inside ctx.act(). UI-only state lives in ctx.ui under
 // the map_ prefix: map_sel (selected cell per field), map_new (pile items just found: { fkey, start, end }),
 // map_leave (open carry step: { from, to, bag: [bag idx], pile: [pile idx] }), map_legend (legend open).
 import { h, section, bar, clear } from './dom.js';
 import {
   travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes,
-  searchEfficiency, searchEfficiencyRange, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
+  searchEfficiency, searchEfficiencyRange, expectedSearches, searchesText, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
   fieldProgress, areaCells, atCamp, currentField, mapCell, itemKind, itemType, key, timeLeft, sameLoc,
+  distanceRow, sightValue, sightRange, sightShare, seenItems,
 } from '../core/map.js';
+import { intelValue } from '../core/intel.js';
+import { smithRingTotals } from '../core/rings.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, round1, clamp } from '../core/util.js';
 import { ORES, GEMS } from '../config.js';
@@ -21,6 +24,7 @@ const rarity = (t) => {
   const i = RARITY.indexOf(t);
   return i < 0 ? RARITY.length : i;
 };
+const rarestSeen = (items) => items.reduce((a, b) => (rarity(b.t) < rarity(a.t) ? b : a));
 
 // ------------------------------------------------------------- formatting ----
 const dur = (m) => (Number.isFinite(m) ? formatDuration(Math.max(0, m)) : 'no path');
@@ -44,12 +48,11 @@ function searchTimeText(state, cfg, minutes, fresh) {
 }
 
 // Search depth per search: each cell rolls its own amount in [lo, hi] around the average.
-// Returns { eff, lo, hi, range: '30–40%', avg: '35%', finish: '3–4' (searches to finish a cell) }.
+// Returns { eff, lo, hi, range: '25–35%', avg: '30%', finish: '4' (about how many searches finish a cell) }.
 function searchDepth(state, cfg) {
   const eff = searchEfficiency(state, cfg);
   const [lo, hi] = searchEfficiencyRange(state, cfg);
-  const toFinish = (e) => (e > 0 ? String(Math.ceil(100 / e - 1e-9)) : '?');
-  const finish = toFinish(hi) === toFinish(lo) ? toFinish(hi) : `${toFinish(hi)}–${toFinish(lo)}`;
+  const finish = searchesText(expectedSearches(state, cfg));
   return {
     eff, lo, hi,
     range: hi - lo > EPS ? `${round1(lo)}–${round1(hi)}%` : `${round1(eff)}%`,
@@ -82,6 +85,57 @@ function itemName(t) {
 function itemTag(t) {
   const type = itemType(t);
   return h('span', { class: `mv-item mv-${itemKind(t)} mv-t-${type}`, title: itemName(t) }, ABBR[type] || type.slice(0, 2));
+}
+
+// ------------------------------------------------------------------ sight ----
+// Sight = Ore sight intel + worn Ore sight rings. Every item in the ground has a sight threshold; you see it
+// (in the field you stand in) once your sight reaches it. The threshold ranges come from config (field.sight).
+const sightKeys = (cfg) => Object.keys(cfg.field.sight); // copper, iron, coal, gem, mythril
+const sightLabel = (k) => (k === 'gem' ? 'gems' : k);
+const sightProbe = (k) => (k === 'gem' ? 'gem:ruby' : `ore:${k}`); // any item of that kind
+
+function sightParts(state, cfg) {
+  const intel = intelValue(state, 'oreSight', cfg);
+  const rings = smithRingTotals(state, cfg).reveal || 0;
+  return { total: sightValue(state, cfg), intel, rings };
+}
+
+// "copper 1-40, iron 11-60, coal 21-70, gems 21-80, mythril 41-100"
+function sightRangesText(cfg) {
+  return sightKeys(cfg).map((k) => {
+    const [lo, hi] = sightRange(sightProbe(k), cfg);
+    return `${sightLabel(k)} ${lo + 1}-${hi}`;
+  }).join(', ');
+}
+
+// "a, b and c" / "a, b or c"
+const listText = (items, word) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} ${word} ${items[items.length - 1]}`);
+
+// "With sight 50 you see all the copper, about 80% of the iron, 40% of the coal and no mythril."
+function sightShareText(sight, cfg) {
+  const all = [];
+  const some = [];
+  const none = [];
+  for (const k of sightKeys(cfg)) {
+    const share = sightShare(sightProbe(k), sight, cfg);
+    if (share <= 0) none.push(sightLabel(k));
+    else if (share >= 1) all.push(sightLabel(k));
+    else some.push(`${Math.min(99, Math.max(1, Math.round(share * 100)))}% of the ${sightLabel(k)}`);
+  }
+  const parts = [];
+  if (all.length) parts.push(`all the ${listText(all, 'and')}`);
+  some.forEach((t, i) => parts.push(i === 0 ? `about ${t}` : t));
+  if (!parts.length) return `With sight ${round1(sight)} you see nothing yet.`;
+  return `With sight ${round1(sight)} you see ${parts.join(', ')}${none.length ? ` and no ${listText(none, 'or')}` : ''}.`;
+}
+
+function sightTip(state, cfg) {
+  const sp = sightParts(state, cfg);
+  return `Sight ${round1(sp.total)} = Ore sight intel ${round1(sp.intel)} + rings ${round1(sp.rings)}. Every item in the ground has a sight threshold; you see it once your sight reaches it: ${sightRangesText(cfg)}. ${sightShareText(sp.total, cfg)}`;
+}
+
+function sightChip(state, cfg) {
+  return h('span', { class: 'chip mv-sight', title: sightTip(state, cfg) }, `Sight ${round1(sightValue(state, cfg))}`);
 }
 
 // [{ t, idxs: [indexes into list] }], rarest type first.
@@ -233,10 +287,12 @@ function renderCamp(wrap, ctx) {
   const { state } = ctx;
   wrap.append(h('div', { class: 'mv-two' },
     section('World map', worldMap(ctx, false),
-      h('p', { class: 'muted mv-note' }, 'Click a field to walk there. Each tile shows its distance from camp, how much of it you have searched, and the walk from here. A blue badge = items waiting in that field\'s pile.')),
+      h('p', { class: 'muted mv-note' }, 'Click a field to walk there. Each tile shows how much of that field you have searched and the walk from here (on a wider screen also its distance from camp). A blue badge = items waiting in that field\'s pile.')),
     section('Where to search?', campHint(ctx))));
   if (state.bag.length) wrap.append(bagPanel(ctx));
-  wrap.append(section('What the fields hold, by distance from camp', oddsTable(ctx)));
+  wrap.append(h('details', { class: 'panel mv-odds-box' },
+    h('summary', {}, 'What the fields hold, by distance'),
+    oddsTable(ctx)));
   wrap.append(legend(ctx));
 }
 
@@ -339,12 +395,14 @@ function campHint(ctx) {
     return state.time + there + back <= cfg.time.dayEndMin + EPS;
   }).length;
   const left = timeLeft(state, cfg);
-  const regrow = f.regrowPctPerDay || 0;
   const st = state.storage;
   const stored = [...ORES.map((o) => [`ore:${o}`, st.ore[o] || 0]), ...GEMS.map((g) => [`gem:${g}`, st.gem[g] || 0])].filter(([, v]) => v > 0);
   const piles = fieldPiles(state);
   const pileTotal = piles.reduce((a, p) => a + p.n, 0);
-  const boulders = f.boulders || 0;
+  const boulderCounts = f.byDistance.map((r) => r.boulders);
+  const bMin = Math.min(...boulderCounts);
+  const bMax = Math.max(...boulderCounts);
+  const sp = sightParts(state, cfg);
   return h('div', {},
     h('p', {}, 'Pick a field to search. ', h('b', {}, 'Farther fields are richer'), ' (more cells hold items, rarer ores) but the walk takes longer and eats into your day.'),
     h('div', { class: 'mv-kv' },
@@ -354,19 +412,16 @@ function campHint(ctx) {
         const sd = searchDepth(state, cfg);
         const fresh = f.freshCellMin > 0 ? `, plus ${dur(freshCost(state, cfg))} for each never-searched (fresh) cell in it` : '';
         return sd.random
-          ? `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so ${sd.finish} searches finish a cell`
-          : `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.avg} deeper into every cell, so ${sd.finish} searches finish a cell`;
+          ? `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so about ${sd.finish} searches finish a cell`
+          : `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.avg} deeper into every cell, so about ${sd.finish} searches finish a cell`;
       })()),
-      h('span', { class: 'muted' }, 'Debris'), h('span', {}, `about ${f.debrisChance}% of cells, ${f.debrisAmount.min}-${f.debrisAmount.max} thick (number on the cell). Searching clears it first: ${pw.range} per cell per search${pw.skillPct > EPS ? ` (Debris clearing skill +${round1(pw.skillPct)}%)` : ''}; leftover effort searches the cell.${boulders ? ` ${plural(boulders, 'boulder')} per field can never be searched.` : ''}`),
+      h('span', { class: 'muted' }, 'Sight'), h('span', { title: sightTip(state, cfg) }, `${round1(sp.total)} (Ore sight intel ${round1(sp.intel)} + rings ${round1(sp.rings)}). In a field you see the items still in the ground whose sight threshold is within your sight${sp.total <= EPS ? '; right now that is nothing' : ''}.`),
+      h('span', { class: 'muted' }, 'Debris'), h('span', {}, `about ${f.debrisChance}% of cells, ${f.debrisAmount.min}-${f.debrisAmount.max} thick (number on the cell). Searching clears it first: ${pw.range} per cell per search${pw.skillPct > EPS ? ` (Debris clearing skill +${round1(pw.skillPct)}%)` : ''}; leftover effort searches the cell. Boulders (${bMin === bMax ? bMin : `${bMin}-${bMax}, more far away`} per field) can never be searched.`),
       h('span', { class: 'muted' }, 'Carrying'), h('span', {}, `Found items go to that field's pile (no limit). When you leave a field you choose up to ${cfg.bag.slots} to carry; the rest waits in the pile.`),
       h('span', { class: 'muted' }, 'Field piles'), piles.length
         ? h('span', {}, `${plural(pileTotal, 'item')} in ${plural(piles.length, 'field')}: `, piles.map((p, i) => [i ? ' · ' : '', h('b', {}, `(${p.c.x + 1},${p.c.y + 1})`), ` ${p.n}`]))
         : h('span', { class: 'muted' }, 'none: nothing left behind in the fields'),
-      h('span', { class: 'muted' }, 'Ore sight'), h('span', {}, `${round1(b.revealPct)}% chance per searched cell to reveal everything still in it`),
-      h('span', { class: 'muted' }, 'Reachable'), h('span', { class: reachable ? '' : 'warn' }, `${reachable} of ${fields.length} fields are close enough to go to and be back by ${clock(cfg.time.dayEndMin)}`),
-      h('span', { class: 'muted' }, 'Regrowth'), regrow > 0
-        ? h('span', {}, `searched cells have a ${round1(regrow)}% chance each night to turn fresh and unsearched, with new hidden items`)
-        : h('span', {}, 'none: fields do not regrow, a searched cell stays searched')),
+      h('span', { class: 'muted' }, 'Reachable'), h('span', { class: reachable ? '' : 'warn' }, `${reachable} of ${fields.length} fields are close enough to go to and be back by ${clock(cfg.time.dayEndMin)}`)),
     h('p', { class: 'muted mv-note' }, `You may only head out or search if there is still time to walk back by ${clock(cfg.time.dayEndMin)} with a full load (your bag plus the field's pile, up to ${cfg.bag.slots} items). The walk home itself is always allowed. Arriving at camp unloads what you carry into storage.`),
     h('div', { class: 'mv-stored' }, h('span', { class: 'muted' }, 'In storage: '),
       stored.length ? stored.map(([t, v]) => h('span', { class: 'chip' }, itemTag(t), ` ${v}`)) : h('span', { class: 'muted' }, 'no raw ore or gems yet')));
@@ -379,6 +434,8 @@ function normalize(weights) {
   return out;
 }
 
+// One row per distance on this map: how many fields, the walk, and what a field at that distance holds
+// (all read from field.byDistance through distanceRow). Ore and gem columns are % of the items found there.
 function oddsTable(ctx) {
   const { state, cfg } = ctx;
   const f = cfg.field;
@@ -388,74 +445,93 @@ function oddsTable(ctx) {
   const avgCount = countW.reduce((a, [k, w]) => a + Number(k) * w, 0) / countW.reduce((a, [, w]) => a + w, 0);
   const counts = countW.filter(([, w]) => w > 0).map(([k]) => Number(k));
   const countRange = counts.length ? (Math.min(...counts) === Math.max(...counts) ? String(counts[0]) : `${Math.min(...counts)}-${Math.max(...counts)}`) : '0';
-  const cellsPerField = Math.max(0, f.size * f.size - (f.boulders || 0)); // boulders hold nothing
   const pctCell = (v) => (v > 0 ? `${Math.round(v)}%` : '-');
   const rows = dists.map((d) => {
     const at = fields.filter((c) => c.dist === d);
-    const loot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (d - 1));
-    const lootDebris = Math.min(100, loot + f.debrisLootBonus);
-    const expItems = cellsPerField * (((100 - f.debrisChance) * loot + f.debrisChance * lootDebris) / 10000) * avgCount;
-    const oreW = normalize(f.oreWeights[Math.max(0, Math.min(d, f.oreWeights.length) - 1)]);
-    const gemW = normalize(f.gemWeights[Math.max(0, Math.min(d, f.gemWeights.length) - 1)]);
+    const row = distanceRow(d, cfg);
+    const lootDebris = Math.min(100, row.loot + f.debrisLootBonus);
+    const cellsPerField = Math.max(0, f.size * f.size - row.boulders); // boulders hold nothing
+    const expItems = cellsPerField * (((100 - f.debrisChance) * row.loot + f.debrisChance * lootDebris) / 10000) * avgCount;
+    const oreW = normalize(row.ores);
     const out = travelMinutes(state, state.map.camp, at[0], 0, cfg);
     const back = travelMinutes(state, at[0], state.map.camp, 0, cfg);
-    const avgSearched = at.reduce((a, c) => a + fieldProgress(state.map.fields[key(c.x, c.y)]), 0) / at.length;
     return h('tr', {},
       h('td', { class: 'num' }, h('b', {}, String(d))),
       h('td', { class: 'num' }, String(at.length)),
       h('td', { class: 'num' }, `${dur(out)} / ${dur(back)}`),
-      h('td', { class: 'num' }, `${loot}%`, h('span', { class: 'muted' }, ` (${lootDebris}%)`)),
+      h('td', { class: 'num' }, `${row.loot}%`, h('span', { class: 'muted' }, ` (${lootDebris}%)`)),
+      h('td', { class: 'num' }, String(row.boulders)),
       h('td', { class: 'num' }, `~${Math.round(expItems)}`),
-      h('td', { class: 'num' }, pctText(avgSearched)),
-      ...ORES.map((o) => h('td', { class: 'num mv-sep-l' }, pctCell(oreW[o]))),
-      ...GEMS.map((g) => h('td', { class: 'num' }, pctCell(gemW[g]))));
+      ...ORES.map((o, i) => h('td', { class: `num${i === 0 ? ' mv-sep-l' : ''}` }, pctCell(((100 - row.gemShare) * (oreW[o] || 0)) / 100))),
+      h('td', { class: 'num mv-sep-l' }, pctCell(row.gemShare)));
   });
   const th = (label, attrs = {}) => h('th', { class: 'num', ...attrs }, label);
-  const headTop = h('tr', {},
-    th('Distance', { rowspan: 2, title: 'Steps from camp, walking around blocked cells' }),
-    th('Fields', { rowspan: 2, title: 'Number of fields at this distance on your map' }),
-    th('Walk out / back', { rowspan: 2, title: 'Walking time from camp and back, carrying nothing' }),
-    th('Cells with items', { rowspan: 2, title: `Chance each cell holds items (in brackets: under debris, +${f.debrisLootBonus} points)` }),
-    th('Items / field', { rowspan: 2, title: `Expected items in a whole ${f.size}x${f.size} field (${countRange} per loot cell, about ${round1(avgCount)} on average)` }),
-    th('Searched', { rowspan: 2, title: 'Average % searched of your fields at this distance' }),
-    h('th', { colspan: ORES.length, class: 'mv-group mv-sep-l' }, `Ores (${f.oreShare}% of items)`),
-    h('th', { colspan: GEMS.length, class: 'mv-group' }, `Gems (${100 - f.oreShare}% of items)`));
-  const headSub = h('tr', {},
-    ...ORES.map((o) => h('th', { class: 'num mv-sep-l', title: `${cap(o)} ore` }, itemTag(`ore:${o}`))),
-    ...GEMS.map((g) => h('th', { class: 'num', title: `Raw ${g}` }, itemTag(`gem:${g}`))));
-  const gemsEqual = f.gemWeights.every((w) => new Set(GEMS.map((g) => w[g] || 0)).size === 1);
+  const head = h('tr', {},
+    th('Distance', { title: 'Steps from camp, walking around blocked cells' }),
+    th('Fields', { title: 'Number of fields at this distance on your map' }),
+    th('Walk out / back', { title: 'Walking time from camp and back, carrying nothing' }),
+    th('Cells with items', { title: `Chance each cell holds items (in brackets: under debris, +${f.debrisLootBonus} points)` }),
+    th('Boulders', { title: 'Boulder cells in each field at this distance: they can never be searched and hold nothing' }),
+    th('Items / field', { title: `Expected items in a whole ${f.size}x${f.size} field (${countRange} per loot cell, about ${round1(avgCount)} on average)` }),
+    ...ORES.map((o, i) => h('th', { class: `num${i === 0 ? ' mv-sep-l' : ''}`, title: `${cap(o)} ore: % of the items found at this distance` }, itemTag(`ore:${o}`))),
+    h('th', { class: 'num mv-sep-l', title: 'Raw gems (every gem type equally likely): % of the items found at this distance' }, 'Gems'));
+  const last = f.byDistance.length;
   return h('div', {},
-    h('div', { class: 'mv-scroll' }, h('table', { class: 'mv-odds' }, h('thead', {}, headTop, headSub), h('tbody', {}, rows))),
-    h('p', { class: 'muted mv-note' }, `Ore and gem columns: chance that an item found at that distance is that type.${gemsEqual ? ' Every gem type is equally likely, at every distance.' : ''} Fields farther than ${f.oreWeights.length} steps use the last row of ore odds. Debris covers about ${f.debrisChance}% of cells (${f.debrisAmount.min}-${f.debrisAmount.max} thick)${f.boulders ? ` and each field has ${plural(f.boulders, 'boulder')}` : ''}.`));
+    h('div', { class: 'mv-scroll' }, h('table', { class: 'mv-odds' }, h('thead', {}, head), h('tbody', {}, rows))),
+    h('p', { class: 'muted mv-note' }, `Ore and gem columns: % of the items found at that distance (ore columns are ores, the last column is gems; every gem type is equally likely). Fields farther than ${last} steps use the distance-${last} row. Debris covers about ${f.debrisChance}% of cells (${f.debrisAmount.min}-${f.debrisAmount.max} thick).`));
 }
 
 // ---------------------------------------------------------------- field ----
+// The field grid. A field whose size is a multiple of 3 is drawn as plots of 3x3 cells (a wider gap between plots,
+// a narrow one inside): the plot centres are the cells (1,1), (4,1), ... so 9 searches cover a 9x9 field exactly
+// once. Any cell may still be a search centre.
+function fieldGrid(ctx, field, fkey, sel, sight) {
+  const n = ctx.cfg.field.size;
+  const area = new Set(areaCells(sel % n, Math.floor(sel / n), ctx.cfg));
+  const cellAt = (i) => fieldCell(ctx, fkey, field.cells[i], i, i === sel, area.has(i), sight);
+  if (n % 3 !== 0) {
+    const grid = h('div', { class: 'grid mv-field mv-fieldgrid', style: { gridTemplateColumns: `repeat(${n}, 1fr)` } });
+    field.cells.forEach((_, i) => grid.append(cellAt(i)));
+    return grid;
+  }
+  const plots = n / 3;
+  const grid = h('div', { class: 'grid mv-field mv-fieldgrid mv-plots', style: { gridTemplateColumns: `repeat(${plots}, 1fr)` } });
+  for (let py = 0; py < plots; py++) {
+    for (let px = 0; px < plots; px++) {
+      const plot = h('div', { class: 'mv-plot', 'data-plot': `${px},${py}` });
+      for (let y = py * 3; y < py * 3 + 3; y++) for (let x = px * 3; x < px * 3 + 3; x++) plot.append(cellAt(y * n + x));
+      grid.append(plot);
+    }
+  }
+  return grid;
+}
+
 function fieldPanel(ctx, field, fkey, sel) {
   const { state, cfg } = ctx;
   const f = cfg.field;
   const n = f.size;
-  const area = new Set(areaCells(sel % n, Math.floor(sel / n), cfg));
-  const grid = h('div', { class: 'grid mv-field mv-fieldgrid', style: { gridTemplateColumns: `repeat(${n}, 1fr)` } });
-  field.cells.forEach((cell, i) => grid.append(fieldCell(ctx, fkey, cell, i, i === sel, area.has(i))));
+  const sight = sightValue(state, cfg);
+  const grid = fieldGrid(ctx, field, fkey, sel, sight);
   const prog = fieldProgress(field);
   const debrisLeft = field.cells.filter(hasDebris).length;
   const boulders = field.cells.filter((c) => c.boulder).length;
   const done = field.cells.filter(isDone).length;
-  const revealed = field.cells.filter((c) => c.revealed && !c.boulder).length;
+  const seenN = field.cells.reduce((a, c) => a + seenItems(c, sight).length, 0);
   const freshTotal = field.cells.filter(cellFresh).length;
   const pileN = pileOf(field).length;
   const d = field.dist;
-  const loot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (d - 1));
+  const row = distanceRow(d, cfg);
   return section(`Field (${state.location.x + 1},${state.location.y + 1}) · distance ${d} from camp`,
     h('div', { class: 'row mv-prog' }, bar(prog), h('b', {}, `${pctText(prog)} searched`)),
     h('div', { class: 'muted mv-stats' },
-      `${plural(done, 'cell')} fully searched · ${debrisLeft} under debris · ${plural(boulders, 'boulder')} · ${revealed} revealed${f.freshCellMin > 0 ? ` · ${freshTotal} fresh (never searched)` : ''} · ${plural(pileN, 'item')} in the pile`),
+      `${plural(done, 'cell')} done · ${debrisLeft} under debris · ${plural(boulders, 'boulder')} · ${plural(seenN, 'item')} seen${f.freshCellMin > 0 ? ` · ${freshTotal} fresh` : ''} · ${pileN} in the pile `,
+      sightChip(state, cfg)),
     grid,
     h('p', { class: 'muted mv-note' },
-      `Click a cell to centre the 3x3 search area on it (selected: ${cellLabel(sel, n)}). At distance ${d}, about ${loot}% of cells hold items (${Math.min(100, loot + f.debrisLootBonus)}% under debris). Contents stay hidden until found or revealed by ore sight. Numbers on brown striped cells are the debris left to clear. Boulders (dark rocks) can never be searched.${f.freshCellMin > 0 ? ` A small dot marks a fresh cell, one nothing has worked on yet: each fresh cell in the 3x3 area adds ${f.freshCellMin}m to that search, so thoroughly finishing an area is cheaper than skipping around.` : ''}`));
+      `Click a cell to centre the 3x3 search area on it (selected: ${cellLabel(sel, n)}); the nine plots of 3x3 cells cover the field exactly once. At distance ${d}, about ${row.loot}% of cells hold items (${Math.min(100, row.loot + f.debrisLootBonus)}% under debris). You see the items still in the ground whose sight threshold is within your sight (a tag on the cell, also under debris); everything else stays hidden until found. Numbers on brown striped cells are the debris left to clear (a seen item's tag sits above the number). Boulders (dark rocks) can never be searched.${f.freshCellMin > 0 ? ` A small dot marks a fresh cell, one nothing has worked on yet: each fresh cell in the 3x3 area adds ${f.freshCellMin}m to that search, so thoroughly finishing an area is cheaper than skipping around.` : ''}`));
 }
 
-function fieldCell(ctx, fkey, cell, i, selected, inArea) {
+function fieldCell(ctx, fkey, cell, i, selected, inArea, sight) {
   const n = ctx.cfg.field.size;
   const select = () => {
     setSel(ctx, fkey, i);
@@ -480,15 +556,19 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
   if (debris) cls.push('debris');
   if (done) cls.push('mv-done');
   if (partial) cls.push('mv-partial');
-  if (cell.revealed && !done) cls.push('mv-revealed');
+  const seen = done ? [] : seenItems(cell, sight);
+  if (seen.length) cls.push('mv-seen');
   const fresh = cellFresh(cell);
   if (fresh && ctx.cfg.field.freshCellMin > 0) cls.push('mv-fresh');
   if (selected) cls.push('sel');
   if (inArea) cls.push('area');
 
+  // Sight sees through debris: a debris cell with seen items shows the item tag over a small debris number.
+  const seenTag = seen.length ? h('span', { class: 'mv-seentag' }, itemTag(rarestSeen(seen).t), seen.length > 1 ? h('span', { class: 'mv-more' }, `+${seen.length - 1}`) : null) : null;
   let content;
-  if (debris) content = h('span', { class: 'mv-debris-n' }, dn(cell.debris));
-  else if (cell.revealed && !done) content = cell.items.length ? cell.items.map((it) => itemTag(it.t)) : h('span', { class: 'mv-empty' }, 'empty');
+  if (debris && seenTag) content = [seenTag, h('span', { class: 'mv-debris-n mv-debris-sm' }, dn(cell.debris))];
+  else if (debris) content = h('span', { class: 'mv-debris-n' }, dn(cell.debris));
+  else if (seenTag) content = seenTag;
   else if (done) content = h('span', { class: 'mv-done-l' }, 'done');
   else if (partial) content = h('span', { class: 'mv-pct' }, pctText(cell.searched));
   else content = null;
@@ -496,14 +576,14 @@ function fieldCell(ctx, fkey, cell, i, selected, inArea) {
   const title = [
     `Cell ${cellLabel(i, n)}: ${pctText(cell.searched)} searched`,
     debris ? `Debris: ${dn(cell.debris)} left. Searching clears debris first; leftover effort searches the cell.` : null,
-    cell.revealed && !done ? `Revealed: ${cell.items.length ? cell.items.map((it) => itemName(it.t)).join(', ') : 'nothing left'}` : null,
+    seen.length ? `Seen (sight ${round1(sight)}): ${groupByType(seen.map((it) => it.t)).map((g) => `${itemName(g.t)}${g.idxs.length > 1 ? ` x${g.idxs.length}` : ''}`).join(', ')}. Items above your sight stay hidden until found.` : null,
     done ? 'Fully searched: nothing hidden left.' : null,
     fresh && ctx.cfg.field.freshCellMin > 0 ? `Fresh: never searched. A search that includes it takes ${ctx.cfg.field.freshCellMin}m longer, once.` : null,
   ].filter(Boolean).join('\n');
 
   return h('div', { class: cls.join(' '), title, 'data-idx': i, onclick: select },
     partial ? h('div', { class: 'fill', style: { height: `${cell.searched}%` } }) : null,
-    h('span', { class: 'mv-cc' }, content));
+    h('span', { class: debris && seenTag ? 'mv-cc mv-cc-stack' : 'mv-cc' }, content));
 }
 
 function actionsPanel(ctx, field, sel) {
@@ -552,7 +632,7 @@ function actionsPanel(ctx, field, sel) {
   const bonusBits = [];
   if (b.searchTimePct > EPS) bonusBits.push(`time -${round1(Math.min(b.searchTimePct, cfg.processing.maxTimeReduction))}% (also on the fresh-cell time)`);
   if (sd.eff > cfg.field.searchEfficiency + EPS) bonusBits.push(`depth ${cfg.field.searchEfficiency}% avg +${round1(b.searchEffPct)}% = ${sd.avg} avg`);
-  const sExtra = `Debris clearing power: effort ${sd.range.replace('%', '')} × ${round1(pw.mult * 100) / 100} (Debris clearing skill +${round1(pw.skillPct)}%) = ${pw.range} debris per cell per search. Ore sight: ${round1(b.revealPct)}% chance per searched cell to reveal everything still in it.${bonusBits.length ? ` Bonuses: ${bonusBits.join(', ')}.` : ''}`;
+  const sExtra = `Debris clearing power: effort ${sd.range.replace('%', '')} × ${round1(pw.mult * 100) / 100} (Debris clearing skill +${round1(pw.skillPct)}%) = ${pw.range} debris per cell per search. Sight ${round1(sightValue(state, cfg))}: you see the items in this area whose sight threshold is within it.${bonusBits.length ? ` Bonuses: ${bonusBits.join(', ')}.` : ''}`;
 
   // Return to camp (opens the carry step when the pile has items)
   const camp = state.map.camp;
@@ -604,14 +684,15 @@ function cellPanel(ctx, field, sel) {
         h('span', { class: 'muted' }, '3x3 area'), h('span', {}, areaText)));
   }
   const pw = clearPower(state, cfg);
+  const sight = sightValue(state, cfg);
+  const seen = done ? [] : seenItems(cell, sight);
   let contents;
-  if (cell.revealed && !done) {
-    contents = cell.items.length
-      ? h('span', { class: 'chips' }, cell.items.map((it) => h('span', { class: 'chip' }, itemTag(it.t), ` ${itemName(it.t)}`)))
-      : h('span', {}, 'Revealed: nothing left in this cell.');
-  } else if (hasDebris(cell)) contents = h('span', { class: 'muted' }, 'Hidden under debris (debris cells are a bit richer).');
-  else if (done) contents = h('span', {}, 'Fully searched: nothing hidden left.');
-  else contents = h('span', { class: 'muted' }, 'Hidden. Search deeper, or hope ore sight reveals it.');
+  if (done) contents = h('span', {}, 'Fully searched: nothing hidden left.');
+  else if (seen.length) {
+    contents = h('span', {},
+      h('span', { class: 'chips' }, seen.map((it) => h('span', { class: 'chip' }, itemTag(it.t), ` ${itemName(it.t)}`))),
+      h('span', { class: 'muted' }, ` Seen at sight ${round1(sight)}; more may be hidden.`));
+  } else contents = h('span', { class: 'muted' }, `Nothing seen (sight ${round1(sight)}).${hasDebris(cell) ? ' Under debris (debris cells are a bit richer).' : ''}`);
   const searchesToClear = pw.avg > EPS ? Math.ceil(cell.debris / pw.avg - 1e-9) : Infinity;
   return section(`Selected cell ${cellLabel(sel, n)}`,
     h('div', { class: 'mv-kv' },
@@ -825,7 +906,7 @@ function legend(ctx) {
   h('div', { class: 'mv-leg-title muted' }, 'World map'),
   h('div', { class: 'mv-legend mv-world' },
     item(swatch('field', [h('span', { class: 'mv-wm-d' }, 'dist 2'), h('span', { class: 'mv-wm-p' }, '35%'), h('span', { class: 'mv-wm-t' }, '40m')], { big: true, wm: true, fill: 35 }),
-      'Field: distance from camp, % searched (also shown as the fill), travel time from where you are now'),
+      'Field: % searched (also shown as the fill), travel time from where you are now, and on a wider screen the distance from camp'),
     item(swatch('field', h('span', { class: 'mv-wm-p' }, '60%'), { big: true, wm: true, fill: 60, badge: '7' }), 'Blue badge: items left in that field\'s pile'),
     item(swatch('field here', h('span', { class: 'mv-wm-t' }, 'here'), { big: true, wm: true }), 'You are here'),
     item(swatch('field mv-far', h('span', { class: 'mv-wm-t' }, '2h'), { big: true, wm: true }), `Faded: not enough time to go there and get back by ${clock(cfg.time.dayEndMin)}`),
@@ -836,11 +917,10 @@ function legend(ctx) {
     item(swatch('', ''), 'Not searched yet'),
     cfg.field.freshCellMin > 0 ? item(swatch('mv-fresh', ''), `Small dot = fresh: no search has worked on this cell yet. A search that includes it takes ${cfg.field.freshCellMin}m longer (once per cell), so finish an area before moving on.`) : null,
     item(swatch('mv-partial', h('span', { class: 'mv-pct' }, `${Math.round(cfg.field.searchEfficiency)}%`), { fill: cfg.field.searchEfficiency }), 'Partly searched: the fill rises with % searched'),
-    item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), (cfg.field.regrowPctPerDay || 0) > 0 ? 'Fully searched: nothing hidden left (until it regrows overnight)' : 'Fully searched: nothing hidden left'),
+    item(swatch('mv-done', h('span', { class: 'mv-done-l' }, 'done')), 'Fully searched: nothing hidden left'),
     item(swatch('debris', h('span', { class: 'mv-debris-n' }, String(Math.round((da.min + da.max) / 2)))), `Debris (brown stripes): the number is the debris left (${da.min}-${da.max} at first). Searching clears it first, then searches with the leftover effort. A bit richer.`),
     item(swatch('mv-boulder', null, { rock: true }), 'Boulder: can never be cleared or searched, holds nothing'),
-    item(swatch('mv-revealed', [itemTag('ore:iron'), itemTag('gem:ruby')]), 'Revealed by ore sight: what is still in the cell'),
-    item(swatch('mv-revealed', h('span', { class: 'mv-empty' }, 'empty')), 'Revealed and empty'),
+    item(swatch('mv-seen', [itemTag('ore:iron'), h('span', { class: 'mv-more' }, '+1')]), 'Seen item: your sight reaches it (the rarest seen item, +N for more; under debris the tag sits above the debris number). Hover the cell for the list'),
     item(h('div', { class: 'mv-sw-pair' }, swatch('area', ''), swatch('sel area', '')), 'Selected cell (orange border) and its 3x3 search area (tinted)')),
   h('div', { class: 'mv-leg-title muted' }, 'Items (square = ore, round = gem)'),
   h('div', { class: 'chips' },

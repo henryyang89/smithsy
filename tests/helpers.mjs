@@ -52,15 +52,16 @@ export function game(seed = 12345, cfg = CONFIG) {
 
 export const approx = (actual, expected, eps = 1e-9) => Math.abs(actual - expected) <= eps;
 
-// A field cell with given items: [{ t, d }]. debris = remaining thickness (0 = clear).
+// A field cell with given items: [{ t, d, s? }] (d = depth, s = sight threshold, 0 = seen at any sight).
+// debris = remaining thickness (0 = clear).
 export function cell(items = [], extra = {}) {
-  return { debris: 0, boulder: false, searched: 0, items: items.map((i) => ({ ...i })), revealed: false, touched: false, ...extra };
+  return { debris: 0, boulder: false, searched: 0, items: items.map((i) => ({ s: 0, ...i })), touched: false, ...extra };
 }
 
 // A boulder cell (never searched or cleared).
 export const boulder = () => cell([], { boulder: true });
 
-// Empty 8x8 field (no items, no debris, no boulders, empty pile).
+// Empty field of cfg.field.size squared (no items, no debris, no boulders, empty pile).
 export function blankField(dist = 1, cfg = CONFIG) {
   const n = cfg.field.size;
   return { dist, cells: Array.from({ length: n * n }, () => cell()), pile: [] };
@@ -86,7 +87,7 @@ export function standInBlankField(state, dist = 1, cfg = CONFIG) {
   return f;
 }
 
-// Hand-built 5x5 map with the given blocked cells (camp at center).
+// Hand-built map (cfg.map.size squared) with the given blocked cells (camp at center).
 export function customMap(blocked = [], cfg = CONFIG, seed = 7) {
   const size = cfg.map.size;
   const c = Math.floor(size / 2);

@@ -46,6 +46,15 @@ export function pathSteps(map, from, to) {
 }
 
 // ------------------------------------------------------------- generation ----
+// The contents row for a field at distance `dist` from camp (row 1 = distance 1). Fields farther than the
+// last row use the last row.
+export function distanceRow(dist, cfg = CONFIG) {
+  const rows = cfg.field.byDistance;
+  return rows[clamp(dist, 1, rows.length) - 1];
+}
+
+// A map is re-rolled when a field is unreachable or rocks make it more than cfg.map.maxDetour steps farther
+// than the straight walk (|dx| + |dy|). Up to 500 attempts.
 export function generateMap(rng, cfg = CONFIG) {
   const size = cfg.map.size;
   const c = Math.floor(size / 2);
@@ -60,7 +69,8 @@ export function generateMap(rng, cfg = CONFIG) {
     for (const cell of cells) {
       if (cell.type !== 'field') continue;
       cell.dist = pathSteps(map, camp, cell);
-      if (!Number.isFinite(cell.dist)) ok = false;
+      const straight = Math.abs(cell.x - camp.x) + Math.abs(cell.y - camp.y);
+      if (!Number.isFinite(cell.dist) || cell.dist - straight > cfg.map.maxDetour) ok = false;
     }
     if (!ok) continue;
     for (const cell of cells) if (cell.type === 'field') map.fields[key(cell.x, cell.y)] = generateField(rng, cell.dist, cfg);
@@ -69,54 +79,73 @@ export function generateMap(rng, cfg = CONFIG) {
   throw new Error('Could not generate a connected map');
 }
 
+// The sight range [lo, hi] an item type rolls its threshold in (every gem type shares one range).
+export function sightRange(t, cfg = CONFIG) {
+  return cfg.field.sight[itemKind(t) === 'gem' ? 'gem' : itemType(t)];
+}
+
+// An item's sight threshold: a whole number from lo + 1 up to hi.
+export function rollSight(rng, t, cfg = CONFIG) {
+  const [lo, hi] = sightRange(t, cfg);
+  return rng.int(lo + 1, hi);
+}
+
 // Roll one fresh cell for a field at distance `dist` from camp.
 // debris = remaining debris thickness in search effort (0 = clear).
+// Each item: t = type, d = depth (found once "searched %" passes it, one decimal), s = sight threshold.
 export function rollCell(rng, dist, cfg = CONFIG) {
   const f = cfg.field;
-  const oreW = f.oreWeights[Math.max(0, Math.min(dist, f.oreWeights.length) - 1)];
-  const gemW = f.gemWeights[Math.max(0, Math.min(dist, f.gemWeights.length) - 1)];
-  const baseLoot = Math.min(f.lootChance.max, f.lootChance.base + f.lootChance.perDistance * (dist - 1));
+  const row = distanceRow(dist, cfg);
   const hasDebris = rng.chance(f.debrisChance);
   const debris = hasDebris ? rng.int(f.debrisAmount.min, f.debrisAmount.max) : 0;
   const items = [];
-  if (rng.chance(baseLoot + (hasDebris ? f.debrisLootBonus : 0))) {
+  if (rng.chance(row.loot + (hasDebris ? f.debrisLootBonus : 0))) {
     const n = Number(rng.weighted(f.itemCountWeights));
     for (let k = 0; k < n; k++) {
-      const t = rng.chance(f.oreShare) ? `ore:${rng.weighted(oreW)}` : `gem:${rng.weighted(gemW)}`;
-      items.push({ t, d: rng.float(0, 100) }); // d = depth: found once "searched %" passes it
+      const t = rng.chance(row.gemShare) ? `gem:${rng.weighted(f.gemWeights)}` : `ore:${rng.weighted(row.ores)}`;
+      const d = round1(rng.float(0, 100));
+      items.push({ t, d, s: rollSight(rng, t, cfg) });
     }
   }
-  return { debris, boulder: false, searched: 0, items, revealed: false, touched: false };
+  return { debris, boulder: false, searched: 0, items, touched: false };
 }
 
 // A cell covered by a boulder: can never be cleared or searched.
 export function boulderCell() {
-  return { debris: 0, boulder: true, searched: 0, items: [], revealed: false };
+  return { debris: 0, boulder: true, searched: 0, items: [], touched: false };
 }
 
+// A field: size x size cells, then exactly the distance row's number of random cells become boulders.
 export function generateField(rng, dist, cfg = CONFIG) {
   const n = cfg.field.size * cfg.field.size;
   const cells = [];
   for (let i = 0; i < n; i++) cells.push(rollCell(rng, dist, cfg));
   const spots = rng.shuffle([...Array(n).keys()]);
-  for (let b = 0; b < Math.min(cfg.field.boulders || 0, n); b++) cells[spots[b]] = boulderCell();
+  const boulders = Math.min(distanceRow(dist, cfg).boulders || 0, n);
+  for (let b = 0; b < boulders; b++) cells[spots[b]] = boulderCell();
   return { dist, cells, pile: [] };
 }
 
-// Nightly regrowth: each searched cell has regrowPctPerDay % chance to become a fresh cell.
-// Boulders never change; the field's pile stays. Returns the number of regrown cells.
-export function regrowFields(state, rng, cfg = CONFIG) {
-  const pct = cfg.field.regrowPctPerDay || 0;
-  if (pct <= 0) return 0;
-  let n = 0;
-  for (const field of Object.values(state.map.fields)) {
-    field.cells.forEach((cell, i) => {
-      if (cell.boulder || cell.searched <= 0 || !rng.chance(pct)) return;
-      field.cells[i] = rollCell(rng, field.dist, cfg);
-      n++;
-    });
-  }
-  return n;
+// ------------------------------------------------------------------ sight ----
+// Sight = Ore sight intel + worn Ore sight rings (smithBonuses().sight). Every item in the ground has a sight
+// threshold `s`; in the field you stand in, you see an item once your sight reaches it. Sight sees through debris.
+// Nothing is stored: seen items are worked out from the cell and your current sight.
+export function sightValue(state, cfg = CONFIG) {
+  return smithBonuses(state, cfg).sight;
+}
+
+export const isSeen = (item, sight) => item.s <= sight + EPS;
+
+// The items of `cell` you can see at this sight.
+export function seenItems(cell, sight) {
+  return cell.items.filter((it) => isSeen(it, sight));
+}
+
+// The share (0..1) of items of type `t` ('ore:iron', 'gem:ruby') that a sight of `sight` sees: thresholds are
+// spread evenly over lo + 1 .. hi, and sight counts as a whole number.
+export function sightShare(t, sight, cfg = CONFIG) {
+  const [lo, hi] = sightRange(t, cfg);
+  return clamp((Math.floor(sight + EPS) - lo) / (hi - lo), 0, 1);
 }
 
 // % of the field searched, over the cells that can be searched (boulders excluded).
@@ -130,9 +159,8 @@ export function fieldProgress(field) {
 export const cellOpen = (c) => !c.boulder && (c.debris > EPS || c.searched < 100 - EPS);
 
 // A "fresh" cell has never been worked on: no search has cleared debris from it or searched it
-// (`touched` is set by the first search that works on it; older saves have no flag, so any cell
-// with searched > 0 counts as touched). Searching fresh cells costs extra time (field.freshCellMin).
-export const cellFresh = (c) => cellOpen(c) && !c.touched && c.searched === 0;
+// (`touched` is set by the first search that works on it). Searching fresh cells costs extra time (field.freshCellMin).
+export const cellFresh = (c) => cellOpen(c) && !c.touched;
 
 // Cells covered by a 3x3 search centered at (cx, cy), clipped to the field.
 export function areaCells(cx, cy, cfg = CONFIG) {
@@ -177,6 +205,47 @@ export function searchMinutes(state, cfg = CONFIG, cx, cy) {
 // Average % of each cell searched per search (base x bonuses). Each cell rolls +/- searchRandomness.
 export function searchEfficiency(state, cfg = CONFIG) {
   return cfg.field.searchEfficiency * (1 + smithBonuses(state, cfg).searchEffPct / 100);
+}
+
+// Expected number of searches that finish a clear cell: each search adds `efficiency +/- randomness` % to
+// the cell (uniform), so this is 1 + the sum over k of P(the first k searches add up to less than 100%).
+// Exact (Irwin-Hall); about 4 at the base 30 +/- 5, about 3.4 with +12% search efficiency.
+export function expectedSearches(state, cfg = CONFIG) {
+  const [lo, hi] = searchEfficiencyRange(state, cfg);
+  return searchesToFinish(lo, hi);
+}
+
+// The same for a given per-search range [lo, hi] (% of a cell), with no player bonuses: what Help shows.
+export function searchesToFinish(lo, hi) {
+  if (hi <= EPS) return Infinity;
+  if (hi - lo <= EPS) return Math.ceil(100 / hi - 1e-9);
+  const width = hi - lo;
+  let total = 1; // the first search always happens
+  for (let k = 1; k < 1000; k++) {
+    const x = (100 - k * lo) / width; // sum of k uniforms on [lo, hi] < 100  <=>  Irwin-Hall(k) < x
+    if (x <= 0) break;
+    if (x >= k) {
+      total += 1;
+      continue;
+    }
+    let cdf = 0;
+    let binom = 1;
+    let fact = 1;
+    for (let i = 2; i <= k; i++) fact *= i;
+    for (let j = 0; j <= Math.floor(x); j++) {
+      cdf += ((j % 2 ? -1 : 1) * binom * (x - j) ** k) / fact;
+      binom = (binom * (k - j)) / (j + 1);
+    }
+    total += cdf;
+  }
+  return total;
+}
+
+// A search count for display: "4" (within 0.15 of a whole number), otherwise one decimal ("3.4"), "?" when
+// no number of searches can finish a cell.
+export function searchesText(searches) {
+  if (!Number.isFinite(searches)) return '?';
+  return String(Math.abs(searches - Math.round(searches)) < 0.15 ? Math.round(searches) : round1(searches));
 }
 
 // [min, max] % a single cell can get from one search.
@@ -274,11 +343,9 @@ export function search(state, cx, cy, cfg = CONFIG) {
   if (!open.length) return { ok: false, msg: 'Nothing left to search here (fully searched or boulders).' };
   const eff = searchEfficiency(state, cfg);
   const clearMult = debrisClearMult(state, cfg);
-  const revealPct = smithBonuses(state, cfg).revealPct;
   const r = cfg.field.searchRandomness || 0;
   const rng = rngFor(state);
   const found = [];
-  let revealed = 0;
   let debrisCleared = 0;
   let cellsCleared = 0;
   let searchedCells = 0;
@@ -310,11 +377,6 @@ export function search(state, cx, cy, cfg = CONFIG) {
     }
     cell.items = keep;
     cell.searched = full ? 100 : s1;
-    // ore sight only rolls on cells that still have something to reveal (not just finished)
-    if (!full && !cell.revealed && rng.chance(revealPct)) {
-      cell.revealed = true;
-      revealed++;
-    }
   }
   state.time += minutes;
   const notes = [];
@@ -324,9 +386,8 @@ export function search(state, cx, cy, cfg = CONFIG) {
   const skipped = idxs.length - open.length;
   let msg = `Searched ${open.length} cells (${round1(minutes)}m): found ${found.length} item(s), now in this field's pile.`;
   if (debrisCleared > 0) msg += ` Cleared ${round1(debrisCleared)} debris${cellsCleared ? ` (${cellsCleared} cell(s) now clear)` : ''}.`;
-  if (revealed) msg += ` Ore sight revealed ${revealed} cell(s).`;
   if (skipped) msg += ` ${skipped} cell(s) skipped (done or boulder).`;
-  return { ok: true, msg, notes, found, revealed, debrisCleared, cellsCleared, searchedCells, minutes, freshCells };
+  return { ok: true, msg, notes, found, debrisCleared, cellsCleared, searchedCells, minutes, freshCells };
 }
 
 // ------------------------------------------------------------ carrying ----

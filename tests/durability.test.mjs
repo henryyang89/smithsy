@@ -1,13 +1,12 @@
-// v1.2: durability loss per fight (a roll x the enemy tier's multiplier x the Gear care skill, kept to one
-// decimal so every Gear care level counts) and the Gear care skill (XP from fights the adventurer survives),
-// incl. saves from v1.1 that lack the skill.
+// Durability loss per fight (a roll x the enemy tier's multiplier x the Gear care skill, kept to one
+// decimal so every Gear care level counts) and the Gear care skill (XP from fights the adventurer survives).
 //
 // Tunable numbers are never hardcoded: expectations are derived from CONFIG, or the numbers a
 // hand-computed expectation depends on are pinned with cfgWith.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG } from '../js/config.js';
-import { endDay, confirmPlan, acknowledgeReport, serialize, deserialize, addMissingKeys, SAVE_VERSION } from '../js/core/game.js';
+import { endDay, confirmPlan, acknowledgeReport, serialize, deserialize } from '../js/core/game.js';
 import { wearLoss, wornDurability, repairInfo, repairPlan, repair } from '../js/core/gear.js';
 import { skillDefs, xpToNext } from '../js/core/skills.js';
 import { smithBonuses } from '../js/core/bonuses.js';
@@ -348,79 +347,14 @@ test('Gear care XP: levels follow the XP curve; a level gained in a fight applie
   assert.ok(s.log.some((l) => /Gear care is now level 2/.test(l.text)), 'level-ups reach the log');
 });
 
-// ------------------------------------------------------------ v1.1 saves ----
-test('a v1.1 save (no Gear care skill, no Battle simulation intel entry) loads with both added at zero', () => {
-  const s = game(7);
-  s.skills.searchTime = { xp: 40, level: 3 };
-  s.intel.points = 2;
-  s.intel.spent.enemySight = 4;
-  const v11 = JSON.parse(serialize(s));
-  v11.version = 2;
-  delete v11.skills.gearCare;
-  delete v11.intel.spent.simDepth;
-  const back = deserialize(JSON.stringify(v11));
-  assert.equal(back.version, SAVE_VERSION, 'a version-2 save is converted to the current version');
-  assert.deepEqual(back.skills.gearCare, { xp: 0, level: 0 });
-  assert.equal(back.intel.spent.simDepth, 0);
-  assert.deepEqual(back.skills.searchTime, { xp: 40, level: 3 }, 'existing skills are kept');
-  assert.equal(back.intel.spent.enemySight, 4);
-  assert.deepEqual(back, s, 'equal to the game it came from');
-  // it plays on: the next survived fight trains the new skill
-  const set = fullSet(back, 'mythril', 'S');
-  endDay(back, WIN);
-  confirmPlan(back, plan(tierIndex(back, 'normal'), set.map((g) => g.id)), WIN);
-  const rep = endDay(back, WIN).report;
-  assert.equal(rep.win, true);
-  assert.equal(totalXp(back, 'gearCare'), CONFIG.skills.gearCareXpPerFight);
-});
-
-test('a v1.1 save with whole-number durability keeps it, and the next fight wears it with a decimal', () => {
-  const s = game(8);
-  const set = fullSet(s, 'mythril', 'S');
-  set[0].durability = 73;
-  const v11 = JSON.parse(serialize(s));
-  v11.version = 2;
-  const back = deserialize(JSON.stringify(v11));
-  assert.equal(back.gear[0].durability, 73);
-  setSkillLevel(back, 'gearCare', 4);
-  endDay(back, WIN);
-  confirmPlan(back, plan(tierIndex(back, 'normal'), back.gear.map((g) => g.id)), WIN);
-  const rep = endDay(back, WIN).report;
-  const w = rep.wear.find((x) => x.id === set[0].id);
-  assert.equal(w.left, oneDecimal(73 - w.loss));
-  assert.equal(back.gear.find((g) => g.id === set[0].id).durability, w.left);
-});
-
-test('loading keeps Gear care progress that exists, and adds any skill the config defines that the save lacks', () => {
+// ------------------------------------------------------------------ saves ----
+test('Gear care progress and decimal durability survive a save and load', () => {
   const s = game(3);
   s.skills.gearCare = { xp: 33, level: 2 };
+  const set = fullSet(s, 'mythril', 'S');
+  set[0].durability = 73.4;
   const back = deserialize(serialize(s));
   assert.deepEqual(back.skills.gearCare, { xp: 33, level: 2 });
-  // a config with one more activity skill: the missing key is added by deserialize / addMissingKeys
-  const cfg = cfgWith({ skills: { activity: { newSkill: { name: 'New', perLevel: 1, desc: '% x', xpFrom: 'y' } } } });
-  const loaded = deserialize(serialize(s), cfg);
-  assert.deepEqual(loaded.skills.newSkill, { xp: 0, level: 0 });
-  assert.deepEqual(loaded.skills.gearCare, { xp: 33, level: 2 });
-  assert.equal(skillDefs(cfg).length, skillDefs().length + 1);
-  // addMissingKeys works on a bare object, adds intel tracks, and tolerates parts that are not there
-  const bare = addMissingKeys({ skills: {}, intel: { points: 0 } });
-  assert.deepEqual(Object.keys(bare.skills).sort(), skillDefs().map((d) => d.key).sort());
-  for (const k of Object.keys(CONFIG.intel.tracks)) assert.equal(bare.intel.spent[k], 0, k);
-  assert.deepEqual(addMissingKeys({ version: 2 }), { version: 2 });
-});
-
-test('a v1.0 save migrates and also gets the Gear care skill', () => {
-  const s = game(5);
-  const v1 = structuredClone(s);
-  v1.version = 1;
-  delete v1.skills.gearCare;
-  delete v1.intel.spent.simDepth;
-  for (const f of Object.values(v1.map.fields)) {
-    delete f.pile;
-    for (const c of f.cells) { c.debris = c.debris > 0; delete c.boulder; c.ground = []; delete c.touched; }
-  }
-  v1.loadMark = 0;
-  const back = deserialize(JSON.stringify(v1));
-  assert.deepEqual(back.skills.gearCare, { xp: 0, level: 0 });
-  assert.equal(back.intel.spent.simDepth, 0);
+  assert.equal(back.gear[0].durability, 73.4);
+  assert.deepEqual(back, s);
 });

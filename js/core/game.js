@@ -1,8 +1,8 @@
 // Game state, day flow, battle resolution, save/load.
 // UI and tools call these functions; each action returns { ok, msg, ... }.
 import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../config.js';
-import { rngFor, seededRng, mixSeed } from './rng.js';
-import { generateMap, atCamp, regrowFields } from './map.js';
+import { rngFor, mixSeed } from './rng.js';
+import { generateMap, atCamp } from './map.js';
 import { newSkills, skillDefs, addXp } from './skills.js';
 import { newIntel } from './intel.js';
 import { smithBonuses } from './bonuses.js';
@@ -12,14 +12,14 @@ import { adventurerCombatant, fight } from './combat.js';
 import { loadouts, bestLoadout } from './sim.js';
 import { gearName, wearLoss, wornDurability } from './gear.js';
 import { formatClock } from './util.js';
+import { VERSION } from '../version.js';
 
-export const SAVE_VERSION = 3; // 3 = v1.2 (decimal durability, Gear care, Battle simulation); 2 = v1.1 (field piles, debris thickness, boulders); 1 = v1.0
 export const MAX_LOG = 300;
 export const MAX_BATTLES = 20;
 
 export function newGame(seed = (Math.random() * 2 ** 32) >>> 0, cfg = CONFIG) {
   const state = {
-    version: SAVE_VERSION,
+    version: VERSION,
     seed,
     rng: { s: seed >>> 0 },
     day: 1,
@@ -134,8 +134,6 @@ export function confirmPlan(state, plan, cfg = CONFIG) {
   state.report = null;
   state.stats.bestDay = Math.max(state.stats.bestDay, state.day);
   state.roster = generateRoster(rngFor(state), state.day + 1, cfg);
-  const regrown = regrowFields(state, rngFor(state), cfg);
-  if (regrown) addLog(state, `Overnight, ${regrown} searched cell(s) across the map regrew.`);
   const packed = state.gear.filter((g) => g.packed).map(gearName);
   addLog(state, `Day ${state.day}. The adventurer heads out to fight ${enemy.name} (${enemy.tier}) with ${packed.length ? packed.join(', ') : 'no gear'}.`);
   return { ok: true };
@@ -226,61 +224,42 @@ export function rosterView(state, cfg = CONFIG) {
 }
 
 // ------------------------------------------------------------- save/load ----
-// Each save format has its own key, so an old cached page can never overwrite a newer save. Older saves
-// are read from the legacy keys (newest first) and migrated step by step: v1 -> v2 -> v3. The legacy keys
-// are left alone, so going back to an older version still finds its own save.
-export const SAVE_KEY = 'smithsy-save-v3';
-export const LEGACY_SAVE_KEYS = ['smithsy-save-v2', 'smithsy-save-v1'];
-export const BEST_KEY = 'smithsy-best-v1';
+// Saves are per version: a save is only loaded by the game version that wrote it (state.version === VERSION).
+// Bumping VERSION starts every player fresh and leaves the older version's save untouched in the browser, so
+// going back to that version still finds it. Other versions' saves are never read, converted or deleted.
+export const saveKeyFor = (v) => `smithsy-save-${v}`;
+export const SAVE_KEY = saveKeyFor(VERSION); // 'smithsy-save-2.0'
+export const BEST_KEY = `smithsy-best-${VERSION}`; // 'smithsy-best-2.0'
+
+// The storage keys of saves written by other versions (only used to word a one-time start-up note; they are
+// never read). Crash backups ('smithsy-save-backup-<time>') are not saves of another version.
+export function oldSaveKeys(keys, current = SAVE_KEY) {
+  return [...keys].filter((k) => /^smithsy-save-/.test(k) && k !== current && !k.startsWith('smithsy-save-backup-'));
+}
 
 export function serialize(state) {
   return JSON.stringify(state);
 }
 
+// Reads a save of THIS version only. Throws for anything else (another version, junk, a save whose shape
+// does not match the config).
 export function deserialize(text, cfg = CONFIG) {
   const s = JSON.parse(text);
-  if (!s || typeof s.version !== 'number') throw new Error('Incompatible save');
-  if (s.version === 1) migrateV1(s, cfg); // -> 2
-  if (s.version === 2) migrateV2(s, cfg); // -> 3
-  if (s.version !== SAVE_VERSION) throw new Error('Incompatible save');
-  addMissingKeys(s, cfg);
+  if (!s || typeof s !== 'object' || s.version !== VERSION) throw new Error('Incompatible save');
+  assertShape(s, cfg);
   return s;
 }
 
-// Saves from an older version lack skills / intel tracks added since (v1.2: Gear care, Battle simulation).
-export function addMissingKeys(s, cfg = CONFIG) {
-  if (s.skills) for (const d of skillDefs(cfg)) if (!s.skills[d.key]) s.skills[d.key] = { xp: 0, level: 0 };
-  if (s.intel) {
-    if (!s.intel.spent) s.intel.spent = {};
-    for (const k of Object.keys(cfg.intel.tracks)) if (typeof s.intel.spent[k] !== 'number') s.intel.spent[k] = 0;
-  }
-  return s;
-}
-
-// v1.0 saves: per-cell ground items -> the field's pile; debris true/false -> thickness; no boulders.
-// Result is a version-2 save (deserialize carries on to version 3).
-export function migrateV1(s, cfg = CONFIG) {
-  const mid = Math.round((cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2);
-  for (const f of Object.values(s.map.fields)) {
-    f.pile = f.pile || [];
-    for (const c of f.cells) {
-      if (Array.isArray(c.ground)) f.pile.push(...c.ground);
-      delete c.ground;
-      c.debris = c.debris === true ? mid : typeof c.debris === 'number' ? c.debris : 0;
-      c.boulder = !!c.boulder;
-    }
-  }
-  delete s.loadMark;
-  s.version = 2;
-  return s;
-}
-
-// v1.1 saves (version 2) -> v1.2 (version 3): adds the Gear care skill and the Battle simulation intel
-// track at zero. Durability already stored as whole numbers stays valid (v1.2 wear has one decimal).
-export function migrateV2(s, cfg = CONFIG) {
-  addMissingKeys(s, cfg);
-  s.version = 3;
-  return s;
+// A same-version save must list exactly the config's skills and intel tracks. Only a developer who changed
+// the config without bumping VERSION can ever trip this: it is a safety net, not a migration.
+function assertShape(s, cfg) {
+  const sameKeys = (obj, want, what) => {
+    if (!obj || typeof obj !== 'object') throw new Error(`Save is missing ${what}`);
+    const have = Object.keys(obj).sort().join(',');
+    if (have !== [...want].sort().join(',')) throw new Error(`Save ${what} do not match the config`);
+  };
+  sameKeys(s.skills, skillDefs(cfg).map((d) => d.key), 'skills');
+  sameKeys(s.intel && s.intel.spent, Object.keys(cfg.intel.tracks), 'intel tracks');
 }
 
 export function packedSlotsSummary(state) {

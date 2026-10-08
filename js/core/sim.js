@@ -2,14 +2,14 @@ import { CONFIG, SLOTS } from '../config.js';
 import { seededRng, mixSeed } from './rng.js';
 import { adventurerCombatant, fight } from './combat.js';
 import { enemyCombatant, sampleLevels } from './enemies.js';
-import { intelChance } from './intel.js';
+import { intelValue } from './intel.js';
 import { smithRingTotals } from './rings.js';
 
 // Size of the win-chance estimate for this game: the base counts from CONFIG.sim plus `extra`, which
 // is the Battle simulation intel track (a count, not a chance) plus the worn Foresight rings (rounded
 // down). Callers pass the result as `opts` to estimateWinChance / estimateWinChanceSync.
 export function simCounts(state, cfg = CONFIG) {
-  const extra = intelChance(state, 'simDepth', cfg) + Math.floor((smithRingTotals(state, cfg).foresight || 0) + 1e-9);
+  const extra = intelValue(state, 'simDepth', cfg) + Math.floor((smithRingTotals(state, cfg).foresight || 0) + 1e-9);
   const b = cfg.sim;
   return { samples: b.samples + extra, evalFights: b.evalFights + extra, fightsPerLoadout: b.fightsPerLoadout + extra, extra };
 }

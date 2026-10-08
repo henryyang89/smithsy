@@ -47,24 +47,31 @@
 }
 
 /* ---------------------------------------------------------- world map ---- */
-.mv-world.grid { max-width: 460px; gap: 4px; }
-.mv-world.mv-compact { max-width: 360px; }
+.mv-world.grid { max-width: 560px; gap: 3px; }
+.mv-world.mv-compact { max-width: 440px; }
 .mv-world .cell { font-size: 11px; line-height: 1.15; }
 .mv-world .cell.field { border-color: var(--border); }
 .mv-world .cell.field:hover, .mv-world .cell.camp:hover { border-color: var(--accent); }
 .mv-root .mv-world .cell.here { border-color: var(--accent-2); }
 .mv-wm { display: flex; flex-direction: column; align-items: center; gap: 1px; }
 .mv-wm-d { font-size: 10px; color: var(--muted); }
-.mv-wm-p { font-size: 15px; font-weight: 700; }
-.mv-wm-t { font-size: 11px; }
-.mv-compact .mv-wm-p { font-size: 13px; }
-.mv-compact .mv-wm-d, .mv-compact .mv-wm-t { font-size: 10px; }
+.mv-wm-p { font-size: 13px; font-weight: 700; }
+.mv-wm-t { font-size: 10px; }
+.mv-compact .mv-wm-p { font-size: 12px; }
+.mv-compact .mv-wm-d, .mv-compact .mv-wm-t { font-size: 9px; }
+@media (max-width: 480px) {
+  .mv-wm-d { display: none; }
+  .mv-world .cell { border-width: 1px; }
+}
 .mv-world .cell.camp .mv-wm-t { color: #fff; }
 .mv-world .cell.mv-far { opacity: 0.5; border-style: dashed; }
 .mv-world .cell.mv-far .mv-wm-t { color: var(--err); font-weight: 600; }
 
 /* ------------------------------------------------------------- field ---- */
 .mv-field.grid { max-width: 520px; gap: 3px; }
+/* a 9x9 field is 3x3 plots of 3x3 cells: a wider gap between plots (8px), a narrow one inside (2px) */
+.mv-field.mv-plots { gap: 8px; }
+.mv-plot { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 2px; border-radius: 6px; background: rgba(128, 128, 128, 0.14); }
 .mv-field .cell { font-size: 10px; border-color: transparent; }
 .mv-root .mv-field .cell.mv-done { background: var(--mv-done); color: var(--mv-done-text); }
 .mv-root .mv-field .cell.debris,
@@ -77,6 +84,9 @@
   background: rgba(40, 24, 16, 0.55); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6);
 }
 .mv-sw .mv-debris-n { font-size: 10px; }
+/* debris over a seen item: the item tag on top, a smaller debris number below it */
+.mv-cc-stack { flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 1px; }
+.mv-debris-n.mv-debris-sm { font-size: 10px; padding: 0 3px; }
 /* boulder: dark cell with a grey rock; never searchable */
 .mv-root .grid .cell.mv-boulder { background: #26231f; border-color: transparent; }
 .mv-root .mv-field .cell.mv-boulder.sel { border-color: var(--accent); }
@@ -92,7 +102,17 @@
 .mv-debris-l { font-weight: 700; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6); }
 .mv-empty { color: var(--muted); font-style: italic; }
 .mv-done .mv-empty { color: var(--mv-done-text); }
-.mv-root .mv-field .cell.mv-revealed { outline: 1px dashed var(--accent-2); outline-offset: -4px; }
+.mv-root .mv-field .cell.mv-seen { outline: 1px dashed var(--accent-2); outline-offset: -4px; }
+.mv-root .mv-field .cell.debris.mv-seen { outline-color: #fff; }
+.mv-seentag { display: inline-flex; align-items: center; gap: 1px; }
+.mv-more { font-size: 9px; font-weight: 700; color: var(--muted); align-self: center; }
+.mv-root .cell.debris .mv-more { color: #fff; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.7); }
+/* the fresh dot sits behind a tag it overlaps instead of covering it */
+.mv-root .grid .cell.debris.mv-seen.mv-fresh::before { z-index: 0; }
+@media (max-width: 480px) {
+  .mv-field .mv-item { min-width: 16px; padding: 0 1px; }
+  .mv-field .mv-item.mv-gem { padding: 0 2px; }
+}
 
 /* ------------------------------------------------------------- items ---- */
 .mv-item {
@@ -165,6 +185,9 @@
 
 /* -------------------------------------------------------- odds table ---- */
 .mv-odds { font-size: 12px; }
+details.mv-odds-box > summary { cursor: pointer; font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+details.mv-odds-box:not([open]) > summary { margin-bottom: 0; }
+.mv-sight { margin-left: 4px; cursor: help; }
 .mv-odds th, .mv-odds td { padding: 3px 6px; white-space: nowrap; }
 .mv-odds th.mv-group { text-align: center; }
 .mv-odds .mv-sep-l { border-left: 1px solid var(--border); }

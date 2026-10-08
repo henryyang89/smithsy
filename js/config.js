@@ -22,10 +22,11 @@ export const CONFIG = {
 
   // ---------------------------------------------------------------- MAP ----
   map: {
-    size: 5, // 5x5 world map, camp in the center
-    blockedCells: 4, // impassable map cells (never the camp; all fields stay reachable)
-    travelMinPerStep: 20, // minutes per map step (up/down/left/right)
-    loadPenaltyPerItem: 1, // +1% travel time per item in the bag
+    size: 7, // 7x7 world map, camp in the center
+    blockedCells: 8, // impassable map cells (never the camp; every field stays reachable)
+    maxDetour: 2, // a map is re-rolled if rocks make any field more than 2 steps farther than the straight walk
+    travelMinPerStep: 15, // minutes per map step (up/down/left/right)
+    loadPenaltyPerItem: 2, // +2% travel time per carried item
   },
 
   // Items you find go to the field's pile (no limit). When you leave a field you choose what to carry:
@@ -34,35 +35,33 @@ export const CONFIG = {
 
   // -------------------------------------------------------------- FIELD ----
   field: {
-    size: 8, // each map field is an 8x8 grid
-    searchMin: 30, // minutes per 3x3 search
+    size: 9, // each map field is a 9x9 grid = 9 plots of 3x3
+    searchMin: 25, // minutes per 3x3 search
     freshCellMin: 2, // +minutes per never-searched cell in the 3x3 (a cell is "touched" once a search works on it)
-    searchEfficiency: 35, // % of each cell searched per search, before bonuses (about 3 searches finish a cell)
-    searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (35 -> 30..40)
-    debrisChance: 15, // % of cells covered by debris (must be cleared before the cell can be searched)
-    // Debris thickness in search effort (a search gives each cell ~35 effort). Searching a debris cell
+    searchEfficiency: 30, // % of each cell searched per search, before bonuses (about 4 searches finish a cell)
+    searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (30 -> 25..35)
+    debrisChance: 15, // % of cells covered by debris (cleared by searching before the cell can be searched)
+    // Debris thickness in search effort (a search gives each cell ~30). Searching a debris cell
     // clears debris first; leftover effort searches the cell. Thickness is shown on the cell.
     debrisAmount: { min: 20, max: 60 },
-    boulders: 1, // cells per field covered by a boulder: can never be cleared or searched
     debrisLootBonus: 20, // debris cells get +20% (points) chance to hold items
-    // Regrowth: each night, every searched cell has this % chance to reset to a fresh, unsearched cell
-    // with new hidden contents (boulders and the field's pile stay). OFF (0) for now: fields do not regrow.
-    regrowPctPerDay: 0,
-    // Chance a cell holds items, by distance d from camp: base + perDistance*(d-1), capped at max.
-    lootChance: { base: 50, perDistance: 5, max: 80 },
     itemCountWeights: { 1: 30, 2: 40, 3: 30 }, // how many items a loot cell holds (weights)
-    oreShare: 70, // % of items that are ores (the rest are gems)
-    // Ore / gem weights by distance from camp (row 1 = distance 1). Last row is used for farther fields.
-    oreWeights: [
-      { copper: 80, iron: 20, coal: 0, mythril: 0 },
-      { copper: 60, iron: 35, coal: 5, mythril: 0 },
-      { copper: 45, iron: 40, coal: 15, mythril: 0 },
-      { copper: 35, iron: 40, coal: 20, mythril: 5 },
+    // Field contents by distance from camp: row 1 = distance 1 ... row 6 = distance 6; farther fields use the last row.
+    //   loot: % chance a cell holds items · boulders: boulder cells per field (fixed, never rolled; can never be
+    //   searched) · gemShare: % of items that are gems (the rest are ores) · ores: ore weights (relative)
+    byDistance: [
+      { loot: 50, boulders: 2, gemShare: 15, ores: { copper: 80, iron: 20, coal: 0, mythril: 0 } },
+      { loot: 53, boulders: 2, gemShare: 17, ores: { copper: 70, iron: 27, coal: 3, mythril: 0 } },
+      { loot: 56, boulders: 3, gemShare: 19, ores: { copper: 57, iron: 36, coal: 7, mythril: 0 } },
+      { loot: 59, boulders: 3, gemShare: 21, ores: { copper: 48, iron: 39, coal: 13, mythril: 0 } },
+      { loot: 62, boulders: 4, gemShare: 23, ores: { copper: 41, iron: 40, coal: 17, mythril: 2 } },
+      { loot: 65, boulders: 4, gemShare: 25, ores: { copper: 35, iron: 40, coal: 20, mythril: 5 } },
     ],
-    // Every gem type is equally likely at every distance.
-    gemWeights: [
-      { ruby: 20, topaz: 20, sapphire: 20, emerald: 20, diamond: 20 },
-    ],
+    gemWeights: { ruby: 20, topaz: 20, sapphire: 20, emerald: 20, diamond: 20 }, // every gem type equally likely
+    // Sight thresholds: each item rolls a whole number above the first value and up to the second when the field is
+    // made. In the field you stand in, you see an item still in the ground once your sight (Ore sight intel + Ore
+    // sight rings) is at least its threshold. Rarer ores roll higher. `gem` is shared by every gem type.
+    sight: { copper: [0, 40], iron: [10, 60], coal: [20, 70], gem: [20, 80], mythril: [40, 100] },
   },
 
   // --------------------------------------------------------- PROCESSING ----
@@ -224,7 +223,7 @@ export const CONFIG = {
       travelTime: { owner: 'smith', name: 'Travel', values: [5, 6, 7, 8, 10], desc: '% less travel time' },
       searchTime: { owner: 'smith', name: 'Quick search', values: [5, 6, 7, 8, 10], desc: '% less search time' },
       searchEff: { owner: 'smith', name: 'Thorough search', values: [10, 12, 14, 16, 20], desc: '% more searched per search' },
-      reveal: { owner: 'smith', name: 'Ore sight', values: [3, 4, 5, 6, 7], desc: '% (points) chance to see all items in a searched cell' },
+      reveal: { owner: 'smith', name: 'Ore sight', values: [10, 15, 20, 25, 30], desc: 'sight' }, // adds to your sight (see field.sight)
       processTime: { owner: 'smith', name: 'Refining', values: [5, 6, 7, 8, 10], desc: '% less refining and cutting time' },
       oreGrade: { owner: 'smith', name: 'Bar luck', values: [2, 3, 4, 5, 6], desc: '% chance a bar is upgraded one grade' },
       gemGrade: { owner: 'smith', name: 'Gem luck', values: [2, 3, 4, 5, 6], desc: '% chance a gem is upgraded one grade' },
@@ -274,18 +273,20 @@ export const CONFIG = {
   },
 
   // -------------------------------------------------------------- INTEL ----
+  // 1 intel point at the end of every daysPerPoint-th day. A track's value = min(max, base + the gains of the points
+  // spent on it).
+  //   unit: '%' = a chance, 'sight' = sight points (see field.sight), 'count' = extra guesses and test fights.
+  //   gains: what each point adds, in order; the last value repeats. Steps get smaller: diminishing returns.
+  //   max: the track's ceiling.
   intel: {
-    daysPerPoint: 5, // 1 intel point at the end of day 5, 10, 15, ...
-    gainsPerPoint: [10, 9, 8, 7, 6, 5, 4, 3, 2], // 1st point +10, 2nd +9, ... then +1 each
-    minGain: 1,
-    maxChance: 100,
+    daysPerPoint: 5,
     tracks: {
-      oreSight: { name: 'Ore sight', base: 10, desc: 'chance per searched cell to see everything left in it' },
-      enemySight: { name: 'Enemy scouting', base: 10, desc: 'chance to see each enemy attribute' },
-      ringTypeSight: { name: 'Ring type scouting', base: 25, desc: 'chance to see each reward ring type' },
-      ringGradeSight: { name: 'Ring grade scouting', base: 25, desc: 'chance to see each reward ring grade' },
-      // Not a chance: the value is the number of EXTRA guesses and extra test fights per enemy (gainsPerPoint).
-      simDepth: { name: 'Battle simulation', base: 0, desc: 'extra guesses and test fights per enemy in the win-chance estimate' },
+      oreSight: { name: 'Ore sight', unit: 'sight', base: 0, gains: [10, 10, 10, 8, 8, 8, 6, 6, 6, 4], max: 100, desc: 'see more of the items still in the ground' },
+      enemySight: { name: 'Enemy scouting', unit: '%', base: 10, gains: [6, 6, 6, 4, 4, 4, 3, 3, 3, 2], max: 100, desc: 'chance to see each enemy attribute' },
+      ringTypeSight: { name: 'Ring type scouting', unit: '%', base: 25, gains: [8, 8, 8, 6, 6, 6, 4, 4, 4, 2], max: 100, desc: 'chance to see the type of the ring an enemy drops' },
+      ringGradeSight: { name: 'Ring grade scouting', unit: '%', base: 25, gains: [10, 10, 10, 8, 8, 8, 5, 5, 5, 3], max: 100, desc: 'chance to see the grade of the ring an enemy drops' },
+      groupSight: { name: 'Banner scouting', unit: '%', base: 20, gains: [10, 10, 10, 6, 6, 6, 4, 4, 4, 2], max: 100, desc: 'chance to see which banner an enemy marches under' },
+      simDepth: { name: 'Battle simulation', unit: 'count', base: 0, gains: [1], max: 3, desc: 'extra guesses and test fights per enemy in the win estimate' },
     },
   },
 

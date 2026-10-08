@@ -8,9 +8,10 @@ import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../co
 import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, wearLoss } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
-import { gainForPoint } from '../core/intel.js';
+import { trackValueText } from '../core/intel.js';
+import { sightRange, searchesToFinish, searchesText } from '../core/map.js';
 import { simCounts } from '../core/sim.js';
-import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade, isCountTrack } from './skillsview.js';
+import { skillRingMatch, skillRingText, skillVsRingText, commonSkillRingGrade } from './skillsview.js';
 import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 import { VERSION } from '../version.js';
@@ -77,14 +78,9 @@ function ordinal(i) {
   return `${i}${s}`;
 }
 
-// Map distances worth listing: enough rows to show the weight tables and the usual 5x5 detours.
+// Map distances worth listing: the longest straight walk on the map plus the detour a map may need.
 function maxDistance(cfg) {
-  return Math.max(cfg.field.oreWeights.length, cfg.field.gemWeights.length, 2 * Math.floor(cfg.map.size / 2) + 2);
-}
-
-function lootChance(cfg, d) {
-  const l = cfg.field.lootChance;
-  return Math.min(l.max, l.base + l.perDistance * (d - 1));
+  return 2 * Math.floor(cfg.map.size / 2) + cfg.map.maxDetour;
 }
 
 // A collapsible reference section. Open state survives re-renders via ctx.ui.help_open.
@@ -187,9 +183,7 @@ function howToPlay(ctx) {
       h('li', {}, `Skills level up on their own as you work${commonSkillRingGrade(cfg) ? ` (a level-${cfg.skills.maxLevel} skill is as strong as a ${commonSkillRingGrade(cfg)}-grade ring of the same kind)` : ''}. Farther fields are richer but cost more travel time.`),
       h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
       h('li', {}, 'Grades are always listed from lowest to highest, left to right: ', OUTCOMES.map((g, i) => [i ? ' < ' : '', gradeSpan(g)]), ' (Fail is the lowest outcome).'),
-      (cfg.field.regrowPctPerDay || 0) > 0
-        ? h('li', {}, `Searched cells slowly regrow: each night every searched cell has a ${p(cfg.field.regrowPctPerDay)} chance to become fresh and unsearched again.`)
-        : h('li', {}, 'Fields do not regrow: a searched cell stays searched for the rest of the run.')),
+      h('li', {}, 'In a field your sight shows some of the items still in the ground (a tag on the cell). Your sight grows with Ore sight intel and Ore sight rings; on day 1 it is too low to see anything.')),
     h('p', { class: 'mi-note mi-version' }, `Smithsy v${VERSION}. What changed in each version (and how to go back to an older one): `,
       h('a', { href: 'CHANGELOG.md', target: '_blank', rel: 'noopener', class: 'mi-link' }, 'CHANGELOG.md'), '.'));
 }
@@ -234,7 +228,7 @@ function mapSection(cfg) {
   }
   return [
     kv([
-      ['Map', `${m.size} x ${m.size} fields, camp in the center. ${m.blockedCells} cells are blocked (impassable); every field stays reachable.`],
+      ['Map', `${m.size} x ${m.size} map cells, camp in the center. ${m.blockedCells} cells are blocked (impassable); every field stays reachable, and a map is made again when the rocks force a field more than ${m.maxDetour} steps farther than the straight walk.`],
       ['Travel time', formula(`steps x ${m.travelMinPerStep}m x (1 + ${m.loadPenaltyPerItem}% x items in bag)`, 'Steps = shortest path around blocked cells. You can travel field to field.')],
       ['Bag', `${cfg.bag.slots} slots, 1 raw ore or gem per slot. You choose what to carry each time you leave a field. A full bag adds ${p(m.loadPenaltyPerItem * cfg.bag.slots)} travel time. Camp storage is unlimited.`],
       ['Bonuses', `Travel rings reduce every trip; the Return travel skill reduces trips to camp. Total capped at ${p(cfg.processing.maxTimeReduction)}.`],
@@ -253,14 +247,13 @@ function fieldSection(cfg) {
   const rnd = f.searchRandomness || 0;
   const effLo = Math.max(0, f.searchEfficiency - rnd);
   const effHi = Math.min(100, f.searchEfficiency + rnd);
-  const toFinish = (e) => (e > 0 ? String(Math.ceil(100 / e - 1e-9)) : '?');
-  const searchesToFinish = toFinish(effHi) === toFinish(effLo) ? toFinish(effHi) : `${toFinish(effHi)}-${toFinish(effLo)}`;
-  const regrow = f.regrowPctPerDay || 0;
   const da = f.debrisAmount;
+  const finishText = searchesText(searchesToFinish(effLo, effHi)); // base numbers, like the rest of Help (no bonuses)
   const debrisSkill = cfg.skills.activity.debris;
-  const boulders = f.boulders || 0;
-  const searchCells = Math.max(0, cells - boulders); // boulders hold nothing
-  const gemsEqual = f.gemWeights.every((w) => new Set(Object.values(w)).size === 1);
+  const rows = f.byDistance;
+  const last = rows.length;
+  const boulders = rows.map((r) => r.boulders);
+  const boulderText = Math.min(...boulders) === Math.max(...boulders) ? String(boulders[0]) : `${Math.min(...boulders)}-${Math.max(...boulders)} (more far from camp)`;
   // Searches needed to clear `t` debris at base power (each cell rolls effLo..effHi effort).
   const clearSearches = (t) => {
     if (effLo <= 0) return 'many searches';
@@ -268,50 +261,52 @@ function fieldSection(cfg) {
     const b = Math.ceil(t / effLo - 1e-9);
     return `${a === b ? a : `${a}-${b}`} search${b === 1 ? '' : 'es'}`;
   };
-  const lootRows = [];
-  for (let d = 1; d <= maxDistance(cfg); d++) {
-    const base = lootChance(cfg, d);
-    const deb = Math.min(100, base + f.debrisLootBonus);
-    const perCell = ((1 - f.debrisChance / 100) * base + (f.debrisChance / 100) * deb) / 100;
-    const items = searchCells * perCell * avg;
-    lootRows.push([String(d), np(base), np(deb), n(items, 0), n(items * (f.oreShare / 100), 0), n(items * (1 - f.oreShare / 100), 0)]);
-  }
-  const weightTable = (rows, keys) => tbl(['Distance', ...keys.map((k) => ({ v: cap(k), cls: 'num' }))],
-    rows.map((w, i) => {
-      const pc = toPct(w);
-      const label = i === rows.length - 1 ? `${i + 1}+` : String(i + 1);
-      return [label, ...keys.map((k) => (pc[k] > 0 ? np(pc[k], 0) : { v: '·', cls: 'num muted' }))];
+  const lootRows = rows.map((r, i) => {
+    const deb = Math.min(100, r.loot + f.debrisLootBonus);
+    const perCell = ((1 - f.debrisChance / 100) * r.loot + (f.debrisChance / 100) * deb) / 100;
+    const items = Math.max(0, cells - r.boulders) * perCell * avg;
+    return [i === last - 1 ? `${i + 1}+` : String(i + 1), np(r.loot), np(deb), n(r.boulders, 0), n(items, 0), n(items * (1 - r.gemShare / 100), 0), n(items * (r.gemShare / 100), 0)];
+  });
+  const oreKeys = Object.keys(rows[0].ores);
+  const oreTable = tbl(['Distance', ...oreKeys.map((k) => ({ v: cap(k), cls: 'num' })), { v: 'Gems', cls: 'num' }],
+    rows.map((r, i) => {
+      const pc = toPct(r.ores);
+      return [i === last - 1 ? `${i + 1}+` : String(i + 1),
+        ...oreKeys.map((k) => { const v = (pc[k] * (100 - r.gemShare)) / 100; return v > 0 ? np(v, 0) : { v: '·', cls: 'num muted' }; }),
+        np(r.gemShare, 0)];
     }));
-  const oreKeys = Object.keys(f.oreWeights[0]);
-  const gemKeys = Object.keys(f.gemWeights[0]);
+  const sightKeys = Object.keys(f.sight);
+  const sightRows = sightKeys.map((k) => {
+    const [lo, hi] = sightRange(k === 'gem' ? 'gem:ruby' : `ore:${k}`, cfg);
+    return [h('b', {}, k === 'gem' ? 'Every gem' : cap(k)), { v: `${lo + 1}-${hi}`, cls: 'num' }];
+  });
+  const oreSight = cfg.intel.tracks.oreSight;
   return [
     kv([
-      ['Field', `${f.size} x ${f.size} = ${cells} cells. Contents are hidden.`],
+      ['Field', `${f.size} x ${f.size} = ${cells} cells, drawn as ${(f.size / 3) ** 2} plots of 3x3 cells (the centre cell of each plot is a good place to search). Contents are hidden, except what your sight shows.`],
       f.freshCellMin > 0 ? ['Fresh cells', `A cell is fresh until a search works on it (clears some of its debris or searches it). Each fresh cell in the 3x3 area adds ${mins(f.freshCellMin)} to that search, so a search of an all-fresh area takes ${mins(f.searchMin)} + 9 x ${mins(f.freshCellMin)} = ${mins(f.searchMin + f.freshCellMin * 9)}, and finishing an area before moving on keeps searches near ${mins(f.searchMin)}. Search-time reductions (rings, skill) apply to the total. Fresh cells are marked with a small dot on the map; a boulder is never fresh.`] : null,
       ['Search', rnd > 0
-        ? `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} ± ${num(rnd)} "searched" to every cell in the area: each cell rolls its own amount (${p(effLo)}-${p(effHi)}), so ${searchesToFinish} searches finish a cell.`
-        : `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so ${searchesToFinish} searches finish a cell.`],
+        ? `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} ± ${num(rnd)} "searched" to every cell in the area: each cell rolls its own amount (${p(effLo)}-${p(effHi)}), so about ${finishText} searches finish a cell.`
+        : `A 3x3 area takes ${mins(f.searchMin)}${f.freshCellMin > 0 ? ` plus ${mins(f.freshCellMin)} per fresh cell` : ''}. Each search adds ${p(f.searchEfficiency)} "searched" to every cell in the area, so about ${finishText} searches finish a cell.`],
       ['Search efficiency', `${cfg.rings.types.searchEff ? `${cfg.rings.types.searchEff.name} rings` : 'Rings'} and the ${cfg.skills.activity.searchEff ? cfg.skills.activity.searchEff.name : 'search efficiency'} skill raise the average: average = ${p(f.searchEfficiency)} x (1 + bonus %).${rnd > 0 ? ` The ± ${num(rnd)} spread per cell stays the same.` : ''} The Map shows your current range.`],
       ['Hidden depth', 'Each item has a hidden depth from 0 to 100. It is found once the cell\'s searched % passes its depth. A fully searched cell gives up everything.'],
+      ['Sight', `In the field you stand in you see the items still in the ground whose sight threshold is at most your sight (a tag on the cell; nothing else about the ground is shown). Sight = ${oreSight.name} intel (starts at ${num(oreSight.base, 0)}) + ${cfg.rings.types.reveal.name} rings. Sight sees through debris. Each item rolls its threshold when the field is made; rarer items roll higher, so they need more sight:`],
+    ]),
+    tbl(['Item', { v: 'Sight needed', cls: 'num' }], sightRows),
+    kv([
       ['Debris', `${p(f.debrisChance)} of cells, ${num(da.min)}-${num(da.max)} thick (in search effort; the number on the cell is what is left). There is no separate clear action: searching a debris cell spends that cell's effort roll (${p(f.searchEfficiency)} ± ${num(rnd)}) x debris clearing power (1 + ${debrisSkill ? debrisSkill.name : 'debris'} skill %) on the debris first; any effort left over searches the cell in the same search. At base power a ${num(da.min)}-thick cell takes ${clearSearches(da.min)} to clear, a ${num(da.max)}-thick one ${clearSearches(da.max)}. Debris cells are +${f.debrisLootBonus} points more likely to hold items.`],
       debrisSkill ? ['Debris clearing skill', `+${num(debrisSkill.perLevel, 2)}% debris cleared per search per level (+${num(debrisSkill.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). XP: ${debrisSkill.xpFrom}.`] : null,
-      boulders ? ['Boulders', `${boulders} cell${boulders === 1 ? '' : 's'} per field (a dark rock): can never be cleared or searched and hold nothing. They do not count toward a field's searched %.`] : null,
-      ['Ore sight', `Each searched cell has a chance to reveal everything still in it: ${p(cfg.intel.tracks.oreSight.base)} base (intel), plus intel points and Ore sight rings.`],
+      ['Boulders', `${boulderText} cell${boulderText === '1' ? '' : 's'} per field (a dark rock): can never be cleared or searched and hold nothing. They do not count toward a field's searched %.`],
       ['Items per loot cell', `${Object.entries(countPct).map(([k, v]) => `${k} (${p(v, 0)})`).join(', ')}, average ${num(avg, 2)}`],
-      ['Ores vs gems', `${p(f.oreShare, 0)} ores, ${p(100 - f.oreShare, 0)} gems`],
+      ['Ores vs gems', `The share of gems among the items rises with distance, from ${p(rows[0].gemShare, 0)} to ${p(rows[last - 1].gemShare, 0)}; every gem type is equally likely.`],
       ['Field pile', `Everything you find goes to that field's pile (no limit; it stays there for the rest of the run, and the map shows how many items each field's pile holds). In the field you can move single items between your bag and the pile for free.`],
       ['Carrying', `When you leave a field you choose what to carry: up to ${cfg.bag.slots} items from your bag and the pile. Default "Rarest first": keep your bag and fill the free slots with the rarest items (mythril, then diamond, emerald, sapphire, topaz, ruby, coal, iron, copper). The rest stays in the pile.`],
-      ['Regrowth', regrow > 0
-        ? `Each night, every searched cell (even partly searched) has a ${p(regrow)} chance to become a fresh, unsearched cell with new hidden contents rolled for its distance (it may get debris again). The field's pile stays. A fully searched field regrows about ${num((cells * regrow) / 100, 2)} cells per night.`
-        : 'Off: fields do not regrow. A searched cell stays searched for the rest of the run.'],
     ]),
     sub('Richness by distance from camp'),
-    tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
-    h('p', { class: 'mi-note' }, `Cell chance = ${f.lootChance.base}% + ${f.lootChance.perDistance}% per step beyond the first, max ${f.lootChance.max}%. Item estimates = ${searchCells} cells${boulders ? ` (${cells} minus ${boulders} boulder${boulders === 1 ? '' : 's'})` : ''} x average chance (incl. debris) x ${num(avg, 2)} items.`),
-    h('div', { class: 'mi-two' },
-      h('div', {}, sub('Ore mix by distance'), weightTable(f.oreWeights, oreKeys)),
-      h('div', {}, sub('Gem mix by distance'), weightTable(f.gemWeights, gemKeys),
-        gemsEqual ? h('p', { class: 'mi-note' }, 'Every gem type is equally likely, at every distance.') : null)),
+    tbl(['Distance', { v: 'Cell has items', cls: 'num' }, { v: 'Debris cell', cls: 'num' }, { v: 'Boulders', cls: 'num' }, { v: '≈ items / field', cls: 'num' }, { v: '≈ ores', cls: 'num' }, { v: '≈ gems', cls: 'num' }], lootRows),
+    h('p', { class: 'mi-note' }, `Item estimates = the cells that are not boulders x average chance (incl. debris) x ${num(avg, 2)} items. Fields farther than ${last} steps use the distance-${last} row.`),
+    sub('What the items are (% of the items found at that distance)'),
+    oreTable,
   ];
 }
 
@@ -528,7 +523,7 @@ function combatSection(cfg) {
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
-      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. Every estimate shows its margin of error (for example 62% ± 12: the simulation alone could be off by about 12 points, which holds about 9 times in 10 when every attribute is known; attributes you can't see add more uncertainty); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.gainsPerPoint[0]} for the first point, then +${cfg.intel.gainsPerPoint[1]}, ...), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
+      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. Every estimate shows its margin of error (for example 62% ± 12: the simulation alone could be off by about 12 points, which holds about 9 times in 10 when every attribute is known; attributes you can't see add more uncertainty); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -667,19 +662,16 @@ function skillSection(cfg) {
 // ------------------------------------------------------------------- intel ----
 function intelSection(cfg) {
   const ic = cfg.intel;
-  const k = ic.gainsPerPoint.length;
-  const head = ['Point', ...ic.gainsPerPoint.map((_, i) => ({ v: ordinal(i + 1), cls: 'num' })), { v: `${ordinal(k + 1)}+`, cls: 'num' }];
-  const row = ['Gain', ...ic.gainsPerPoint.map((_, i) => ({ v: `+${gainForPoint(i + 1, cfg)}`, cls: 'num' })), { v: `+${gainForPoint(k + 1, cfg)}`, cls: 'num' }];
-  const trackRows = Object.entries(ic.tracks).map(([k, t]) => [h('b', {}, t.name), { v: isCountTrack(k) ? `+${t.base}` : p(t.base, 0), cls: 'num' }, t.desc]);
+  const trackRows = Object.entries(ic.tracks).map(([k, t]) => [h('b', {}, t.name), { v: trackValueText(k, t.base, cfg), cls: 'num' }, { v: trackValueText(k, t.max, cfg), cls: 'num' }, t.desc]);
+  const sd = ic.tracks.simDepth;
   return [
     kv([
       ['Earning', `1 intel point at the end of every ${ordinal(ic.daysPerPoint)} day (day ${ic.daysPerPoint}, ${ic.daysPerPoint * 2}, ${ic.daysPerPoint * 3}, ...).`],
-      ['Spending', `Each point raises one track. Diminishing returns per track (below), max ${p(ic.maxChance, 0)}.`],
-      ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win-chance estimate (base ${cfg.sim.samples} guesses x ${cfg.sim.evalFights} fights). The first point gives +${gainForPoint(1, cfg)}, so ${cfg.sim.samples + gainForPoint(1, cfg)} x ${cfg.sim.evalFights + gainForPoint(1, cfg)}; every extra guess and fight also makes the estimate slower to run.`],
+      ['Spending', 'Each point raises one track. Every track has its own steps, and the steps get smaller as you spend more on the same track. The Skills & Intel tab shows each track\'s current value and what the next point adds.'],
+      ['Ore sight', `Your sight in the fields (see Fields & searching): ${trackValueText('oreSight', ic.tracks.oreSight.base, cfg)} to start with, up to ${trackValueText('oreSight', ic.tracks.oreSight.max, cfg)}. Ore sight rings add to it.`],
+      ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win-chance estimate (base ${cfg.sim.samples} guesses x ${cfg.sim.evalFights} fights). Each point gives +${sd.gains[0]}, up to +${sd.max}; every extra guess and fight also makes the estimate slower to run.`],
     ]),
-    tbl(['Track', { v: 'Base', cls: 'num' }, 'What it does'], trackRows),
-    sub('Gain per point spent on the same track'),
-    tbl(head, [row]),
+    tbl(['Track', { v: 'Starts at', cls: 'num' }, { v: 'Max', cls: 'num' }, 'What it does'], trackRows),
   ];
 }
 

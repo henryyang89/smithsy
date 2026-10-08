@@ -48,9 +48,9 @@ as is. All paths in the game are relative, so it works from the `/smithsy/` sub-
 - Every release is kept on GitHub as a branch named `release/vX.Y` (branches instead of tags, because tags
   can't be pushed from the environment the game is built in), so any version can be looked at, played
   locally or put back.
-- Saves: each version's save format has its own storage key. v1.2 reads v1.1 and v1.0 saves and converts
-  them (see [Save data](#save-data)); v1.2 saves use a new key (`smithsy-save-v3`), so going back to 1.1
-  or 1.0 neither breaks nor overwrites them (but they cannot read a 1.2 save).
+- Saves are per version: a version only loads the save it wrote itself (key `smithsy-save-<version>`, for
+  example `smithsy-save-2.0`). A new version starts a fresh game and leaves the older version's save
+  untouched in the browser, so going back to that version finds it again (see [Save data](#save-data)).
 
 ## Start-up problems (blank page, older Firefox)
 
@@ -74,33 +74,37 @@ press **End day** (it only works at camp).
 
 **Day loop**
 
-1. **Map tab: gather.** The 5x5 world map has your camp in the center and 20 fields around it (4 map
-   cells are blocked). Farther fields are richer (more items and more coal; mythril only in the farthest
-   fields) but take longer to reach. Every gem type is equally likely everywhere. Click a field to travel
-   there. Inside a field (8x8 cells), click a cell and press **Search area** to search the 3x3 area around
-   it. Each search digs about a third into every cell (35% ± 5, rolled separately for each cell, shown as
-   "% searched"), so about three searches finish a cell (sometimes four); hidden ores and gems are found
-   once the search passes their depth. Search efficiency rings and the skill raise the average; the map
-   shows your current range. A search takes 30 minutes **plus 2 minutes for every fresh cell** in its 3x3
-   area (a cell nobody has worked on yet, marked with a small dot; the search panel shows the total), so
-   finish an area before moving on.
+1. **Map tab: gather.** The 7x7 world map has your camp in the center and 40 fields around it (8 map
+   cells are blocked, and a map is made again if the rocks force a long detour). Farther fields are richer
+   (more items, more coal and gems; mythril only in the farthest fields) but take longer to reach. Every
+   gem type is equally likely everywhere. Click a field to travel there. Inside a field (9x9 cells, drawn
+   as 9 plots of 3x3), click a cell and press **Search area** to search the 3x3 area around it. Each search
+   digs about 30% into every cell (30% ± 5, rolled separately for each cell, shown as "% searched"), so
+   about four searches finish a cell; hidden ores and gems are found once the search passes their depth.
+   Search efficiency rings and the skill raise the average; the map shows your current range. A search
+   takes 25 minutes **plus 2 minutes for every fresh cell** in its 3x3 area (a cell nobody has worked on
+   yet, marked with a small dot; the search panel shows the total), so finish an area before moving on.
+   - **Sight.** Every item in the ground has a hidden sight threshold (copper 1-40, iron 11-60, coal
+     21-70, gems 21-80, mythril 41-100). In the field you stand in, you see the items whose threshold is
+     within your sight (a tag on the cell). Sight = Ore sight intel + Ore sight rings; it is 0 on day 1,
+     so at first you see nothing and search blind.
    - **Debris** (brown striped cells, the number is how much is left, 20–60 to start) is cleared by
      searching: a search spends that cell's effort on the debris first, and any leftover effort searches
      the cell in the same search. The Debris clearing skill makes each search clear more.
-   - **Boulders** (one dark rock per field) can never be cleared or searched and hold nothing; they do not
-     count toward a field's searched %.
+   - **Boulders** (dark rocks; 2 per field near camp, up to 4 far away) can never be cleared or searched
+     and hold nothing; they do not count toward a field's searched %.
    - **Field pile.** Everything you find goes to that field's pile (no limit; the world map shows a badge
      with the number of items waiting in each field's pile). In the field you can move single items
      between your bag and the pile for free.
    - **Choose what to carry.** When you leave a field whose pile has items, you tick up to 20 items to
      carry from your bag and the pile ("Rarest first" is the default: keep your bag, then fill the free
      slots with mythril, diamond, emerald, sapphire, topaz, ruby, coal, iron, copper in that order). The
-     rest stays in that field's pile for a later trip. Each carried item adds 1% travel time.
+     rest stays in that field's pile for a later trip. Each carried item adds 2% travel time.
    - A search can only start if you can still walk home by 18:00 with a full load: your bag plus this
      field's pile, up to 20 items (leaving items behind does not buy extra time). Travelling out to a field
      needs time to get there and back by 18:00. The walk home is always allowed. Walking back to camp
      unloads what you carry into storage.
-   - Fields do **not** regrow: a searched cell stays searched, so the map is the whole supply for the run.
+   - A searched cell stays searched, so the map is the whole supply for the run.
 2. **Workshop tab: refine, cut and smith.** At camp, refine ore into bars (copper, iron, steel = iron +
    coal, mythril) and cut gems. Each attempt rolls a grade or fails, listed lowest to highest: Fail, D, C,
    B, A, S. Bars fail 10% of the time. **Gem cutting improves with practice:** each gem starts on a
@@ -162,11 +166,11 @@ css/style.css         shared styles; css/ui-*.css per screen
 js/config.js          EVERY tunable number (the place to rebalance)
 js/version.js         the version number shown in the game (bump it for each release)
 js/main.js            UI shell: top bar (with the work-day bar), tabs, side log, phase screens, save/load
-                      (older-save migration, backups)
+                      (per-version saves, backups)
 js/core/              game logic, no DOM (runs in the browser and in Node)
-  game.js             state, day flow, battle resolution, save format (v1.0 -> v1.1 -> v1.2 migrations)
+  game.js             state, day flow, battle resolution, save format (per version, no migrations)
   map.js              world map, fields, travel, search (clears debris), boulders, field piles and
-                      choosing what to carry, regrowth (off)
+                      choosing what to carry, sight
   processing.js       refining and cutting, grade odds (gem novice -> master tables)
   gear.js             gear stats, smithing, wear (wearLoss), repair (night = free, higher-grade substitutes)
   combat.js           combat stats, hit chance, attack-bar fight simulation with log
@@ -264,11 +268,11 @@ is parsed as JSON; a path that does not exist in `CONFIG` is rejected):
 
 ```sh
 node tools/balance.mjs --section power --set enemies.growthPerDay.hpDamage=4
-node tools/balance.mjs --section bot --set 'field.oreWeights.*.mythril=2'
+node tools/balance.mjs --section bot --set 'field.byDistance.*.ores.mythril=2'
 node tools/balance.mjs --section bot --set 'gear.durabilityLoss={"min":2,"max":4}'
 node tools/balance.mjs --section economy --set 'field.debrisAmount={"min":10,"max":30}'
 node tools/balance.mjs --section bot --seeds 40 --ablate rings,skills
-node tools/balance.mjs --section bot --seeds 40 --set field.regrowPctPerDay=5   # turn regrowth back on
+node tools/balance.mjs --section economy --seeds 30 --set field.searchEfficiency=35   # a deeper search
 ```
 
 Each section ends with a one-line `ECONOMY SUMMARY`, `POWER SUMMARY`, `BOT SUMMARY`, `SPECIALS SUMMARY`,
@@ -278,17 +282,15 @@ current results"); the version-to-version difficulty table is in `docs/BENCHMARK
 
 ## Save data
 
-The game saves automatically after every action in your browser's `localStorage` (key `smithsy-save-v3`;
-best score in `smithsy-best-v1`). Saves stay on your device and are per browser and per site address.
-**New game** (top bar, or after a game over) replaces the current run; the best score is kept. To wipe
-everything, clear the site's data in your browser.
+The game saves automatically after every action in your browser's `localStorage` (key
+`smithsy-save-<version>`, for example `smithsy-save-2.0`; best score in `smithsy-best-<version>`). Saves
+stay on your device and are per browser and per site address. **New game** (top bar, or after a game over)
+replaces the current run; the best score is kept. To wipe everything, clear the site's data in your browser.
 
-- **v1.1 saves** (key `smithsy-save-v2`) are converted the first time v1.2 starts without a v1.2 save: the
-  Gear care skill and the Battle simulation intel track are added at zero (durability stored as whole
-  numbers stays valid). **v1.0 saves** (key `smithsy-save-v1`) first go through the v1.1 conversion (items
-  lying on the ground move to their field's pile, each remaining debris cell gets a thickness of 40, and
-  old maps get no boulders). The game says so in a message. The old keys are left untouched, so an older
-  version still finds its own save; it cannot read a v1.2 save, and it does not overwrite one either.
+- **Saves are per version.** A save is only loaded by the game version that wrote it. A new version does not
+  read or convert older saves: it starts a fresh game and says so once. The older version's save is left
+  untouched in the browser, so that version still finds it when you go back to it, and it never overwrites
+  a newer version's save either.
 - **A save that can't be loaded** is kept as a backup (key `smithsy-save-backup-<time>`, never deleted)
   and a new game starts, with a message, instead of a blank page.
 

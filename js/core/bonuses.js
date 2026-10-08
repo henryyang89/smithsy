@@ -1,7 +1,7 @@
 import { CONFIG } from '../config.js';
 import { smithRingTotals } from './rings.js';
 import { skillBonus } from './skills.js';
-import { intelChance } from './intel.js';
+import { intelValue } from './intel.js';
 
 // Every smith-side modifier in one place: worn smith rings + skills + intel.
 // All values are percentages / percentage points.
@@ -14,7 +14,7 @@ export function smithBonuses(state, cfg = CONFIG) {
     returnPct: sk('returnTravel'), // travel ending at camp (stacks with travelPct)
     searchTimePct: rv('searchTime') + sk('searchTime'),
     searchEffPct: rv('searchEff') + sk('searchEff'),
-    revealPct: intelChance(state, 'oreSight', cfg) + rv('reveal'),
+    sight: intelValue(state, 'oreSight', cfg) + rv('reveal'), // Ore sight intel + Ore sight rings (see field.sight)
     debrisPct: sk('debris'),
     gearCarePct: sk('gearCare'), // % less durability loss per used item in a fight
     refineTimePct: rv('processTime') + sk('refineTime'),

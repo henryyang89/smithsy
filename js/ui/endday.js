@@ -12,11 +12,11 @@ import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../co
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
 import { gearStats, isNight, wearLoss } from '../core/gear.js';
 import { smithBonuses } from '../core/bonuses.js';
-import { intelChance, nextIntelGain } from '../core/intel.js';
+import { intelValue, nextIntelGain, trackValueText } from '../core/intel.js';
 import { mixSeed } from '../core/rng.js';
 import { cap } from '../core/util.js';
 import { repairLine, repairAllButton } from './repairui.js';
-import { trackValueText, spendIntelAction } from './skillsview.js';
+import { spendIntelAction } from './skillsview.js';
 
 // ------------------------------------------------------------------ format ----
 const f1 = (v) => num(v, 1);
@@ -24,8 +24,7 @@ const f2 = (v) => num(v, 2);
 const pctf = (v, d = 1) => `${num(v, d)}%`;
 const signedPct = (v) => `${v > 0 ? '+' : ''}${num(v, 1)}%`;
 const LV = { low: 'Low', normal: 'Normal', high: 'High' };
-const SCOUT_TRACKS = ['enemySight', 'ringTypeSight', 'ringGradeSight'];
-const PLAN_TRACKS = [...SCOUT_TRACKS, 'simDepth']; // intel the plan screen offers: scouting + Battle simulation
+const planTracks = (cfg) => Object.keys(cfg.intel.tracks); // the plan screen offers every intel track
 
 // "25%", "120", "+5%" — the attribute's value with its unit (pierce resistance is a % of your piercing ignored).
 export function attrValueText(key, level, cfg) {
@@ -506,9 +505,8 @@ export function renderBattleReport(report, ctx, opts = {}) {
     ? h('p', { class: 'adv-tight muted adv-small' }, `${cfg.skills.activity.gearCare.name}: +${cfg.skills.gearCareXpPerFight} XP for surviving the fight.`,
       report.notes.map((n) => [' ', h('b', { class: 'ok' }, n)]))
     : null;
-  // Packed but unused (report.packedIds; older saves may not have it). Unused items do not wear.
-  const usedIds = report.usedIds || [];
-  const unusedIds = Array.isArray(report.packedIds) ? report.packedIds.filter((id) => !usedIds.includes(id)) : [];
+  // Packed but unused (report.packedIds). Unused items do not wear.
+  const unusedIds = report.packedIds.filter((id) => !report.usedIds.includes(id));
   const unusedNode = unusedIds.length
     ? h('p', { class: 'adv-tight muted adv-small' }, `Packed but not used (no wear): `,
       unusedIds.map((id, i) => {
@@ -519,7 +517,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
   const gearPanel = section('Gear the adventurer used',
     report.usedNames.length
       ? h('p', { class: 'adv-tight' }, 'Picked from the packed gear after seeing the enemy: ', h('b', {}, report.usedNames.join(', ')), '.')
-      : h('p', { class: 'adv-tight muted' }, Array.isArray(report.packedIds) && report.packedIds.length ? 'No gear used — fought unarmed.' : 'No gear — fought unarmed.'),
+      : h('p', { class: 'adv-tight muted' }, report.packedIds.length ? 'No gear used — fought unarmed.' : 'No gear — fought unarmed.'),
     unusedNode,
     wearRows.length ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)) : null,
     gearCareNode,
@@ -663,7 +661,7 @@ const sortedIds = (ids) => [...ids].sort((a, b) => a - b).join(',');
 // Cache key for one enemy's estimate: everything that changes the result (the selection, what the
 // player can see of the enemy, and the size of the simulation).
 function estKey(ctx, p, enemyIndex, counts = simCounts(ctx.state, ctx.cfg)) {
-  return [p.seed, p.rosterDay, enemyIndex, sortedIds(p.gearIds), sortedIds(p.ringIds), intelChance(ctx.state, 'enemySight', ctx.cfg),
+  return [p.seed, p.rosterDay, enemyIndex, sortedIds(p.gearIds), sortedIds(p.ringIds), intelValue(ctx.state, 'enemySight', ctx.cfg),
     counts.samples, counts.evalFights, counts.fightsPerLoadout].join('|');
 }
 
@@ -845,24 +843,24 @@ function intelPanel(ctx) {
   if (pts <= 0) {
     return h('section', { class: 'panel adv-intel' },
       h('span', { class: 'muted' }, 'Intel: '),
-      PLAN_TRACKS.map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, trackValueText(t, intelChance(s, t, cfg)))]),
+      planTracks(cfg).map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, trackValueText(t, intelValue(s, t, cfg), cfg))]),
       h('span', { class: 'muted' }, ` — no intel points (next one at the end of day ${nextDay}).`));
   }
   return section(`Intel: ${pts} point${pts > 1 ? 's' : ''} to spend`,
-    h('p', { class: 'adv-tight muted' }, 'Spending a point on scouting reveals more of this roster right away (each attribute / ring type / ring grade has a fixed hidden roll; a higher chance uncovers more of them). Battle simulation adds guesses and test fights to the win-chance estimate.'),
+    h('p', { class: 'adv-tight muted' }, 'Spending a point on scouting reveals more of this roster right away (each attribute / ring type / ring grade has a fixed hidden roll; a higher chance uncovers more of them). Ore sight shows more of the items still in the ground when you stand in a field. Battle simulation adds guesses and test fights to the win-chance estimate.'),
     h('table', { class: 'adv-stats' },
-      h('tbody', {}, PLAN_TRACKS.map((t) => {
+      h('tbody', {}, planTracks(cfg).map((t) => {
         const tr = cfg.intel.tracks[t];
-        const cur = intelChance(s, t, cfg);
+        const cur = intelValue(s, t, cfg);
         const gain = nextIntelGain(s, t, cfg);
         return h('tr', {},
           h('td', {}, h('b', {}, tr.name), h('div', { class: 'muted adv-small' }, tr.desc)),
-          h('td', { class: 'num' }, trackValueText(t, cur)),
+          h('td', { class: 'num' }, trackValueText(t, cur, cfg)),
           h('td', { class: 'num' }, gain > 0
             ? h('button', {
               class: 'small',
               onclick: () => ctx.act(() => spendIntelAction(ctx, t), { toast: true }),
-            }, `Spend 1 point: ${trackValueText(t, cur)} → ${trackValueText(t, cur + gain)}`)
+            }, `Spend 1 point: ${trackValueText(t, cur, cfg)} → ${trackValueText(t, cur + gain, cfg)}`)
             : h('span', { class: 'muted' }, 'maxed')));
       }))));
 }
@@ -1046,7 +1044,7 @@ function estimateHow(ctx, sel, counts, est = null) {
   const { state, cfg } = ctx;
   const known = sel ? knownLevels(state, sel, cfg) : null;
   const nHidden = known ? Object.keys(cfg.enemies.attributes).length - Object.keys(known).length : null;
-  const intelPart = intelChance(state, 'simDepth', cfg);
+  const intelPart = intelValue(state, 'simDepth', cfg);
   const ringPart = counts.extra - intelPart;
   const o = cfg.sim;
   const m = marginPts(est);

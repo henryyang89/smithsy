@@ -71,34 +71,38 @@ const ctx = {
   },
 };
 
-// Load the current save, else migrate a legacy one. A save that can't be read is kept under a backup
-// key (never deleted) and a new game starts, so a bad save can't leave the page blank.
+// Load this version's save. Saves are per version: another version's save is never read, converted or deleted
+// (it stays in the browser, so that version still finds it). A save of this version that can't be read is kept
+// under a backup key (never deleted) and a new game starts, so a bad save can't leave the page blank.
 function load() {
-  for (const key of [Game.SAVE_KEY, ...Game.LEGACY_SAVE_KEYS]) {
-    let text = null;
-    try {
-      text = localStorage.getItem(key);
-    } catch (e) {
-      return null; // storage blocked: play without saving
-    }
-    if (!text) continue;
-    try {
-      const s = Game.deserialize(text);
-      if (!s || !s.map || !s.storage) throw new Error('Save is missing data');
-      if (key !== Game.SAVE_KEY) startupNote = `Your earlier save was converted to v${VERSION}.`;
-      return s;
-    } catch (e) {
-      console.warn('Save could not be loaded', e);
-      try {
-        localStorage.setItem(`smithsy-save-backup-${Date.now()}`, text);
-      } catch (e2) {
-        /* ignore */
-      }
-      startupNote = 'Your save could not be loaded, so a new game started (the old save was kept as a backup in browser storage).';
-      return null;
-    }
+  let text = null;
+  const allKeys = [];
+  try {
+    text = localStorage.getItem(Game.SAVE_KEY);
+    for (let i = 0; i < localStorage.length; i++) allKeys.push(localStorage.key(i));
+  } catch (e) {
+    return null; // storage blocked: play without saving
   }
-  return null;
+  if (!text) {
+    if (Game.oldSaveKeys(allKeys).length) {
+      startupNote = `Smithsy ${VERSION} starts a fresh game: saves do not carry over between versions. Your older save is still in this browser and opens again in that version.`;
+    }
+    return null;
+  }
+  try {
+    const s = Game.deserialize(text);
+    if (!s.map || !s.storage) throw new Error('Save is missing data');
+    return s;
+  } catch (e) {
+    console.warn('Save could not be loaded', e);
+    try {
+      localStorage.setItem(`smithsy-save-backup-${Date.now()}`, text);
+    } catch (e2) {
+      /* ignore */
+    }
+    startupNote = 'Your save could not be loaded, so a new game started (the old save was kept as a backup in browser storage).';
+    return null;
+  }
 }
 
 function save() {

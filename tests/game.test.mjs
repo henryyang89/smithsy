@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CONFIG, ORES, GEMS, BARS, GRADES } from '../js/config.js';
+import * as GameModule from '../js/core/game.js';
 import {
-  newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, resolveBattle, rosterView, serialize, deserialize,
-  adventurerRingTotals, logResult, addLog, packedSlotsSummary, migrateV1, migrateV2, SAVE_VERSION, SAVE_KEY, LEGACY_SAVE_KEYS, MAX_LOG,
+  newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, rosterView, serialize, deserialize,
+  adventurerRingTotals, logResult, addLog, packedSlotsSummary, saveKeyFor, SAVE_KEY, BEST_KEY, oldSaveKeys, MAX_LOG,
 } from '../js/core/game.js';
 import { ringLabel } from '../js/core/rings.js';
+import { generateRoster } from '../js/core/enemies.js';
+import { makeRng } from '../js/core/rng.js';
 import { repair } from '../js/core/gear.js';
-import { travel, search, setCarry, currentField, fieldProgress } from '../js/core/map.js';
+import { travel } from '../js/core/map.js';
 import { VERSION } from '../js/version.js';
-import { game, cfgWith, addGear, addRing, fullSet, fieldAt, fieldOf, idx, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
+import { game, cfgWith, addGear, addRing, fullSet, fieldAt, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
 
 const tierIndex = (s, tier) => s.roster.enemies.findIndex((e) => e.tier === tier);
 const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds, ringIds });
@@ -34,7 +37,7 @@ function toDay2(s, p, cfg = CONFIG) {
 // --------------------------------------------------------------- new game ----
 test('newGame: initial state shape', () => {
   const s = newGame(4242);
-  assert.equal(s.version, SAVE_VERSION);
+  assert.equal(s.version, VERSION);
   assert.equal(s.seed, 4242);
   assert.equal(typeof s.rng.s, 'number');
   assert.equal(s.day, 1);
@@ -359,42 +362,8 @@ test('score: each win adds the enemy tier\'s score', () => {
   }
 });
 
-// -------------------------------------------------------------- regrowth ----
-test('confirmPlan regrows searched cells overnight (regrowPctPerDay); piles and boulders stay', () => {
-  const searchedCells = (s) => Object.values(s.map.fields).flatMap((f) => f.cells).filter((c) => c.searched > 0);
-  const prep = (cfg) => {
-    const s = game(8, cfg);
-    for (const f of Object.values(s.map.fields)) {
-      f.cells.filter((c) => !c.boulder).slice(0, 5).forEach((c) => { c.searched = 100; c.items = []; c.debris = 0; });
-      f.pile = ['ore:iron'];
-    }
-    endDay(s, cfg);
-    return s;
-  };
-  const none = cfgWith({ field: { regrowPctPerDay: 0 } });
-  const s0 = prep(none);
-  const n = searchedCells(s0).length;
-  assert.ok(n > 0);
-  confirmPlan(s0, plan(0), none);
-  assert.equal(searchedCells(s0).length, n, '0%: nothing regrows');
-  assert.ok(!s0.log.some((l) => /regrew/.test(l.text)));
-
-  const all = cfgWith({ field: { regrowPctPerDay: 100 } });
-  const s1 = prep(all);
-  confirmPlan(s1, plan(0), all);
-  assert.equal(searchedCells(s1).length, 0, '100%: every searched cell is fresh');
-  for (const f of Object.values(s1.map.fields)) {
-    assert.deepEqual(f.pile, ['ore:iron'], 'the pile stays');
-    assert.equal(f.cells.filter((c) => c.boulder).length, CONFIG.field.boulders, 'boulders stay');
-  }
-  assert.match(s1.log.find((l) => /regrew/.test(l.text)).text, new RegExp(`${n} searched cell`));
-  // regrowth happens once per night, and the roster is unaffected by it
-  assert.equal(s1.day, 2);
-  assert.equal(s1.roster.day, 3);
-});
-
-test('spec: fields do not regrow (regrowPctPerDay is 0), so nights leave every field untouched', () => {
-  assert.equal(CONFIG.field.regrowPctPerDay, 0);
+// ------------------------------------------------------- fields at night ----
+test('confirmPlan leaves every field unchanged: searched cells stay searched, piles and boulders stay, nothing is logged about it', () => {
   // WEAK_ENEMIES only changes the enemies, so the field rules are the real ones
   const cfg = WIN;
   assert.deepEqual(cfg.field, CONFIG.field);
@@ -410,7 +379,18 @@ test('spec: fields do not regrow (regrowPctPerDay is 0), so nights leave every f
     assert.equal(confirmPlan(s, plan(0), cfg).ok, true);
     assert.deepEqual(s.map.fields, fields, `night ${night + 1}`);
   }
-  assert.ok(!s.log.some((l) => /regrew/.test(l.text)));
+  assert.ok(!s.log.some((l) => /overnight|regrew|grew back/i.test(l.text)));
+});
+
+test('confirmPlan draws from the game\'s random generator only for the new roster (no rolls for the fields)', () => {
+  const s = game(12);
+  endDay(s);
+  const holder = { s: s.rng.s }; // the generator's state before confirming
+  assert.equal(confirmPlan(s, plan(0)).ok, true);
+  // replaying just the roster draw from that state gives the same roster and leaves the generator in the same place
+  const roster = generateRoster(makeRng(holder), s.day + 1, CONFIG);
+  assert.deepEqual(s.roster, roster);
+  assert.equal(s.rng.s, holder.s, 'nothing else advanced the generator');
 });
 
 // --------------------------------------------------------------- roster view --
@@ -442,186 +422,88 @@ test('serialize / deserialize roundtrip (fresh game and mid-run)', () => {
   assert.equal(serialize(back), serialize(s));
 });
 
-test('deserialize rejects other save versions and junk', () => {
-  const s = game(9);
-  assert.throws(() => deserialize(JSON.stringify({ ...s, version: SAVE_VERSION + 1 })), /Incompatible/);
-  assert.throws(() => deserialize(JSON.stringify({ ...s, version: 0 })), /Incompatible/);
-  assert.throws(() => deserialize(JSON.stringify({ ...s, version: String(SAVE_VERSION) })), /Incompatible/);
-  assert.throws(() => deserialize('null'), /Incompatible/);
-  assert.throws(() => deserialize('{not json'));
-});
-
-test('versions: the game version is exported; saves are version 3 with their own key (v1.2)', () => {
+test('versions: VERSION is 2.0 and a new game is saved as that version (saves are per version)', () => {
   assert.equal(typeof VERSION, 'string');
   assert.match(VERSION, /^\d+\.\d+$/);
-  assert.equal(VERSION, '1.2');
-  assert.equal(SAVE_VERSION, 3);
-  assert.equal(newGame(1).version, SAVE_VERSION);
+  assert.equal(VERSION, '2.0');
+  assert.equal(newGame(1).version, VERSION);
+  assert.equal(JSON.parse(serialize(newGame(1))).version, '2.0');
 });
 
-test('save keys: the current key carries the save version, older formats are read from the legacy keys (newest first)', () => {
-  assert.equal(SAVE_KEY, 'smithsy-save-v3');
-  assert.ok(SAVE_KEY.endsWith(`-v${SAVE_VERSION}`));
-  assert.deepEqual(LEGACY_SAVE_KEYS, ['smithsy-save-v2', 'smithsy-save-v1']);
-  assert.ok(!LEGACY_SAVE_KEYS.includes(SAVE_KEY), 'an older cached page keeps writing to its own key, never over the new save');
-  // every format older than the current one has a key
-  for (let v = 1; v < SAVE_VERSION; v++) assert.ok(LEGACY_SAVE_KEYS.includes(`smithsy-save-v${v}`), `v${v}`);
+test('save keys: the save and best-score keys carry the game version', () => {
+  assert.equal(saveKeyFor('2.0'), 'smithsy-save-2.0');
+  assert.equal(saveKeyFor('1.2'), 'smithsy-save-1.2');
+  assert.equal(SAVE_KEY, 'smithsy-save-2.0');
+  assert.equal(SAVE_KEY, saveKeyFor(VERSION));
+  assert.equal(BEST_KEY, 'smithsy-best-2.0');
+  assert.equal(BEST_KEY, `smithsy-best-${VERSION}`);
+  assert.notEqual(SAVE_KEY, BEST_KEY);
 });
 
-// ------------------------------------------------------------ v1.0 saves ----
-// Turn a current game into what v1.0 saved: no piles, items on the ground of cells, debris true/false,
-// no boulders, a loadMark, version 1.
-function toV1(s) {
-  const v1 = structuredClone(s);
-  v1.version = 1;
-  v1.loadMark = v1.bag.length;
-  for (const f of Object.values(v1.map.fields)) {
-    delete f.pile;
-    for (const c of f.cells) {
-      c.debris = c.debris > 0;
-      delete c.boulder;
-      c.ground = [];
-    }
+test('deserialize only loads a save of this very version: another version, a number, no version or junk all throw', () => {
+  const s = game(9);
+  const withVersion = (v) => JSON.stringify({ ...s, version: v });
+  // 3 was 1.2's save format number; '1.2' is the old game version; '2.1' a future one
+  for (const v of [3, 2, 1, 0, -1, '3', '1.2', '1.1', '2.1', '2.0.1', '3.0', 2.0, VERSION + ' ', '', null, true]) {
+    assert.throws(() => deserialize(withVersion(v)), /Incompatible/, `version ${JSON.stringify(v)}`);
   }
-  return v1;
-}
+  const noVersion = { ...s };
+  delete noVersion.version;
+  assert.throws(() => deserialize(JSON.stringify(noVersion)), /Incompatible/, 'missing version');
+  assert.throws(() => deserialize('null'), /Incompatible/);
+  assert.throws(() => deserialize('42'), /Incompatible/);
+  assert.throws(() => deserialize('"2.0"'), /Incompatible/);
+  assert.throws(() => deserialize('[]'), /Incompatible/);
+  assert.throws(() => deserialize('{not json'));
+  assert.throws(() => deserialize(''));
+  assert.deepEqual(deserialize(withVersion('2.0')), s, 'this version loads');
+});
 
-test('migrateV1: ground items -> the field\'s pile, debris true/false -> thickness, no boulders, no loadMark', () => {
-  const s = game(31);
-  const v1 = toV1(s);
-  const keys = Object.keys(v1.map.fields);
-  // ground items in two cells of one field and one cell of another
-  v1.map.fields[keys[0]].cells[3].ground = ['ore:copper', 'gem:ruby'];
-  v1.map.fields[keys[0]].cells[40].ground = ['ore:mythril'];
-  v1.map.fields[keys[1]].cells[0].ground = ['gem:diamond'];
-  const wasDebris = Object.fromEntries(keys.map((k) => [k, v1.map.fields[k].cells.map((c) => c.debris)]));
-  assert.ok(Object.values(wasDebris).flat().some((d) => d === true), 'some v1 debris to convert');
-  const m = migrateV1(structuredClone(v1));
-  assert.equal(m.version, 2, 'migrateV1 makes a v1.1 (version 2) save; deserialize carries on to the current version');
-  assert.equal('loadMark' in m, false);
-  assert.deepEqual(m.map.fields[keys[0]].pile, ['ore:copper', 'gem:ruby', 'ore:mythril']);
-  assert.deepEqual(m.map.fields[keys[1]].pile, ['gem:diamond']);
-  const { min, max } = CONFIG.field.debrisAmount;
-  const thick = new Set();
-  for (const k of keys) {
-    const f = m.map.fields[k];
-    assert.ok(Array.isArray(f.pile));
-    if (k !== keys[0] && k !== keys[1]) assert.deepEqual(f.pile, []);
-    f.cells.forEach((c, i) => {
-      assert.equal('ground' in c, false);
-      assert.equal(c.boulder, false, 'v1 fields had no boulders');
-      if (wasDebris[k][i]) {
-        assert.ok(Number.isInteger(c.debris) && c.debris >= min && c.debris <= max, `${c.debris}`);
-        thick.add(c.debris);
-      } else assert.equal(c.debris, 0);
-    });
+test('deserialize: a save of this version whose skills or intel tracks do not match the config is refused (dev safety net)', () => {
+  const s = game(9);
+  const clone = () => JSON.parse(serialize(s));
+  const bad = [];
+  let a = clone(); delete a.skills.gearCare; bad.push(['a skill key removed', a]);
+  a = clone(); delete a.skills.searchTime; bad.push(['another skill key removed', a]);
+  a = clone(); a.skills.bogusSkill = { xp: 0, level: 0 }; bad.push(['an unknown skill key added', a]);
+  a = clone(); delete a.intel.spent.groupSight; bad.push(['an intel track removed', a]);
+  a = clone(); delete a.intel.spent.oreSight; bad.push(['ore sight removed', a]);
+  a = clone(); a.intel.spent.bogusTrack = 0; bad.push(['an unknown intel track added', a]);
+  a = clone(); delete a.intel; bad.push(['no intel at all', a]);
+  a = clone(); delete a.skills; bad.push(['no skills at all', a]);
+  for (const [why, save] of bad) assert.throws(() => deserialize(JSON.stringify(save)), /Save|skills|intel/, why);
+  // a config with an extra track no longer matches a save written without it
+  const more = cfgWith({ intel: { tracks: { newTrack: { name: 'New', unit: '%', base: 0, gains: [1], max: 10, desc: 'x' } } } });
+  assert.throws(() => deserialize(serialize(s), more), /intel/);
+  assert.doesNotThrow(() => deserialize(serialize(s)));
+});
+
+test('oldSaveKeys: keeps the keys of other versions\' saves, drops the current key, backups and unrelated keys', () => {
+  const keys = ['smithsy-save-v1', 'smithsy-save-v2', 'smithsy-save-v3', 'smithsy-save-1.0', 'smithsy-save-2.1', SAVE_KEY,
+    'smithsy-save-backup-1727000000000', 'smithsy-best-2.0', 'smithsy-best-v1', 'other-app', 'smithsy-saved', 'xsmithsy-save-v3'];
+  assert.deepEqual(oldSaveKeys(keys), ['smithsy-save-v1', 'smithsy-save-v2', 'smithsy-save-v3', 'smithsy-save-1.0', 'smithsy-save-2.1']);
+  assert.deepEqual(oldSaveKeys([SAVE_KEY]), []);
+  assert.deepEqual(oldSaveKeys(['smithsy-save-backup-1', 'smithsy-save-backup-2.0']), [], 'backups are not saves of another version');
+  assert.deepEqual(oldSaveKeys([]), []);
+  assert.deepEqual(oldSaveKeys(['smithsy-save-2.0']), []);
+  assert.deepEqual(oldSaveKeys(['smithsy-save-2.0'], 'smithsy-save-3.0'), ['smithsy-save-2.0'], 'the current key can be given');
+  // it reads an array-like list without changing it
+  const input = ['smithsy-save-v3', SAVE_KEY];
+  oldSaveKeys(input);
+  assert.deepEqual(input, ['smithsy-save-v3', SAVE_KEY]);
+});
+
+test('a new game\'s save is small: under 450,000 characters of JSON', () => {
+  for (const seed of [1, 2, 3]) {
+    const len = serialize(newGame(seed)).length;
+    assert.ok(len < 450000, `seed ${seed}: ${len} characters`);
   }
-  assert.equal(thick.size, 1, 'every old debris cell gets the same thickness');
-  // the thickness follows the config's range
-  const cfg = cfgWith({ field: { debrisAmount: { min: 100, max: 110 } } });
-  const m2 = migrateV1(structuredClone(v1), cfg);
-  const d2 = Object.values(m2.map.fields).flatMap((f) => f.cells).map((c) => c.debris).filter((d) => d > 0);
-  assert.ok(d2.length > 0 && d2.every((d) => d >= 100 && d <= 110));
-  // other parts of the save are kept
-  assert.deepEqual(m.storage, s.storage);
-  assert.deepEqual(m.skills, s.skills);
-  assert.deepEqual(m.roster, s.roster);
-  assert.deepEqual(m.rng, s.rng);
 });
 
-test('deserialize accepts a v1.0 save, migrates it, and the game plays on', () => {
-  const s = game(32);
-  const c = fieldAt(s, 1);
-  assert.equal(travel(s, { x: c.x, y: c.y }).ok, true);
-  const v1 = toV1(s);
-  const fv1 = fieldOf(v1, c);
-  fv1.cells[0].ground = ['ore:iron', 'ore:coal'];
-  fv1.cells.forEach((cl) => { cl.debris = false; });
-  fv1.cells[idx(1, 1)].debris = true; // the center of the search below
-  const back = deserialize(JSON.stringify(v1));
-  assert.equal(back.version, SAVE_VERSION);
-  const f = currentField(back);
-  assert.deepEqual(f.pile, ['ore:iron', 'ore:coal']);
-  assert.ok(f.cells[idx(1, 1)].debris > 0);
-  // search: clears the old debris first; found items join the pile
-  const r = search(back, 1, 1);
-  assert.equal(r.ok, true, r.msg);
-  assert.ok(r.debrisCleared > 0);
-  assert.ok(fieldProgress(f) > 0);
-  assert.equal(f.pile.length, 2 + r.found.length);
-  // carry the pile home
-  assert.equal(setCarry(back, { pile: f.pile.map((_, i) => i) }).ok, true);
-  const before = back.storage.ore.iron;
-  assert.equal(travel(back, back.map.camp).ok, true);
-  assert.equal(back.storage.ore.iron, before + 1 + r.found.filter((t) => t === 'ore:iron').length);
-  assert.deepEqual(f.pile, []);
-  // a migrated save serializes as the current version
-  assert.equal(JSON.parse(serialize(back)).version, SAVE_VERSION);
-  assert.deepEqual(deserialize(serialize(back)), back);
-});
-
-
-// ------------------------------------------------------------ v1.1 saves ----
-// What v1.1 saved: version 2, no Gear care skill, no Battle simulation intel entry, whole-number durability.
-function toV2(s) {
-  const v2 = JSON.parse(serialize(s));
-  v2.version = 2;
-  delete v2.skills.gearCare;
-  delete v2.intel.spent.simDepth;
-  return v2;
-}
-
-test('migrateV2: a v1.1 save (version 2) becomes version 3 with the new skill and intel track at zero, nothing else changed', () => {
-  const s = game(41);
-  fullSet(s, 'iron', 'C')[0].durability = 64;
-  s.skills.searchTime = { xp: 12, level: 2 };
-  s.intel.spent.enemySight = 3;
-  const v2 = toV2(s);
-  const m = migrateV2(structuredClone(v2));
-  assert.equal(m.version, 3);
-  assert.deepEqual(m.skills.gearCare, { xp: 0, level: 0 });
-  assert.equal(m.intel.spent.simDepth, 0);
-  assert.deepEqual(m.skills.searchTime, { xp: 12, level: 2 });
-  assert.equal(m.intel.spent.enemySight, 3);
-  assert.deepEqual(m.gear, s.gear, 'gear, with its whole-number durability, is untouched');
-  assert.deepEqual(m.map, s.map);
-  assert.deepEqual(m.storage, s.storage);
-  assert.deepEqual(m, s, 'equal to the current game it was made from');
-});
-
-test('deserialize: a v1.1 save (version 2) loads as the current version and the game plays on', () => {
-  const s = game(42);
-  const set = fullSet(s, 'mythril', 'S');
-  const back = deserialize(JSON.stringify(toV2(s)));
-  assert.equal(back.version, SAVE_VERSION);
-  assert.deepEqual(back, s);
-  assert.equal(JSON.parse(serialize(back)).version, SAVE_VERSION, 'and it is saved as the current version');
-  assert.equal(endDay(back, WIN).ok, true);
-  assert.equal(confirmPlan(back, plan(tierIndex(back, 'normal'), set.map((g) => g.id)), WIN).ok, true);
-  const rep = endDay(back, WIN).report;
-  assert.equal(rep.win, true);
-  assert.ok(rep.wear.every((w) => w.left === Math.round((100 - w.loss) * 10) / 10));
-});
-
-test('deserialize: a v1.0 save goes v1 -> v2 -> v3 in one load (field model and the v1.2 skill / intel track)', () => {
-  const s = game(43);
-  const v1 = toV1(s);
-  delete v1.skills.gearCare;
-  delete v1.intel.spent.simDepth;
-  const back = deserialize(JSON.stringify(v1));
-  assert.equal(back.version, SAVE_VERSION);
-  assert.deepEqual(back.skills.gearCare, { xp: 0, level: 0 });
-  assert.equal(back.intel.spent.simDepth, 0);
-  for (const f of Object.values(back.map.fields)) {
-    assert.ok(Array.isArray(f.pile));
-    for (const c of f.cells) assert.equal(typeof c.debris, 'number');
+test('migrations are gone: the game module exports no migrateV1, migrateV2, addMissingKeys, SAVE_VERSION or LEGACY_SAVE_KEYS', () => {
+  for (const name of ['migrateV1', 'migrateV2', 'addMissingKeys', 'SAVE_VERSION', 'LEGACY_SAVE_KEYS']) {
+    assert.equal(name in GameModule, false, `${name} should be gone`);
   }
-  assert.equal('loadMark' in back, false);
-});
-
-test('deserialize still refuses a save from a newer format or a version it has never heard of', () => {
-  const s = game(44);
-  for (const v of [SAVE_VERSION + 1, SAVE_VERSION + 10, 0, -1]) assert.throws(() => deserialize(JSON.stringify({ ...s, version: v })), /Incompatible/, `version ${v}`);
 });
 
 // ------------------------------------------------------------------- log ----

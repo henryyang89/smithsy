@@ -4,7 +4,7 @@ import { SLOTS } from '../js/config.js';
 import { CONFIG } from '../js/config.js';
 import { loadouts, bestLoadout, estimateWinChance, estimateWinChanceSync, simCounts } from '../js/core/sim.js';
 import { enemyCombatant } from '../js/core/enemies.js';
-import { spendIntel, intelChanceFor } from '../js/core/intel.js';
+import { spendIntel, intelValueFor } from '../js/core/intel.js';
 import { endDay, confirmPlan } from '../js/core/game.js';
 import { allLevels, cfgWith, combatant, game, addGear, addRing, fullSet, WEAK_ENEMIES, DEADLY_ENEMIES } from './helpers.mjs';
 
@@ -138,11 +138,11 @@ test('estimateWinChance (async) matches the sync version and reports progress', 
 });
 
 // ------------------------------------------------------- simCounts (v1.2) ----
-// Pinned: three different base counts (so each is checked on its own), the shared intel gains, and the
+// Pinned: three different base counts (so each is checked on its own), the Battle simulation steps, and the
 // Foresight ring values with the usual halving for duplicates.
 const SC = cfgWith({
   sim: { samples: 7, evalFights: 9, fightsPerLoadout: 11 },
-  intel: { gainsPerPoint: [10, 9, 8, 7, 6, 5, 4, 3, 2], minGain: 1, maxChance: 100, tracks: { simDepth: { base: 0 } } },
+  intel: { tracks: { simDepth: { base: 0, gains: [10, 9, 8, 7, 6, 5, 4, 3, 2, 1], max: 100 } } },
   rings: { duplicateFactor: 0.5, types: { foresight: { values: [2, 3, 4, 5, 6] } } },
 });
 const scGame = (cfg = SC) => game(1, cfg);
@@ -164,14 +164,14 @@ test('simCounts: Battle simulation intel points add their gains to all three cou
   [10, 9, 8, 7, 6].forEach((gain, i) => {
     assert.equal(spendIntel(s, 'simDepth', SC).ok, true);
     total += gain;
-    assert.equal(intelChanceFor('simDepth', i + 1, SC), total, 'the track value is the number of extra guesses / fights');
+    assert.equal(intelValueFor('simDepth', i + 1, SC), total, 'the track value is the number of extra guesses / fights');
     assert.deepEqual(simCounts(s, SC), { samples: 7 + total, evalFights: 9 + total, fightsPerLoadout: 11 + total, extra: total });
   });
   // a track base is extra from the start
   const withBase = cfgWith(SC, { intel: { tracks: { simDepth: { base: 3 } } } });
   assert.equal(simCounts(scGame(withBase), withBase).extra, 3);
-  // the intel maximum caps the extra count
-  const capped = cfgWith(SC, { intel: { maxChance: 25 } });
+  // the track's maximum caps the extra count
+  const capped = cfgWith(SC, { intel: { tracks: { simDepth: { max: 25 } } } });
   const c = scGame(capped);
   c.intel.spent.simDepth = 1000;
   assert.deepEqual(simCounts(c, capped), { samples: 7 + 25, evalFights: 9 + 25, fightsPerLoadout: 11 + 25, extra: 25 });
