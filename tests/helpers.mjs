@@ -8,6 +8,7 @@ import { CONFIG, GRADES } from '../js/config.js';
 import { newGame } from '../js/core/game.js';
 import { seededRng } from '../js/core/rng.js';
 import { xpToNext } from '../js/core/skills.js';
+import { canSpendIntel, nextIntelGain, spendIntel } from '../js/core/intel.js';
 import { pathSteps, generateField, key } from '../js/core/map.js';
 
 export const DAY_START = CONFIG.time.dayStartMin;
@@ -52,6 +53,14 @@ export const DEADLY_ENEMIES = { enemies: { tiers: tiersWith({ hp: 1e9, damage: 1
 
 export function game(seed = 12345, cfg = CONFIG) {
   return newGame(seed, cfg);
+}
+
+// Spend every intel point on the first track that can still gain (confirmPlan refuses while a point can be spent).
+// Ore sight comes first in the config, so this changes sight in the fields and nothing about the enemies.
+export function spendAllIntel(state, cfg = CONFIG) {
+  for (let guard = 0; guard < 200 && canSpendIntel(state, cfg); guard++) {
+    spendIntel(state, Object.keys(cfg.intel.tracks).find((k) => nextIntelGain(state, k, cfg) > 0), cfg);
+  }
 }
 
 export const approx = (actual, expected, eps = 1e-9) => Math.abs(actual - expected) <= eps;

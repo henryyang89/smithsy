@@ -7,12 +7,13 @@ import {
   adventurerRingTotals, logResult, addLog, packedSlotsSummary, saveKeyFor, SAVE_KEY, BEST_KEY, oldSaveKeys, MAX_LOG,
 } from '../js/core/game.js';
 import { ringLabel } from '../js/core/rings.js';
+import { spendIntel, canSpendIntel } from '../js/core/intel.js';
 import { generateRoster } from '../js/core/enemies.js';
 import { makeRng } from '../js/core/rng.js';
 import { repair } from '../js/core/gear.js';
 import { travel } from '../js/core/map.js';
 import { VERSION } from '../js/version.js';
-import { game, cfgWith, addGear, addRing, fullSet, fieldAt, ringVal, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
+import { game, cfgWith, addGear, addRing, fullSet, fieldAt, ringVal, spendAllIntel, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START, DAY_END } from './helpers.mjs';
 
 const tierIndex = (s, tier) => s.roster.enemies.findIndex((e) => e.tier === tier);
 const plan = (enemyIndex, gearIds = [], ringIds = []) => ({ enemyIndex, gearIds, ringIds });
@@ -56,6 +57,10 @@ test('newGame: initial state shape', () => {
   assert.deepEqual(s.rings, []);
   assert.equal(s.nextId, 1);
   assert.equal(s.intel.points, 0);
+  assert.deepEqual(Object.keys(s.groups.defeats), Object.keys(CONFIG.groups.list), 'one defeat counter per banner');
+  assert.ok(Object.values(s.groups.defeats).every((n) => n === 0));
+  assert.deepEqual(s.groups.extra, Object.fromEntries(SLOTS.map((sl) => [sl, 0])), 'no pack mules yet');
+  assert.equal(s.groups.earned, 0);
   assert.equal(s.roster.day, 2, 'roster is for tomorrow');
   assert.equal(s.roster.enemies.length, rosterSize);
   assert.equal(s.plan, null);
@@ -102,14 +107,22 @@ test('endDay requires being at camp; a late return keeps the later clock', () =>
 });
 
 // ----------------------------------------------------------- validatePlan ----
-test('validatePlan: enemy required, max 2 gear per slot, adventurer rings only, max 10 rings', () => {
+test('validatePlan: enemy required, max packLimit gear per gear type, adventurer rings only, max 10 rings', () => {
   const s = game(1);
   const [sw1, sw2, sw3] = [addGear(s, 'sword'), addGear(s, 'sword'), addGear(s, 'sword')];
   const ch = addGear(s, 'chest');
   assert.equal(validatePlan(s, plan(7)), 'Pick an enemy.');
   assert.equal(validatePlan(s, plan(-1)), 'Pick an enemy.');
   assert.equal(validatePlan(s, plan(0, [sw1.id, sw2.id, ch.id])), null);
-  assert.match(validatePlan(s, plan(0, [sw1.id, sw2.id, sw3.id])), /At most 2 items per slot \(sword\)/);
+  const per = CONFIG.plan.perSlot;
+  assert.equal(validatePlan(s, plan(0, [sw1.id, sw2.id, sw3.id])), `At most ${per} swords.`);
+  // a pack mule for swords lifts the limit of that gear type only
+  s.groups.extra.sword = 1;
+  assert.equal(validatePlan(s, plan(0, [sw1.id, sw2.id, sw3.id])), null, 'three swords with a sword pack mule');
+  assert.equal(validatePlan(s, plan(0, [sw1.id, sw2.id, sw3.id, addGear(s, 'sword').id])), `At most ${per + 1} swords.`);
+  const [c1, c2, c3] = [ch, addGear(s, 'chest'), addGear(s, 'chest')];
+  assert.equal(validatePlan(s, plan(0, [c1.id, c2.id, c3.id])), `At most ${per} chests.`, 'other gear types keep the base limit');
+  s.groups.extra.sword = 0;
   assert.equal(validatePlan(s, plan(0, [999])), 'Unknown gear selected.');
   const max = CONFIG.rings.maxWorn;
   const advRings = Array.from({ length: max + 1 }, () => addRing(s, 'accuracy', 'D'));
@@ -147,7 +160,7 @@ test('confirmPlan: advances the day, packs gear, sets adventurer rings, new rost
   assert.equal(advA.worn, true);
   assert.equal(advB.worn, false);
   assert.equal(smith.worn, true, 'smith rings untouched');
-  assert.deepEqual(s.plan, { day: 2, enemy, gearIds: [sw.id], ringIds: [advA.id] });
+  assert.deepEqual(s.plan, { day: 2, enemy, gearIds: [sw.id], ringIds: [advA.id], shownEstimate: null });
   assert.equal(s.roster.day, 3);
   assert.notEqual(s.roster, oldRoster);
   assert.notDeepEqual(s.roster.enemies.map((e) => e.levels), oldRoster.enemies.map((e) => e.levels));
@@ -408,13 +421,14 @@ test('resolveBattle is reproducible from a saved state', () => {
 });
 
 // ------------------------------------------------------------ intel + days ----
-test('intel point at the end of every daysPerPoint-th day, not on other days', () => {
+test('intel point at the end of every daysPerPoint-th day, not on other days; it must be spent before the next day', () => {
   for (const dpp of [CONFIG.intel.daysPerPoint, 3]) {
     const cfg = cfgWith(WEAK_ENEMIES, { intel: { daysPerPoint: dpp } });
     const last = 2 * dpp;
     const s = game(31, cfg);
     const set = fullSet(s, 'mythril', 'S');
     let day = 1;
+    let spent = 0;
     while (day <= last) {
       const r = endDay(s, cfg);
       assert.equal(r.ok, true);
@@ -422,9 +436,20 @@ test('intel point at the end of every daysPerPoint-th day, not on other days', (
         assert.equal(r.report.win, true, `day ${day} fight lost`);
         acknowledgeReport(s);
       }
-      assert.equal(s.intel.points, Math.floor(day / dpp), `after day ${day} (every ${dpp} days)`);
+      assert.equal(s.intel.points, Math.floor(day / dpp) - spent, `after day ${day} (every ${dpp} days)`);
       for (const g of set) g.durability = 100; // keep the test about intel, not wear
-      const res = confirmPlan(s, plan(tierIndex(s, 'normal'), set.map((g) => g.id)), cfg);
+      const p = plan(tierIndex(s, 'normal'), set.map((g) => g.id));
+      if (s.intel.points > 0) {
+        const refused = confirmPlan(s, p, cfg);
+        assert.equal(refused.ok, false, `day ${day}: an unspent point blocks the next day`);
+        assert.match(refused.msg, /Spend your intel point/);
+        assert.equal(s.phase, 'plan');
+        assert.equal(s.day, day, 'nothing changed');
+        spent += s.intel.points;
+        spendAllIntel(s, cfg);
+        assert.equal(s.intel.points, 0);
+      }
+      const res = confirmPlan(s, p, cfg);
       assert.equal(res.ok, true, res.msg);
       day += 1;
       assert.equal(s.day, day);
@@ -439,7 +464,67 @@ test('intel point at the end of every daysPerPoint-th day, not on other days', (
     assert.equal(s.rings.length, fights);
     assert.equal(new Set(s.rings.map((r) => r.id)).size, fights);
     assert.equal(s.stats.bestDay, last + 1);
+    assert.equal(spent, 2, 'two points were earned and spent');
   }
+});
+
+test('confirmPlan refuses while an intel point can be spent, succeeds after spending, and when every track is maxed', () => {
+  const s = game(14, WIN);
+  endDay(s, WIN);
+  s.intel.points = 1;
+  const before = serialize(s);
+  const refused = confirmPlan(s, plan(0), WIN);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.msg, 'Spend your intel point first (Intel, at the top of this screen).');
+  assert.equal(serialize(s), before, 'a refused confirm changes nothing');
+  assert.equal(s.phase, 'plan');
+  // the gate comes before the plan check: an invalid plan also says to spend the point first
+  assert.match(confirmPlan(s, plan(99), WIN).msg, /Spend your intel point/);
+  spendAllIntel(s, WIN);
+  assert.equal(s.intel.points, 0);
+  assert.equal(confirmPlan(s, plan(0), WIN).ok, true);
+  // several points: all of them must go
+  const t = game(15, WIN);
+  endDay(t, WIN);
+  t.intel.points = 3;
+  assert.equal(confirmPlan(t, plan(0), WIN).ok, false);
+  const first = Object.keys(WIN.intel.tracks)[0];
+  assert.equal(spendIntel(t, first, WIN).ok, true);
+  assert.equal(confirmPlan(t, plan(0), WIN).ok, false, 'two points left');
+  assert.equal(spendIntel(t, first, WIN).ok, true);
+  assert.equal(confirmPlan(t, plan(0), WIN).ok, false, 'one point left');
+  spendAllIntel(t, WIN);
+  assert.equal(confirmPlan(t, plan(0), WIN).ok, true);
+  // every track maxed: a point cannot be spent, so it does not block the day
+  const u = game(16, WIN);
+  endDay(u, WIN);
+  for (const k of Object.keys(WIN.intel.tracks)) u.intel.spent[k] = 1000;
+  u.intel.points = 2;
+  assert.equal(canSpendIntel(u, WIN), false);
+  assert.equal(confirmPlan(u, plan(0), WIN).ok, true);
+  assert.equal(u.intel.points, 2, 'the unspendable points stay');
+});
+
+test('the win estimate the plan screen showed goes to the battle report as planEstimate; missing or broken values become null', () => {
+  const run = (shownEstimate) => {
+    const s = game(17, WIN);
+    endDay(s, WIN);
+    const p = { ...plan(0), ...(shownEstimate === undefined ? {} : { shownEstimate }) };
+    assert.equal(confirmPlan(s, p, WIN).ok, true);
+    return { planned: s.plan.shownEstimate, report: endDay(s, WIN).report };
+  };
+  const shown = run({ winPct: 72, margin: 14 });
+  assert.deepEqual(shown.planned, { winPct: 72, margin: 14 });
+  assert.deepEqual(shown.report.planEstimate, { winPct: 72, margin: 14 });
+  assert.deepEqual(run({ winPct: 100, margin: null }).report.planEstimate, { winPct: 100, margin: null });
+  assert.equal(run(undefined).report.planEstimate, null, 'not finished when confirmed');
+  assert.equal(run(null).report.planEstimate, null);
+  assert.equal(run({ winPct: 'lots' }).report.planEstimate, null);
+  // the estimate is part of the save while the fight is pending
+  const s = game(18, WIN);
+  endDay(s, WIN);
+  confirmPlan(s, { ...plan(0), shownEstimate: { winPct: 55.5, margin: 20 } }, WIN);
+  assert.deepEqual(deserialize(serialize(s)).plan.shownEstimate, { winPct: 55.5, margin: 20 });
 });
 
 test('score: each win adds the enemy tier\'s score', () => {
@@ -466,6 +551,7 @@ test('confirmPlan leaves every field unchanged: searched cells stay searched, pi
   for (let night = 0; night < 10; night++) {
     assert.equal(endDay(s, cfg).ok, true);
     if (s.phase === 'report') acknowledgeReport(s);
+    spendAllIntel(s, cfg);
     assert.equal(confirmPlan(s, plan(0), cfg).ok, true);
     assert.deepEqual(s.map.fields, fields, `night ${night + 1}`);
   }
@@ -489,8 +575,10 @@ test('rosterView: known levels follow intel', () => {
   const v = rosterView(s);
   assert.equal(v.length, 7);
   for (const row of v) for (const [k, lv] of Object.entries(row.known)) assert.equal(row.enemy.levels[k], lv);
-  s.intel.spent.enemySight = 1000; // far past the cap: maxChance (100%)
-  for (const row of rosterView(s)) assert.deepEqual(row.known, row.enemy.levels);
+  s.intel.spent.enemySight = 1000; // far past the cap: the track's max (100%)
+  // elites and champions see a little less of that (tierMult); with every tier at 100% all attributes are known
+  const all = cfgWith({ intel: { tracks: { enemySight: { tierMult: { normal: 100, elite: 100, champion: 100 } } } } });
+  for (const row of rosterView(s, all)) assert.deepEqual(row.known, row.enemy.levels);
 });
 
 // ------------------------------------------------------------------ save ----

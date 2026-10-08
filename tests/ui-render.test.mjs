@@ -15,14 +15,18 @@ import { renderSkills, spendIntelAction } from '../js/ui/skillsview.js';
 import { renderLog } from '../js/ui/logview.js';
 import { renderHelp } from '../js/ui/help.js';
 import { renderPlan, renderReport, renderGameOver } from '../js/ui/endday.js';
-import { endDay, confirmPlan } from '../js/core/game.js';
-import { tip } from '../js/ui/dom.js';
+import { endDay, confirmPlan, acknowledgeReport } from '../js/core/game.js';
+import { tip, restoreScrollLeft, isRestoredScroll } from '../js/ui/dom.js';
 import { scrapReturn, smithMinutes, repairMinutes, wearLoss } from '../js/core/gear.js';
 import { skillDefs, skillHoverText } from '../js/core/skills.js';
 import { intelValue } from '../js/core/intel.js';
 import { growth } from '../js/core/enemies.js';
 import { durText, repairGainShown, winText } from '../js/ui/present.js';
 import { attrValueText, wearText } from '../js/ui/endday.js';
+import { whenEstimatesDone } from '../js/ui/estimates.js';
+import { bannersLine, bannerLabel, bannersText, groupRewardText } from '../js/core/groups.js';
+import { hiddenGradeOdds } from '../js/core/enemies.js';
+import { canSpendIntel } from '../js/core/intel.js';
 import { travel, search, currentField, sightValue, seenItems, expectedSearches, searchesText, searchesToFinish } from '../js/core/map.js';
 import { game, cfgWith, addGear, addRing, fieldAt, setSkillLevel, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START } from './helpers.mjs';
 
@@ -311,7 +315,11 @@ test('the plan screen offers all six intel tracks, with or without a point to sp
     for (const t of Object.values(CONFIG.intel.tracks)) assert.ok(text.includes(t.name), `${pts} points: ${t.name}`);
     assert.match(text, new RegExp(`${CONFIG.intel.tracks.oreSight.base} sight`));
   }
-  assert.match(textOf(render(renderPlan, statePlan(1))), new RegExp(`Spend 1 point: ${CONFIG.intel.tracks.oreSight.base} sight → \\d+ sight`));
+  assert.match(textOf(render(renderPlan, statePlan(1))), new RegExp(`${CONFIG.intel.tracks.oreSight.base} sight → \\d+ sight`));
+  // one Spend button per track while a point is in hand, none without
+  const spendButtons = (pts) => findAll(render(renderPlan, statePlan(pts)), (el) => el.tagName === 'BUTTON' && el.attributes['data-intel'] !== undefined);
+  assert.equal(spendButtons(1).length, Object.keys(CONFIG.intel.tracks).length);
+  assert.equal(spendButtons(0).length, 0);
 });
 
 test('spending intel says the new value in the track\'s unit', () => {
@@ -495,7 +503,7 @@ test('enemy growth is never shown: no "Rating growth" row, no "Ratings x1.05" st
 
 test('a Low special reads "none", and Accurate / Evasion show the value on the fight day', () => {
   const s = statePlan(0);
-  s.intel.spent.enemySight = 1000; // every attribute visible
+  for (const e of s.roster.enemies) for (const k of Object.keys(e.sight)) e.sight[k] = 0; // every attribute visible
   const day = s.roster.day;
   const A = CONFIG.enemies.attributes;
   const text = textOf(render(renderPlan, s));
@@ -541,8 +549,9 @@ test('durability is shown as a whole number on every screen (never a decimal fol
     const root = render(fn, addWorn(stateDay1()));
     const cells = withClass(root, cls);
     assert.equal(cells.length, 4, `${label}: one durability cell per item`);
-    assert.deepEqual(cells.map(textOf).sort(), ['1%', '12%', '63%', '99%'], label);
-    for (const t of cells.map(textOf)) assert.match(t, whole);
+    const shown = cells.map((c) => textOf(c).replace('⚠', '')); // the Adventurer tab flags an item that could break with a warning icon
+    assert.deepEqual(shown.sort(), ['1%', '12%', '63%', '99%'], label);
+    for (const t of shown) assert.match(t, whole);
     assert.doesNotMatch(readable(root), /\d\.\d+%\s*(durability|left)/i, label);
   }
   // Workshop repair buttons: the gain is 100 minus the shown durability
@@ -552,7 +561,7 @@ test('durability is shown as a whole number on every screen (never a decimal fol
   // plan screen (pack gear step): durability bars and the could-be-destroyed list
   const plan = addWorn(statePlan(0));
   const planRoot = render(renderPlan, plan);
-  const planDur = withClass(planRoot, 'adv-dur').map(textOf);
+  const planDur = withClass(planRoot, 'adv-dur').map((c) => textOf(c).replace(/[⚠✓]/g, '')); // the icon sits at the end of the cell
   assert.ok(planDur.length >= 4);
   for (const t of planDur) assert.match(t, whole);
   assert.doesNotMatch(readable(planRoot), /\d\.\d+%\s*(durability|left)|\(\d+\.\d+%\)/i);
@@ -633,4 +642,405 @@ test('winText is the whole-percent text used by the estimates', () => {
 
 test('the day clock still starts at the configured time (sanity for the shared test states)', () => {
   assert.equal(stateDay1().time, DAY_START);
+});
+
+// ------------------------------------------------------------ batch 4 ----
+const ids = (items) => items.map((g) => g.id);
+const clickOf = (el) => (el.listeners.click || [])[0];
+const buttonById = (root, id) => findAll(root, (el) => el.tagName === 'BUTTON' && el.attributes.id === id)[0];
+const isDisabled = (el) => el.hasAttribute('disabled');
+
+// Make every attribute of a roster enemy visible and set the levels named in `levels` (the rest Normal).
+function reveal(enemy, levels = {}) {
+  for (const k of Object.keys(enemy.sight)) enemy.sight[k] = 0;
+  enemy.levels = { ...Object.fromEntries(Object.keys(enemy.levels).map((k) => [k, 'normal'])), ...levels };
+}
+
+// The plan screen with an enemy already chosen (the selection lives in ctx.ui.plan).
+function chosenPlanCtx(s, enemyIndex, gearIds, cfg = CONFIG) {
+  const ctx = makeCtx(s, cfg);
+  ctx.ui.plan = { rosterDay: s.roster.day, seed: s.seed, enemyIndex, gearIds: [...gearIds], ringIds: [], wornKey: '', fresh: false };
+  return ctx;
+}
+
+test('the plan screen has a Banner row, a banners line, a plain Defense section row and no Estimate all anywhere', () => {
+  const s = statePlan(0);
+  const root = render(renderPlan, s);
+  const text = readable(root);
+  assert.match(textOf(root), /Banner/);
+  assert.match(textOf(root), new RegExp(bannersLine(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the banners line under the roster');
+  assert.ok(text.includes(bannersText(CONFIG)), 'the hover tells the story of the banners');
+  assert.doesNotMatch(text, /Estimate all/i);
+  // Defense is a section row (a single row header, then one cell spanning the columns), not a row of enemy names
+  const rows = findAll(root, (el) => el.tagName === 'TR' && el.classList.contains('rt-sect'));
+  assert.deepEqual(rows.map((r) => textOf(r.children[0])), ['Offense', 'Defense']);
+  for (const r of rows) assert.equal(r.children.length, 2, 'a label and one cell spanning the columns');
+  const defense = rows[1];
+  for (const e of s.roster.enemies) assert.ok(!textOf(defense).includes(e.name), `no ${e.name} in the Defense row`);
+  assert.equal(findAll(root, (el) => el.classList.contains('rt-sect-names')).length, 0);
+  // no screen of any phase says Estimate all
+  for (const state of [stateDay1(), statePlan(1), stateReport(), stateOver()]) {
+    const screens = state.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', state.phase === 'plan' ? renderPlan : state.phase === 'report' ? renderReport : renderGameOver]];
+    for (const [name, fn] of screens) assert.doesNotMatch(readable(render(fn, state)), /Estimate all/i, name);
+  }
+});
+
+test('an unspent intel point: the plan says to spend it (visible text), the Intel panel is highlighted and Confirm is disabled', () => {
+  const s = statePlan(1);
+  const root = render(renderPlan, s);
+  assert.match(textOf(root), /Spend your intel point/);
+  assert.match(textOf(root), new RegExp(`You have 1 intel point: spend it before you start day ${s.roster.day}\\.`));
+  assert.ok(withClass(root, 'adv-intel-hl').length === 1, 'highlighted panel');
+  const confirm = buttonById(root, 'adv-confirm');
+  assert.ok(isDisabled(confirm), 'Confirm is disabled');
+  assert.equal(canSpendIntel(s), true);
+  // with no point the panel is one line of the current values and Confirm is enabled
+  const quiet = render(renderPlan, statePlan(0));
+  assert.doesNotMatch(textOf(quiet), /Spend your intel point/);
+  assert.equal(withClass(quiet, 'adv-intel-hl').length, 0);
+  assert.ok(!isDisabled(buttonById(quiet, 'adv-confirm')));
+  for (const t of Object.values(CONFIG.intel.tracks)) assert.ok(textOf(quiet).includes(`${t.name} `), t.name);
+  // every track maxed: a point cannot be spent, so nothing is blocked
+  const maxed = statePlan(2);
+  for (const k of Object.keys(CONFIG.intel.tracks)) maxed.intel.spent[k] = 1000;
+  const m = render(renderPlan, maxed);
+  assert.ok(!isDisabled(buttonById(m, 'adv-confirm')));
+  assert.doesNotMatch(textOf(m), /Spend your intel point/);
+  // Spend buttons spend through the core, then the gate opens
+  const ctx = makeCtx(statePlan(1));
+  const live = render(renderPlan, ctx.state, CONFIG, ctx);
+  const spend = findAll(live, (el) => el.attributes['data-intel'] === 'enemySight')[0];
+  clickOf(spend)();
+  assert.equal(ctx.state.intel.points, 0);
+  assert.ok(!isDisabled(buttonById(render(renderPlan, ctx.state, CONFIG, ctx), 'adv-confirm')));
+  // the hover of a track names the tier / grade multipliers
+  const tipText = tipsOf(render(renderPlan, statePlan(1)));
+  for (const [tier, v] of Object.entries(CONFIG.intel.tracks.enemySight.tierMult)) if (v !== 100) assert.ok(tipText.includes(`${tier}s ${v}%`.replace(/^./, (c) => c.toUpperCase())) || tipText.toLowerCase().includes(`${tier}s ${v}%`), tier);
+  assert.match(tipText, /Better ring grades are harder to see/);
+});
+
+test('the Skills & Intel tab tells you to spend points before the next day and keeps the six track rows', () => {
+  const text = readable(render(renderSkills, statePlan(1)));
+  assert.match(text, /Spend points before you start the next day/);
+  for (const t of Object.values(CONFIG.intel.tracks)) assert.ok(text.includes(t.name), t.name);
+});
+
+test('with estimates on, the Win estimate row shows "…" while it is worked out and a % with its ± afterwards', async () => {
+  const s = statePlan(0);
+  const ctx = makeCtx(s);
+  ctx.ui = {}; // estimates on
+  const first = render(renderPlan, s, CONFIG, ctx);
+  const row = (root) => findAll(root, (el) => el.tagName === 'TR' && el.classList.contains('rt-est'))[0];
+  assert.match(textOf(row(first)), /Win estimate…+/);
+  assert.match(textOf(first), /Estimating \d+ of \d+…/, 'the bottom status');
+  await whenEstimatesDone(ctx);
+  const later = render(renderPlan, s, CONFIG, ctx);
+  const cells = findAll(row(later), (el) => el.tagName === 'TD');
+  assert.equal(cells.length, s.roster.enemies.length);
+  for (const c of cells) assert.match(textOf(c), /^\d+%± \d+$/);
+  assert.doesNotMatch(textOf(later), /Estimating \d+ of/);
+  assert.match(tipsOf(row(later)), /test fights \(could be \d+-\d+%; hidden attributes add more\)/);
+  // the Adventurer tab shows the same numbers (same selection: the default pack and the worn rings)
+  const adv = render(renderAdventurer, s, CONFIG, ctx);
+  assert.match(textOf(row(adv)), /^Win estimate\d+%/);
+});
+
+// The hover text of one gear row's icon on the plan screen with enemy `idx` chosen and `items` packed.
+function flagText(s, idx, items) {
+  const root = render(renderPlan, s, CONFIG, chosenPlanCtx(s, idx, ids(items)));
+  return findAll(root, (el) => el.attributes['data-flag'] !== undefined).map((el) => el.attributes.title || '').join('\n');
+}
+
+test('the gear step: "Sword 1/2 packed" per type, pack mules raise the limit, one icon per item (⚠ could break, ✓ answers a High special)', () => {
+  const s = game(7);
+  const sword = addGear(s, 'sword', 'iron', 'C');
+  const ruby = addGear(s, 'chest', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  const worn = addGear(s, 'helmet', 'copper', 'D', null, { durability: 3 });
+  const plain = addGear(s, 'boots', 'copper', 'D');
+  assert.equal(endDay(s).ok, true);
+  reveal(s.roster.enemies[2], { magical: 'high', stunning: 'high' });
+  assert.match(flagText(s, 2, [worn]), /If left home: it cannot be repaired yet\. Need [\d.]+ copper bars of grade D or higher\./, 'no bars in stock: why it cannot be repaired');
+  s.storage.bars['copper:D'] = 5;
+  const ctx = chosenPlanCtx(s, 2, ids([sword, ruby, worn]));
+  const root = render(renderPlan, s, CONFIG, ctx);
+  const text = textOf(root);
+  const per = CONFIG.plan.perSlot;
+  assert.ok(text.includes(`Sword 1/${per} packed`) && text.includes(`Chest 1/${per} packed`) && text.includes(`Boots 0/${per} packed`), 'a header per gear type');
+  assert.ok(text.includes(`Pack up to ${per} per gear type.`));
+  const byGear = findAll(root, (el) => el.tagName === 'TR' && el.children[0] && el.children[0].children[0] && el.children[0].children[0].attributes && el.children[0].children[0].attributes['data-gear'] !== undefined);
+  const flagOf = (g) => findAll(byGear.find((r) => r.children[0].children[0].attributes['data-gear'] === String(g.id)), (el) => el.attributes['data-flag'])[0];
+  assert.equal(flagOf(ruby).attributes['data-flag'], 'ok', 'the ruby chest answers the visible High Magical');
+  assert.equal(textOf(flagOf(ruby)), '✓');
+  assert.match(flagOf(ruby).attributes.title, /Answers High Magical\./);
+  assert.equal(flagOf(worn).attributes['data-flag'], 'warn', 'a 3% helmet could break');
+  assert.equal(textOf(flagOf(worn)), '⚠');
+  assert.match(flagOf(worn).attributes.title, new RegExp(`Could break: against ${s.roster.enemies[2].name} it can lose up to \\d+% \\(it has 3%\\)\\. At 0% it is destroyed after the fight; it always lasts the whole fight\\.`));
+  assert.match(flagOf(worn).attributes.title, /If left home: repair ~[\d.]+m, [\d.]+ Copper D bars\./);
+  assert.equal(flagOf(sword).attributes['data-flag'], 'none', 'a sound sword with no gem has no icon');
+  assert.equal(flagOf(plain).attributes['data-flag'], 'none');
+  // a pack mule for swords: limit 3, and the header says why
+  s.groups.extra.sword = 1;
+  const t = textOf(render(renderPlan, s, CONFIG, chosenPlanCtx(s, 2, ids([sword, ruby, worn]))));
+  assert.ok(t.includes(`Sword 1/${per + 1} packed`));
+  assert.ok(t.includes(`(${per + 1} swords: pack mule)`), 'the one-line explanation names the pack mule');
+  assert.ok(t.includes(`Chest 1/${per} packed`));
+  // a sword whose gem is blunted by a visible High resistance gets the warning icon
+  const s2 = game(7);
+  const topaz = addGear(s2, 'sword', 'iron', 'C', { type: 'topaz', grade: 'C' });
+  endDay(s2);
+  reveal(s2.roster.enemies[0], { stunRes: 'high' });
+  const r2 = render(renderPlan, s2, CONFIG, chosenPlanCtx(s2, 0, [topaz.id]));
+  const f2 = findAll(r2, (el) => el.attributes['data-flag'] === 'warn');
+  assert.equal(f2.length, 1);
+  assert.match(f2[0].attributes.title, /Blunted by High Stun resistance\./);
+});
+
+test('the gear step table has three columns: the icon sits at the end of the durability cell, so it fits a phone', () => {
+  const s = game(7);
+  const sword = addGear(s, 'sword', 'iron', 'C', { type: 'topaz', grade: 'C' });
+  const worn = addGear(s, 'helmet', 'copper', 'D', null, { durability: 3 });
+  const plain = addGear(s, 'boots', 'copper', 'D');
+  assert.equal(endDay(s).ok, true);
+  reveal(s.roster.enemies[0], { stunRes: 'high' });
+  const root = render(renderPlan, s, CONFIG, chosenPlanCtx(s, 0, ids([sword, worn, plain])));
+  const table = findAll(root, (el) => el.tagName === 'TABLE' && el.classList.contains('adv-geartable'))[0];
+  assert.ok(table, 'the gear table');
+  assert.deepEqual(findAll(table, (el) => el.tagName === 'TH').map(textOf), ['Pack', 'Item and stats', 'Durability']);
+  const itemRows = findAll(table, (el) => el.tagName === 'TR' && el.children[0] && findAll(el.children[0], (c) => c.attributes['data-gear'] !== undefined).length === 1);
+  assert.equal(itemRows.length, 3);
+  for (const r of itemRows) {
+    assert.equal(r.children.length, 3, 'pack box, item, durability');
+    assert.equal(withClass(r.children[2], 'adv-flag').length, 1, 'the icon slot is inside the durability cell');
+  }
+  assert.equal(findAll(root, (el) => el.classList.contains('adv-flagcell')).length, 0, 'no column of its own');
+  // the section rows span all three columns
+  for (const r of findAll(table, (el) => el.tagName === 'TR' && el.classList.contains('adv-slotrow'))) assert.equal(String(r.children[0].attributes.colspan), '3');
+  // the icon is still found by its data-flag, with the same hover
+  const flags = findAll(root, (el) => el.attributes['data-flag'] !== undefined).map((el) => el.attributes['data-flag']).sort();
+  assert.deepEqual(flags, ['none', 'warn', 'warn'], 'the 3% helmet could break; the topaz sword is blunted by the High stun resistance');
+});
+
+test('the gear step legend says what the warning icon marks: could break, or a sword gem blunted by a visible High resistance', () => {
+  const s = game(7);
+  const sword = addGear(s, 'sword', 'iron', 'C', { type: 'topaz', grade: 'C' });
+  assert.equal(endDay(s).ok, true);
+  reveal(s.roster.enemies[0], { stunRes: 'high' });
+  const root = render(renderPlan, s, CONFIG, chosenPlanCtx(s, 0, ids([sword])));
+  const icon = findAll(root, (el) => el.attributes['data-flag'] === 'warn');
+  assert.equal(icon.length, 1, 'a sound 100% sword shows the warning icon because of its blunted gem');
+  assert.match(icon[0].attributes.title, /Blunted by High Stun resistance\./);
+  assert.doesNotMatch(icon[0].attributes.title, /Could break/);
+  const text = textOf(root);
+  assert.match(text, /could break against .*, or a sword gem blunted by a High resistance you can see/, 'the legend names both reasons');
+});
+
+test('the plan intro states the pack limit the way the gear step does: with a pack mule it is no longer "2 items per gear type"', () => {
+  const s = game(7);
+  addGear(s, 'sword');
+  assert.equal(endDay(s).ok, true);
+  const per = CONFIG.plan.perSlot;
+  const before = textOf(render(renderPlan, s));
+  assert.ok(before.includes(`You can pack up to ${per} per gear type.`), 'no pack mule: the plain limit');
+  s.groups.extra.sword = 1;
+  const after = textOf(render(renderPlan, s));
+  const mule = `(${per + 1} swords: pack mule)`;
+  assert.equal(after.split(mule).length - 1, 2, 'the intro and the gear step both name the pack mule');
+  assert.ok(!after.includes(`up to ${per} items per gear type`));
+});
+
+test('the Win estimate row hover names the gear of its own screen: "below this table" only on the plan screen', () => {
+  const s = statePlan(0);
+  const head = (root) => findAll(findAll(root, (el) => el.tagName === 'TR' && el.classList.contains('rt-est'))[0], (el) => el.tagName === 'TH')[0].attributes.title;
+  const plan = head(render(renderPlan, s));
+  assert.match(plan, /gear and rings you have chosen below this table/);
+  const adv = head(render(renderAdventurer, s));
+  assert.doesNotMatch(adv, /below this table|shown below/, 'on the Adventurer tab the gear is above the roster');
+  assert.match(adv, /your best gear \(the best item of each gear type\) and the rings the adventurer wears/);
+});
+
+test('the sticky confirm bar says the unspent-point sentence once, not twice', () => {
+  const s = statePlan(1);
+  const bar = withClass(render(renderPlan, s), 'adv-bar')[0];
+  const t = textOf(bar);
+  const sentence = `You have 1 intel point: spend it before you start day ${s.roster.day}.`;
+  assert.equal(t.split(sentence).length - 1, 1, t);
+  assert.doesNotMatch(t, /Spend your intel point first/);
+  assert.ok(isDisabled(buttonById(bar, 'adv-confirm')), 'Confirm stays disabled');
+});
+
+test('restoreScrollLeft: the scroll event that follows a restored position is the screen\'s, not the player\'s', () => {
+  // a scroll box that clamps like a real one
+  const box = (max) => {
+    let x = 0;
+    return { get scrollLeft() { return x; }, set scrollLeft(v) { x = Math.max(0, Math.min(max, v)); } };
+  };
+  const el = box(100);
+  restoreScrollLeft(el, 8);
+  assert.equal(el.scrollLeft, 8);
+  assert.equal(isRestoredScroll(el), true, 'the scroll event our own scrollLeft fires');
+  assert.equal(isRestoredScroll(el), false, 'only once');
+  el.scrollLeft = 20; // the player scrolls
+  assert.equal(isRestoredScroll(el), false);
+  // nothing moved: nothing is marked (0 = nothing to restore, or nothing to scroll)
+  const flat = box(0);
+  restoreScrollLeft(flat, 8);
+  assert.equal(isRestoredScroll(flat), false);
+  restoreScrollLeft(el, 0);
+  restoreScrollLeft(el, 20); // already there
+  assert.equal(isRestoredScroll(el), false);
+  // the player scrolls on before the restore's event is handled: that position is theirs
+  const busy = box(100);
+  restoreScrollLeft(busy, 8);
+  busy.scrollLeft = 30;
+  assert.equal(isRestoredScroll(busy), false);
+  assert.equal(isRestoredScroll({ scrollLeft: 0 }), false, 'a box that was never restored');
+});
+
+test('"Your answers": the High specials you can see, answered or not by the packed armor', () => {
+  const s = game(7);
+  const ruby = addGear(s, 'chest', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  const sword = addGear(s, 'sword', 'iron', 'C');
+  endDay(s);
+  reveal(s.roster.enemies[1], { magical: 'high', stunning: 'high' });
+  const root = render(renderPlan, s, CONFIG, chosenPlanCtx(s, 1, ids([ruby, sword])));
+  const row = findAll(root, (el) => el.tagName === 'TR' && el.classList.contains('adv-answers'))[0];
+  assert.ok(row, 'a row in the matchup table');
+  const t = textOf(row);
+  assert.match(t, /^Your answers/);
+  assert.ok(t.includes(`✓ ${CONFIG.enemies.attributes.magical.name} (ruby chest)`), t);
+  assert.ok(t.includes(`✗ ${CONFIG.enemies.attributes.stunning.name} (no topaz armor packed)`), t);
+  // nothing visible: a plain sentence
+  const s2 = game(7);
+  addGear(s2, 'sword');
+  endDay(s2);
+  const r2 = render(renderPlan, s2, CONFIG, chosenPlanCtx(s2, 0, []));
+  const row2 = findAll(r2, (el) => el.classList.contains('adv-answers'))[0];
+  assert.match(textOf(row2), /No High special to answer that you can see/);
+});
+
+test('banner chips: the colour when scouted, "?" with the odds text when not; the report always shows it', () => {
+  const s = statePlan(0);
+  const [seen, hidden] = s.roster.enemies;
+  seen.group = 'black';
+  seen.groupRoll = 0;
+  hidden.group = 'gold';
+  hidden.groupRoll = 99.9;
+  const root = render(renderPlan, s);
+  const chips = findAll(root, (el) => el.classList.contains('bn'));
+  const chip = chips.find((c) => c.classList.contains('bn-black'));
+  assert.ok(chip, 'a black chip');
+  assert.equal(textOf(chip), bannerLabel('black'));
+  const unknown = chips.find((c) => c.classList.contains('bn-unknown'));
+  assert.equal(textOf(unknown), '?');
+  const names = Object.keys(CONFIG.groups.list).map((k) => bannerLabel(k));
+  assert.equal(unknown.attributes.title, `Banner unknown: ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]} (equally likely). Banner scouting: ${CONFIG.intel.tracks.groupSight.base}%.`);
+  assert.ok(!chips.some((c) => c.classList.contains('bn-gold')), 'the hidden banner is not revealed');
+  // the report shows the banner whatever the scouting was
+  const rs = stateReport();
+  assert.match(textOf(render(renderReport, rs)), new RegExp(`Banner: ${bannerLabel(rs.report.enemy.group)}`));
+  // and after the win the pack mule text when one was earned
+  const g = game(9, WIN);
+  endDay(g, WIN);
+  for (let n = 0; n < CONFIG.groups.defeatsPerReward; n++) {
+    spendAll(g, WIN);
+    g.roster.enemies[0].group = 'red';
+    assert.equal(confirmPlan(g, { enemyIndex: 0, gearIds: [], ringIds: [] }, WIN).ok, true);
+    endDay(g, WIN);
+    if (g.phase === 'report' && n < CONFIG.groups.defeatsPerReward - 1) acknowledgeReport(g);
+  }
+  assert.ok(g.report.groupReward);
+  const rtext = textOf(render(renderReport, g, WIN));
+  assert.ok(rtext.includes(groupRewardText(g.report, WIN)), 'the pack mule line');
+  assert.match(rtext, /capture a pack mule: from now on the adventurer can pack \d+ /);
+});
+
+function spendAll(s, cfg) {
+  for (const k of Object.keys(cfg.intel.tracks)) while (canSpendIntel(s, cfg)) { s.intel.spent[k] = (s.intel.spent[k] || 0) + 1; s.intel.points -= 1; }
+}
+
+test('a hidden ring grade says the odds of each grade given that it is hidden', () => {
+  const s = statePlan(0);
+  const e = s.roster.enemies.find((x) => x.tier === 'champion');
+  e.ringGradeRoll = 99.9; // hidden whatever the scouting
+  e.ringTypeRoll = 99.9;
+  const root = render(renderPlan, s);
+  const odds = Object.entries(hiddenGradeOdds(s, e)).map(([g, v]) => `${g} ${Math.round(v)}%`).join(', ');
+  assert.ok(readable(root).includes(`Grade hidden. Given that it is hidden: ${odds} (better grades are harder to scout).`), odds);
+});
+
+test('the Adventurer tab: a banners line, the Banner row, the estimate row and today\'s planned estimate', () => {
+  const s = stateDay1();
+  const root = render(renderAdventurer, s);
+  assert.ok(textOf(root).includes(bannersLine(s)));
+  assert.match(textOf(root), /Banner/);
+  assert.match(textOf(root), /worked out by itself with your best gear/);
+  assert.match(textOf(root), /Win estimate/);
+  assert.doesNotMatch(readable(root), /Estimate all|plan screen at the end of the day/);
+  // with a fight planned: "Your plan showed 72% ± 14."
+  const t = game(7, WIN);
+  endDay(t, WIN);
+  const plan = { enemyIndex: 0, gearIds: [], ringIds: [], shownEstimate: { winPct: 72, margin: 14 } };
+  assert.equal(confirmPlan(t, plan, WIN).ok, true);
+  assert.match(textOf(render(renderAdventurer, t, WIN)), /Your plan showed 72% ± 14\./);
+  const u = game(7, WIN);
+  endDay(u, WIN);
+  assert.equal(confirmPlan(u, { enemyIndex: 0, gearIds: [], ringIds: [] }, WIN).ok, true);
+  assert.match(textOf(render(renderAdventurer, u, WIN)), /Your plan had no finished win estimate\./);
+  // the report keeps what the plan showed
+  const rep = endDay(t, WIN).report;
+  assert.deepEqual(rep.planEstimate, { winPct: 72, margin: 14 });
+  assert.match(textOf(render(renderReport, t, WIN)), /Your plan showed 72% ± 14\./);
+  // an item that could break against the toughest enemy has the warning icon on the Adventurer tab
+  const w = stateDay1();
+  addGear(w, 'sword', 'iron', 'C', null, { durability: 2 });
+  assert.match(textOf(render(renderAdventurer, w)), /2%⚠/);
+});
+
+test('Confirm asks about packed items that could break and a win estimate that is not finished; it passes the shown estimate on', async () => {
+  const asked = [];
+  globalThis.confirm = (msg) => { asked.push(msg); return true; };
+  try {
+    const s = game(7, WIN);
+    const worn = addGear(s, 'sword', 'iron', 'C', null, { durability: 2 });
+    const boots = addGear(s, 'boots', 'copper', 'D', null, { durability: 1 });
+    endDay(s, WIN);
+    const ctx = chosenPlanCtx(s, 0, ids([worn, boots]), WIN);
+    const root = render(renderPlan, s, WIN, ctx);
+    clickOf(buttonById(root, 'adv-confirm'))();
+    assert.equal(asked.length, 1);
+    const names = [worn, boots].map((g) => `${g.grade} ${g.material[0].toUpperCase()}${g.material.slice(1)} ${g.slot[0].toUpperCase()}${g.slot.slice(1)}`);
+    assert.match(asked[0], /2 packed items could break in this fight: /);
+    for (const n of names) assert.ok(asked[0].includes(n), n);
+    assert.ok(asked[0].includes(`The win estimate for ${s.roster.enemies[0].name} is not finished yet.`));
+    assert.match(asked[0], /A lost fight ends the game\. Confirm anyway\?/);
+    assert.equal(s.phase, 'work', 'the plan was confirmed after the yes');
+    assert.equal(s.plan.shownEstimate, null, 'no finished estimate to pass on');
+    // with a finished estimate and sound gear there is no question, and the estimate goes into the plan
+    const t = game(7, WIN);
+    const sword = addGear(t, 'sword', 'iron', 'C');
+    endDay(t, WIN);
+    const live = makeCtx(t, WIN);
+    live.ui = {};
+    live.ui.plan = { rosterDay: t.roster.day, seed: t.seed, enemyIndex: 0, gearIds: [sword.id], ringIds: [], wornKey: '', fresh: false };
+    render(renderPlan, t, WIN, live);
+    await whenEstimatesDone(live);
+    asked.length = 0;
+    const shown = render(renderPlan, t, WIN, live);
+    clickOf(buttonById(shown, 'adv-confirm'))();
+    assert.equal(asked.length, 0, 'nothing risky: no question');
+    const planned = t.plan.shownEstimate;
+    assert.ok(planned && Number.isFinite(planned.winPct) && Number.isFinite(planned.margin));
+    assert.deepEqual(endDay(t, WIN).report.planEstimate, planned, 'the report keeps what the plan showed');
+  } finally {
+    delete globalThis.confirm;
+  }
+});
+
+test('Help has a Banners section and the intel notes (multipliers, spend first), and no Estimate all', () => {
+  const text = readable(render(renderHelp, stateDay1()));
+  assert.ok(text.includes(bannersText(CONFIG)));
+  assert.match(text, /must be spent before the next day can start/);
+  assert.match(text, /Banner scouting/);
+  assert.doesNotMatch(text, /Estimate all/i);
+  assert.match(text, /worked out by itself/i);
 });

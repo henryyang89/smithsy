@@ -79,7 +79,6 @@ p.mi-note { margin: 4px 0 8px; }
 .mi-intel td:first-child { min-width: 200px; }
 .mi-intel td:last-child { white-space: nowrap; }
 .mi-chance { min-width: 160px; }
-.mi-sched { max-width: 640px; }
 
 /* help: reference tables size to their content (cards keep full width) */
 .mi-help .mi-det-body .mi-table { width: auto; min-width: min(100%, 360px); }

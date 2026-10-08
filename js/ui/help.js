@@ -9,6 +9,8 @@ import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, scrapReturn, wearLoss }
 import { enemyCombatant } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp, xpPerUnit, effectText } from '../core/skills.js';
 import { trackValueText } from '../core/intel.js';
+import { bannersText } from '../core/groups.js';
+import { slotNoun } from '../core/pack.js';
 import { sightRange, searchesToFinish, searchesText } from '../core/map.js';
 import { simCounts } from '../core/sim.js';
 import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
@@ -61,6 +63,12 @@ function sub(title) {
   return h('h4', {}, title);
 }
 
+// "; elite 90%, champion 80% of the chance" for a { key: percent } multiplier table (empty when every value is 100).
+function tierMultText(mult, what) {
+  const bits = Object.entries(mult || {}).filter(([, v]) => v !== 100).map(([k, v]) => `${what === 'tier' ? k : `grade ${k}`} ${v}%`);
+  return bits.length ? `; ${bits.join(', ')} of that` : '';
+}
+
 // Weights -> percentages (same keys).
 function toPct(weights) {
   const total = Object.values(weights).reduce((a, b) => a + Math.max(0, b), 0) || 1;
@@ -109,6 +117,7 @@ const SECTIONS = [
   ['adventurer', 'Adventurer', adventurerSection],
   ['combat', 'Combat formulas', combatSection],
   ['enemies', 'Enemies', enemySection],
+  ['banners', 'Banners', bannersSection],
   ['rings', 'Rings', ringSection],
   ['skills', 'Skills', skillSection],
   ['intel', 'Intel', intelSection],
@@ -168,16 +177,16 @@ function howToPlay(ctx) {
         `Debris (the number on a brown cell) is cleared by searching; boulders can never be searched. Field actions are only allowed while you can still walk back to camp by ${formatClock(t.dayEndMin)}. Arriving at camp unloads the bag into storage.`),
       h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear (it costs bars and time). Scrap gear you no longer need to get some bars back.'),
       h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
-        `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to 2 items per gear slot, and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
+        `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to ${cfg.plan.perSlot} items per gear type (more once your adventurer has captured pack mules, see Banners below), and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
         h('b', {}, 'Keep a spare of each item so you can leave one home to repair it:'), ' repairs happen by day, at camp, on gear the adventurer does not have.'),
       h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
         'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
         `It comes back at the end of the day; every item that was used loses about ${p((wear.min + wear.max) / 2, 0)} durability (${wear.min}-${wear.max}% before the modifiers below), a little more against tougher enemies (${TIERS.map((t) => `${t} x${(wear.tierMult && wear.tierMult[t]) || 1}`).join(', ')}) and a little less with the ${cfg.skills.activity.gearCare ? cfg.skills.activity.gearCare.name : 'Gear care'} skill. At 0% it is destroyed.`),
       h('li', {}, h('b', {}, 'Day 1 is a rest day. '), 'From day 2 on there is a fight every day; it cannot be skipped.')),
     h('ul', { class: 'mi-list' },
-      h('li', {}, 'Enemy attributes and reward rings are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them.'),
+      h('li', {}, 'Enemy attributes, reward rings and banners are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them. A point you can still spend must be spent before the next day starts.'),
       h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
-      h('li', {}, `The plan screen can simulate the fight to estimate your win chance before you confirm: one button, Estimate all, runs ${simSummary(ctx.state, cfg)} for every enemy of the roster and fills the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and a Foresight ring make it bigger.`),
+      h('li', {}, `Your win chance against every enemy is worked out by itself, on the plan screen and on the Adventurer tab: ${simSummary(ctx.state, cfg)}, shown in the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and a Foresight ring make it bigger.`),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
       h('li', {}, 'Skills level up on their own as you work (', tab('skills', 'Skills & Intel'), '). Farther fields are richer but cost more travel time.'),
       h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
@@ -527,7 +536,7 @@ function combatSection(cfg) {
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries the combinations of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best. An item that another packed item of the same type beats in every stat is skipped; if more than ${cfg.sim.maxExactCombos} combinations are left, it improves one gear type at a time instead.`],
-      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a risk you plan with. Every estimate shows its ± (for example 62% ± 14: the test fights alone could be off by about 14 points; hidden attributes can make the real chance higher or lower); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and your best Foresight smith ring adds more of each (only the best one counts). Draws count as survival.`],
+      ['Win-chance estimate', `Worked out by itself for the whole roster (plan screen and Adventurer tab). For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a risk you plan with. Every estimate shows its ± (for example 62% ± 14: the test fights alone could be off by about 14 points; hidden attributes can make the real chance higher or lower); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and your best Foresight smith ring adds more of each (only the best one counts). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -556,11 +565,11 @@ function enemySection(cfg) {
   });
   // One row per pair: offense on the left, its matching defense on the right. A value of 0 (Low specials and
   // resistances) reads "none": the enemy does not have it.
-  const lvCells = (a) => LEVELS.map((lv) => ({ v: a.values[lv] === 0 ? 'none' : num(a.values[lv], 2), cls: `num attr-${lv}` }));
+  const lvCells = (a, key) => LEVELS.map((lv) => ({ v: a.values[lv] === 0 && key !== 'fast' ? 'none' : num(a.values[lv], 2), cls: `num attr-${lv}` })); // Fast 0 is a normal speed, not a missing ability
   const attrRows = e.pairs.map(([o, d]) => {
     const ao = e.attributes[o];
     const ad = e.attributes[d];
-    return [h('b', {}, ao.name), ...lvCells(ao), ao.desc, h('b', {}, ad.name), ...lvCells(ad), ad.desc];
+    return [h('b', {}, ao.name), ...lvCells(ao, o), ao.desc, h('b', {}, ad.name), ...lvCells(ad, d), ad.desc];
   });
   const rosterN = TIERS.reduce((a, t) => a + e.tiers[t].count, 0);
   return [
@@ -569,7 +578,7 @@ function enemySection(cfg) {
       ['Attack bar', `fills in ${num(e.attackInterval, 2)}s at 0% speed (the Fast attribute changes speed)`],
       ['Stun / slow', `An enemy stun stops your attack bar for ${num(e.stunDuration, 2)}s; a Chilling hit makes your bar fill slower (by its Chilling %) for ${num(e.slowDuration, 2)}s. Both before your resistances; neither stacks.`],
       ['Growth', 'Enemies get a little stronger every day.'],
-      ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base).`],
+      ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base${tierMultText(cfg.intel.tracks.enemySight.tierMult, 'tier')}).`],
       ['Low', 'Low means the enemy does not have that ability at all (shown as none): a Low Magical enemy deals no magic damage, a Low Chilling enemy never slows you, a Low resistance resists nothing. Accurate, Evasion, Fast and HP are core stats and only move a little between levels.'],
     ]),
     sub('Tiers (base values on day 1; enemies grow stronger every day)'),
@@ -655,6 +664,21 @@ function skillSection(cfg) {
   ];
 }
 
+// ----------------------------------------------------------------- banners ----
+function bannersSection(cfg) {
+  const g = cfg.groups;
+  const max = SLOTS.length * g.maxExtraPerType;
+  return [
+    h('p', { class: 'mi-note' }, bannersText(cfg)),
+    kv([
+      ['Banner', 'Random for each enemy. It has no effect on the enemy\'s attributes, and it is not tied to its name.'],
+      ['Banner scouting', `Intel track: ${trackValueText('groupSight', cfg.intel.tracks.groupSight.base, cfg)} to start with, up to ${trackValueText('groupSight', cfg.intel.tracks.groupSight.max, cfg)}. The battle report always shows the banner.`],
+      ['Pack mules', `Every ${g.defeatsPerReward} wins against the banner your adventurer has beaten most: 1 more item of one gear type (${SLOTS.map((s) => slotNoun(s, 2)).join(', ')}) can be packed from then on, up to ${max} pack mules in all. Wins over different banners do not add up, and a draw or a loss counts for nothing. A pack mule is never taken back.`],
+      ['Packing', `Without pack mules the adventurer can pack ${cfg.plan.perSlot} items of each gear type. The plan screen's gear step shows the limit per type.`],
+    ]),
+  ];
+}
+
 // ------------------------------------------------------------------- intel ----
 function intelSection(cfg) {
   const ic = cfg.intel;
@@ -663,7 +687,9 @@ function intelSection(cfg) {
   return [
     kv([
       ['Earning', `1 intel point at the end of every ${ordinal(ic.daysPerPoint)} day (day ${ic.daysPerPoint}, ${ic.daysPerPoint * 2}, ${ic.daysPerPoint * 3}, ...).`],
-      ['Spending', 'Each point raises one track. Every track has its own steps, and the steps get smaller as you spend more on the same track. The Skills & Intel tab shows each track\'s current value and what the next point adds.'],
+      ['Spending', 'Each point raises one track. Every track has its own steps, and the steps get smaller as you spend more on the same track. The Skills & Intel tab shows each track\'s current value and what the next point adds. A point that can still raise a track must be spent before the next day can start (the plan screen has the buttons at the top).'],
+      ['Elites and champions', `Enemy scouting counts for less against tougher enemies${tierMultText(ic.tracks.enemySight.tierMult, 'tier') ? `: ${tierMultText(ic.tracks.enemySight.tierMult, 'tier').replace(/^; /, '')}` : ''}. Ring grade scouting counts for less against better ring grades${tierMultText(ic.tracks.ringGradeSight.gradeMult, 'grade') ? `: ${tierMultText(ic.tracks.ringGradeSight.gradeMult, 'grade').replace(/^; /, '')}` : ''}.`],
+      ['Banner scouting', `The chance to see which banner an enemy marches under (see Banners). Starts at ${trackValueText('groupSight', ic.tracks.groupSight.base, cfg)}.`],
       ['Ore sight', `Your sight in the fields (see Fields & searching): ${trackValueText('oreSight', ic.tracks.oreSight.base, cfg)} to start with, up to ${trackValueText('oreSight', ic.tracks.oreSight.max, cfg)}. Ore sight rings add to it.`],
       ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win-chance estimate (base ${cfg.sim.samples} guesses x ${cfg.sim.evalFights} fights). Each point gives +${sd.gains[0]}, up to +${sd.max}; every extra guess and fight also makes the estimate slower to run.`],
     ]),

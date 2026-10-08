@@ -31,6 +31,23 @@ export function tip(text) {
   return { title: text, 'data-tip': text };
 }
 
+// A re-render builds new elements, so a scroll box starts at 0 again and the screen puts the old position back. Setting
+// scrollLeft fires a scroll event that is not the player's: installTips() (js/main.js) must not close an open popover for
+// it (a tap on a hover chip in an unselected roster column selects that column, which re-renders the screen).
+const restoredScroll = new WeakMap();
+export function restoreScrollLeft(el, x) {
+  if (!x || el.scrollLeft === x) return;
+  el.scrollLeft = x;
+  if (el.scrollLeft) restoredScroll.set(el, el.scrollLeft); // 0: nothing could scroll, no event follows
+}
+// True once for the scroll event that follows restoreScrollLeft (the box is still where it was put).
+export function isRestoredScroll(el) {
+  const at = restoredScroll.get(el);
+  if (at === undefined) return false;
+  restoredScroll.delete(el);
+  return at === el.scrollLeft;
+}
+
 export function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
   return el;

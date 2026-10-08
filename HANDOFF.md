@@ -686,6 +686,157 @@ what was done instead and which batch it touches.
   roster with "Low · none" and fight-day ratings, Estimate all in a real DOM (100% ± 14, usage by ids), confirm, end day and
   the report, the Adventurer tab, Workshop, Rings and Help: no console errors, no horizontal overflow.
 
+**Batch 4 (banners, intel multipliers and gate, automatic win estimate, plan screen)**
+- **`estimateKey(state, scope, enemyIndex, cfg, counts)` has no `groupSig`.** The plan lists `groupSig?` in the key; the banner
+  changes nothing about a fight, so putting it in would recompute estimates for no reason. A test pins that the banner and an
+  item's wear are not part of the key. The key is `[seed, rosterDay, enemyIndex, sorted gear ids, sorted ring ids, visible
+  `attr:level` pairs, samples, evalFights, fightsPerLoadout]`; the plan screen and the Adventurer tab share results when their
+  gear and rings are the same (the screen id is not in the key).
+- **`js/ui/estimates.js` API.** `scheduleEstimates(ctx, scope, { immediate })`, `cancelEstimates`, `cachedEstimate` as in the plan;
+  `scope` also carries `selected` (the chosen enemy, worked out first; not part of the key). Extras: `clearEstimates` (cancel +
+  empty the cache; main.js `newGame` calls it), `estimatesPending`, `estimateStatus` ("Estimating 3 of 7…"), `estimateCell` (moved
+  here from endday.js), `whenEstimatesDone` (tests), `DEBOUNCE_MS` 300. State lives in `ctx.ui.est_*` (`est_cache`, `est_run`,
+  `est_timer`, `est_scope`, `est_roster`, `est_first`). The default start is at once for the first run of a roster and after the
+  debounce for later changes; the plan screen also passes `immediate` for the first render of a roster. Finished enemies are painted
+  into the open roster table in place (`.rt td[data-est]`, `.est-status`); the chosen enemy's finish and the end of a run re-render
+  the screen once. A run is not cancelled when the player leaves the tab (it is cheap and its results are cached for when they
+  come back); the plan confirm and a new game cancel it. An estimate is not shown while it is being redone: its cell says "…".
+- **`defaultPack(state, cfg, tier = null)` returns item ids** (not items) and passes `tier` to `couldBreak` (null = the toughest
+  tier). When every item of a type could break, the best ones are packed anyway. `leaveWornHome(state, ids, cfg)` also returns ids.
+  The Adventurer tab's estimate uses `defaultPack(state)` and the worn adventurer rings.
+- **`confirmPlan` takes `plan.shownEstimate` from the UI** (`{ winPct, margin }`, anything else becomes null) and stores it in
+  `state.plan.shownEstimate`; `resolveBattle` copies it to `report.planEstimate`. The gate message is checked after the phase check
+  and before the plan check ("Spend your intel point first (Intel, at the top of this screen).").
+- **Pack-limit message.** `validatePlan` says "At most 3 swords." (plural from `slotNoun`: swords, chests, helmets, pairs of gloves,
+  pairs of boots); the 1.2 text "At most 2 items per slot (sword)." is gone.
+- **Extra report fields:** `report.groupDefeats` (that banner's wins after the reward win) and `report.groupLimit` (the pack limit of
+  the rewarded type), besides `groupReward` / `enemy.group`, so the pack-mule sentence stays right in an old report
+  (`groupRewardText(report)` in `js/core/groups.js`, also logged). `bannersLine`, `bannersText` (the story, also Help) and
+  `bannerLabel` live in groups.js too.
+- **Tier points (U3).** B4 adds none: the new Banner row and the rewritten confirm bar have none ("Fight Orc Brute (elite)
+  tomorrow", not "+25 pts"). The ones that were already there (roster Tier row "+10 pts", enemy card, the Today panel, report "+N
+  points", Help) are still B5's to remove.
+- **Confirm dialog** also says "The win estimate for X is not finished yet." when the chosen enemy has no result (for example with
+  estimates off), and "N packed items could break in this fight: ..." uses `couldBreak` against the chosen tier for the packed items
+  (items that stay unused do not wear, so this is the worst case, as the plan words it). The "Pack nothing" button stays next to the
+  plan's two buttons.
+- **Gear step.** Three columns (Pack, Item and stats, Durability); the one icon slot sits at the END OF THE DURABILITY CELL (a fixed
+  22 px after the number, so the bars line up; `data-flag` is still on the icon). The first build had a 4th column, which put the
+  icon 16 px (390 px screen) / 46 px (360 px) outside the scroll box; under 600 px the gem now wraps under the item name
+  (`.adv-gbase` / `.adv-gem` keep "C Iron Sword" and "+Topaz C" whole) and the bar gives way, so the table is 328 px wide in a 328
+  px box at 390 px and 298 px at 360 px (measured in Chromium). The icon is ⚠ for could-break or a sword gem blunted by a
+  visible High resistance (the legend says both: "or a sword gem blunted by a High resistance you can see"; plan 4.14 only names
+  could-break, kept as a deviation because a blunted gem is worth a visible cue), ✓ for an armor gem that answers a visible High
+  special, with everything in the hover (`white-space: pre-line` popover shows the lines). The plan intro says the pack limit the way
+  the gear step does ("You can pack up to 2 per gear type (3 swords: pack mule)", one `packLimitText`). "Your answers" covers the five gem matches (Accurate / emerald too, as `GEM_MATCH`). The 1.2
+  red "could be destroyed" line under the table is gone (replaced by the icons), and `durabilityNode(g, cfg, wear, risky)` (Adventurer
+  tab) now takes the could-break flag from `couldBreak` against the toughest tier.
+- **Intel panel.** With a spendable point: highlighted panel, grid of `name value → next [Spend]` (2 columns, 1 on phones), tip from
+  `intelTip` (desc + "Elites 90%, champions 80% of this." / "Better ring grades are harder to see: ..."); without one, the one
+  line. A point on a track-less config (everything maxed) shows "every track is at its maximum" and does not block. The Skills tab
+  lists the same rows with the same tips and "Spend points before you start the next day."
+- **Hidden ring grade.** The enemy card and the roster cell say "Given that it is hidden: C 55%, B 33%, A 12% (better grades are
+  harder to scout)." from `hiddenGradeOdds`; the plain tier odds are no longer shown for a hidden grade.
+- **Help (B4 parts only).** New "Banners" section (the plan's story from config), the "Estimate all" sentences are now "worked out by
+  itself", the intel section has the spend-first rule, the tier / grade multipliers and Banner scouting; "pack up to N per gear
+  type". B5 still owns the full pass. The Help attribute table no longer calls Fast Normal "none" (B3 open note).
+- **Bot (tools/balance.mjs, 8.2 B4).** Packs `packLimit` per type; `spendIntelPoints` follows the careful list `[['enemySight', 40],
+  ['simDepth', 3], ['groupSight', 50], ['oreSight', 30], ['*']]` (in `botParams` until the personas of B6) and always spends every
+  point; EV = `p/100 x (score + future + ringValue + bannerBonus)`. `ringValue` = ring value x weight (`ringW` win % per unit for
+  adventurer rings, `smithW` for smith rings) x `ringPoints` (new, 1 point per weighted unit: the plan gives no scale; B6/B7 may
+  retune), averaged over the types and grades a hidden ring could be (grades through `hiddenGradeOdds`); `bannerBonus` 10 when the
+  enemy's banner is visible and is the bot's most-beaten one. `--ablate intel` now sets every track's gains to `[0]` in memory
+  (nothing can be spent, so the gate stays open) instead of "never spend". The bot section prints pack mules earned per run.
+- **Saves.** A same-version save written by the B3 tree has no `groups`, so `assertShape` rejects it (backed up, new game), like the
+  B2 note. No release has shipped 2.0.
+- **Earlier open notes fixed here (cheap, inside this batch's files):** "9-9s" in the Matchup time range (`fmt` compares the rounded
+  numbers); "1 attributes hidden" grammar; the plan screen's could-destroy threshold line (replaced by the icons); Help Fast "none";
+  the touch popover no longer opens on an enabled button / checkbox (`installTips`) and `[data-tip]` buttons keep the hand cursor;
+  dead CSS `.mv-empty`, `.mv-group`, `.mi-sched`, `rt-sect-names` removed.
+- **Batch 4 open notes**
+  - [minor] README still describes the 1.2 plan screen ("Estimate all", pack 2 per slot, 10 x 10) and CHANGELOG has no 2.0 section
+    (B7). The `Estimate all` guard in `tests/spec-guards.test.mjs` covers js and css only.
+  - [minor] The bot's `ringPoints` 1 and `bannerBonus` 10 are untuned guesses; with them the careful bot picks about 15% elites and
+    85% champions on days 11-30 (--quick, 3 seeds): look at it with the real benchmark in B6/B7.
+  - [minor] Review fixes: the sticky confirm bar says the unspent-point sentence once ("You have 1 intel point: spend it before you start
+    day 6."); the capitalised "Spend your intel point on a track below." now opens the Intel panel's text instead (the Batch 4
+    ui-render test and the plan's "contains 'Spend your intel point'" read the whole screen). The bar is 128 px at 390 px (B3: 94 px,
+    first B4 build: 144 px), 164 px at 360 px (first build 181 px).
+  - [minor] Review fixes: a screen puts a scroll box back through `restoreScrollLeft` (js/ui/dom.js) and the tip popover's scroll
+    listener skips that one event (`isRestoredScroll`). A first tap on a hover chip inside an unselected roster column selects the
+    column, which re-renders the plan and restores `.rt-scroll`; that used to close the popover at once (measured at 390 px with
+    touch: hidden after the first tap, shown after the second; now shown after the first). Checking "only set scrollLeft when it
+    differs" was not enough: a re-rendered box is a new element that starts at 0, so the position always differs.
+  - [minor] The roster's row-header hovers (Tier, Base HP, ..., Banner, Win estimate) are `title` only, so a phone cannot read them (the
+    Banner "?" chip and the cells use `tip`). The Win estimate hover now says its own screen's gear (`opts.estimateTip`). Not
+    changed here: giving every row header `tip()` is a one-line change for B5's pass.
+  - [minor] A run keeps going when the player leaves the Adventurer tab; the final re-render then redraws whichever tab is open
+    (harmless, but it does re-render once).
+  - [minor] Hand-checked in headless Chromium (1280 and 390 px): Adventurer tab and plan screen fill the estimate row by themselves,
+    the plan reuses the Adventurer tab's results, spending a point and ticking gear restarts it, Confirm passes the shown estimate to
+    the Today panel and the report, no console errors, no horizontal overflow. The touch popover on the ⚠ / ✓ icons was not tapped
+    on a real touch device.
+
+**Tests (B4)**
+- New: `tests/groups.test.mjs` (banners: a win counts, a draw / loss does not, a pack mule per `defeatsPerReward` wins of the most-
+  beaten banner, distinct random types, never more than `maxExtraPerType`, 5 in all, seeded sequence, report fields and text,
+  `groupProgress`, `bannersLine`, save roundtrip; pack: `packLimit`, `validatePlan` with and without a pack mule, `defaultPack`
+  order / could-break / tier, `leaveWornHome`), `tests/present.test.mjs` (`estimateKey` changes with gear, rings, visible attributes
+  and counts and not with the chosen column, the screen, wear or the banner; estimate texts; `gearAnswers`),
+  `tests/estimates.test.mjs` (starts by itself, cached by key, same numbers as `estimateWinChanceSync`, selected enemy first, debounce
+  and cancel on a changed selection, `cancelEstimates`, new roster clears, `estimates: 'off'`, intel makes only the changed enemies
+  stale, `estimateCell`).
+- Updated (section 11): game.test (newGame `groups`, validatePlan via `packLimit`, confirmPlan plan shape, the intel test spends each point
+  before the next confirm, fields-unchanged test spends too, rosterView pins `tierMult` 100), enemies.test (visibility test enemy has a
+  tier and ring; the base-chance test is tier-weighted; new tier / grade multiplier, `groupVisible`, `hiddenGradeOdds`, roster banner
+  tests), playthrough.test (unspent point blocks and changes nothing, then spends; `packLimit`; banner invariants).
+  Not in section 11, same R45 reason: `durability.test.mjs` (two confirms after day 5 spend the point first, via the new
+  `spendAllIntel` in helpers.mjs); `ui-render.test.mjs` 'a Low special reads none' (makes the attributes visible by setting the
+  rolls to 0: max intel no longer shows a champion's attributes), the Spend-button text, and the Adventurer durability cell text
+  (the ⚠ icon).
+- ui-render: Banner row and line, plain Defense section row, no "Estimate all" on any screen, unspent point text / highlighted
+  panel / disabled Confirm / Spend buttons, "…" then % with estimates on (and the Adventurer tab shows the same), gear step headers,
+  pack mule limit, ⚠ / ✓ icons and their hovers, "Your answers", banner chips and the "?" tip, hidden-grade odds, Adventurer tab
+  banners / estimate / "Your plan showed", report banner and pack-mule line, Confirm dialog texts and `shownEstimate`, Help banners.
+- Review fixes (B4): estimates.test derives the roster size, the chosen enemy and the enemies it compares from the state (no 7-enemy
+  assumption, no empty `DEBOUNCE_MS > 0 && s` assert); groups.test pins `maxExtraPerType: 1` with `cfgWith` where distinct rewards are
+  claimed and derives the "each type exactly maxExtraPerType times" check (both files also pass with a 1 / 4 / 3 roster and
+  `maxExtraPerType: 2`); ui-render: three gear columns with the icon in the durability cell, the legend, the plan intro pack-mule
+  wording, the Win estimate hover per screen, the confirm bar sentence once, `restoreScrollLeft` / `isRestoredScroll`; spec-guards: no
+  direct `scrollLeft =` in js/ui, the popover scroll listener uses `isRestoredScroll`. The plan screen's "whole number" durability
+  test strips the icon glyph (as the Adventurer tab's already did).
+- spec-guards: no "Estimate all" / `startEstimateAll` / `cancelRun` / `plan_est` in js and css, only estimates.js calls
+  `estimateWinChance`, no `namesRow`, packLimit / `canSpendIntel` / `recordDefeat` wiring, visibility only through the multiplier
+  helpers, no tier points on the new rows, and a B4 "request pins" test (R13 three banners / 4 wins / +1 per type; R22 and R23 are
+  checked as orderings, since the user gave no numbers).
+- **Batch 4 open notes (minor review findings)**
+  1. [minor] The end of an estimate run redraws whichever tab is open, losing focus and typed text. `js/ui/estimates.js`
+     `runJobs`, `finally { ... if (!run.cancelled) ctx.rerender(); }`, plus the mid-run rerender for the chosen enemy. A
+     run keeps going after the player leaves the Adventurer tab and rebuilds `#main` for whatever tab is open. Measured
+     with `scratchpad/v2/review/rerender2-rr.cjs` (plan5 save, daytime): open Adventurer, switch to Log, type 'Copper
+     ore' in the filter; the field ends with 'C' or 'Co' and focus on BODY. Without visiting Adventurer it keeps the
+     text. A run took 191 ms; with 10x10 counts and more gear it is longer. The earlier "harmless" is not quite true.
+     Expected: when the screen that started the run (`est_scope.id`) is not on screen, only update the cache and
+     `paint()`, with no full re-render.
+  2. [minor] Going back to a cached selection leaves the old run going, so the status says 'Estimating 1 of 7...' over
+     finished numbers. `scheduleEstimates`: when `jobsFor(current scope)` is empty it clears the timer and returns but
+     does not cancel `ctx.ui.est_run`. Repro: `scratchpad/v2/review/node/stale.mjs` (A finishes, switch to B and wait
+     out the debounce, switch back to A): `estimatesPending` true, status 'Estimating 1 of 7...', B's run still going,
+     one extra rerender at its end. Plan 4.9: one run at a time, jobs = enemies without a cached result for the CURRENT
+     key. Expected: cancel a run whose sig differs from the current scope even when the current scope needs no jobs.
+  3. [minor] The warning icon also marks a blunted sword gem, not only gear that could break (documented deviation).
+     `js/ui/endday.js` `gearFlag`: `if (n.kind === 'warn' && !icon) icon = 'warn'`. Plan 4.14: ONE icon slot (warning =
+     could break against the chosen enemy, else the toughest tier; check = its gem answers a visible High special), and
+     the blunted note belongs in the hover. In play (plan5 vs Orc Brute) a 100% 'D Copper Sword +Topaz C' shows the same
+     icon as the 3% helmet that could break; only the hover tells them apart. R11 asks for a warning next to gear that
+     could break. The legend explains it. Expected: no icon for a blunted gem (hover only), or a different glyph.
+  4. [minor] Adventurer tab gear table does not fit at 360 px (fits at 390). Measured with
+     `scratchpad/v2/review/adv-rr.cjs` (plan5 save, after confirm). At 390 px the table is 328 px in a 328 px box; at
+     360 px it is 325 px in a 298 px box, so the 'Packed (away)' / 'Home' column is cut off by 27 px and needs a
+     sideways scroll (the warning icon is still visible, no page overflow). Contributing cause: `durabilityNode` adds
+     the 22 px icon slot on could-break rows only (`css/ui-adventurer.css .adv-geartable .adv-dur span.adv-flag`), so
+     bars on risky and safe rows do not line up. The shared `gearTable` is batch 5's (plan 4.18); FYI.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),

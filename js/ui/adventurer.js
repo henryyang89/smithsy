@@ -6,9 +6,14 @@ import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
 import { wornRings, ringContributions, ringDef, ringValue } from '../core/rings.js';
 import { intelValue, trackValueText } from '../core/intel.js';
+import { couldBreak } from '../core/gear.js';
+import { defaultPack } from '../core/pack.js';
+import { bannerLabel } from '../core/groups.js';
+import { groupVisible } from '../core/enemies.js';
 import { cap } from '../core/util.js';
-import { durText } from './present.js';
-import { enemyCard, rosterTable, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
+import { durText, winText } from './present.js';
+import { scheduleEstimates, cachedEstimate, estimatesPending } from './estimates.js';
+import { enemyCard, rosterTable, bannersNote, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
 
 const f2 = (v) => String(Math.round(v * 100) / 100);
 
@@ -35,6 +40,9 @@ function todayPanel(ctx) {
     return section(`Today (day ${s.day}): fighting ${e.name}`,
       h('p', { class: 'adv-tight' }, 'The adventurer is away fighting ', h('b', {}, e.name), ' ', h('span', { class: `tier-${e.tier}` }, `(${e.tier}, +${cfg.enemies.tiers[e.tier].score} pts)`),
         '. The result comes in when you end the day. The packed gear is away and can\'t be repaired today.'),
+      h('p', { class: 'adv-tight muted adv-small' },
+        groupVisible(s, e, cfg) && cfg.groups.list[e.group] ? ['Banner: ', h('b', { class: `bn bn-${e.group}` }, bannerLabel(e.group, cfg)), '. '] : 'Banner: unknown (the battle report shows it). ',
+        s.plan.shownEstimate ? `Your plan showed ${winText(s.plan.shownEstimate.winPct)}${s.plan.shownEstimate.margin != null ? ` ± ${s.plan.shownEstimate.margin}` : ''}.` : 'Your plan had no finished win estimate.'),
       h('div', { class: 'cols' },
         enemyCard(ctx, e),
         h('div', {},
@@ -59,7 +67,7 @@ function gearPanel(ctx) {
       h('p', { class: 'muted' }, 'No gear yet. Smith some in the Workshop: the adventurer fights unarmed without it.'),
       h('button', { class: 'small', onclick: () => ctx.setTab('workshop') }, 'Go to Workshop'));
   }
-  const wear = wearRange(s, cfg);
+  const wear = wearRange(s, cfg); // the toughest tier: the could-break flag is against the toughest enemy
   const rows = [];
   for (const slot of SLOTS) {
     const items = s.gear
@@ -69,7 +77,7 @@ function gearPanel(ctx) {
     for (const g of items) {
       rows.push(h('tr', {},
         h('td', {}, gearCell(g, cfg)),
-        h('td', {}, durabilityNode(g, cfg, wear)),
+        h('td', {}, durabilityNode(g, cfg, wear, couldBreak(g, s, null, cfg))),
         h('td', { class: 'adv-where' }, g.packed ? h('span', { class: 'warn', ...tip('Away with the adventurer today: it cannot be repaired until it comes back in the evening.') }, 'Packed (away)') : h('span', { class: 'ok' }, 'Home'))));
     }
   }
@@ -119,18 +127,30 @@ function statsPanel(ctx) {
       : null);
 }
 
+// The Adventurer tab's estimate: the best gear per gear type (defaultPack: all owned gear, what could break left out
+// when the type has another item) and the adventurer's worn rings. The gear is chosen tonight on the plan screen.
+function advScope(ctx) {
+  const s = ctx.state;
+  const cfg = ctx.cfg;
+  return { id: 'adv', gearIds: defaultPack(s, cfg), ringIds: wornRings(s, 'adventurer', cfg).map((r) => r.id), selected: null };
+}
+
 function rosterPanel(ctx) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   const r = s.roster;
   if (!r) return section('Tomorrow\'s roster', h('p', { class: 'muted' }, 'No roster.'));
   const chance = (t) => h('b', {}, trackValueText(t, intelValue(s, t, cfg), cfg));
+  const scope = advScope(ctx);
+  scheduleEstimates(ctx, scope);
+  const estimates = r.enemies.map((e, i) => cachedEstimate(ctx, scope, i));
   return section(`Tomorrow's roster (fight on day ${r.day})`,
     h('p', { class: 'adv-tight muted adv-small' },
       'You choose one of these enemies when you end the day. Scouting: each attribute visible ', chance('enemySight'),
-      ', ring type ', chance('ringTypeSight'), ', ring grade ', chance('ringGradeSight'),
+      ', ring type ', chance('ringTypeSight'), ', ring grade ', chance('ringGradeSight'), ', banner ', chance('groupSight'),
       '. Each column is one enemy, so a row compares one attribute across all of them. ',
-      h('span', { class: 'attr-low' }, 'Green = Low'), ' (weaker), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. Hover a row name for what it does. ',
-      'The win-chance estimate is on the plan screen at the end of the day.'),
-    rosterTable(ctx, r.enemies, { day: r.day }));
+      h('span', { class: 'attr-low' }, 'Green = Low'), ' (weaker), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. Hover a row name for what it does.'),
+    h('p', { class: 'adv-tight muted adv-small' }, 'The win estimate is worked out by itself with your best gear (the best per gear type) and the adventurer\'s worn rings. You choose the gear tonight.'),
+    rosterTable(ctx, r.enemies, { day: r.day, estimates, pending: estimatesPending(ctx), estimateTip: 'Worked out automatically: your win chance with your best gear (the best item of each gear type) and the rings the adventurer wears, from test fights against guesses of the hidden attributes. You choose the gear tonight.' }),
+    bannersNote(ctx));
 }

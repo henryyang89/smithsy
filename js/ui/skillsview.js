@@ -13,6 +13,16 @@ import { cap } from '../core/util.js';
 // ("Battle simulation": the number of extra guesses and test fights per enemy in the win-chance estimate).
 // trackValueText (core/intel.js) writes a value in its unit: "25%", "20 sight", "+3".
 
+// The hover on an intel track: what it does, and what the multipliers do ("Elites 90%, champions 80% of this.").
+export function intelTip(key, cfg) {
+  const t = cfg.intel.tracks[key];
+  const bits = [`${cap(t.desc)}.`];
+  const mult = (m) => Object.entries(m).filter(([, v]) => v !== 100);
+  if (t.tierMult && mult(t.tierMult).length) bits.push(`${cap(mult(t.tierMult).map(([tier, v]) => `${tier}s ${v}%`).join(', '))} of this.`);
+  if (t.gradeMult && mult(t.gradeMult).length) bits.push(`Better ring grades are harder to see: ${mult(t.gradeMult).map(([g, v]) => `${g} ${v}%`).join(', ')} of this.`);
+  return bits.join(' ');
+}
+
 // Spend an intel point. The core message says "Battle simulation is now +2."; for the count track it also says
 // what that means for the win-chance estimate.
 export function spendIntelAction(ctx, key) {
@@ -143,7 +153,7 @@ function intelPanel(ctx) {
       extra = h('div', { class: 'mi-note ok' }, `${c.samples} guesses x ${c.evalFights} test fights per enemy now (base ${cfg.sim.samples}, +${cur} from intel${c.extra - cur > 0 ? `, +${c.extra - cur} from your best Foresight ring` : ''})`);
     }
     return [
-      h('div', {}, h('b', {}, t.name), h('div', { class: 'mi-note' }, t.desc)),
+      h('div', tip(intelTip(key, cfg)), h('b', {}, t.name), h('div', { class: 'mi-note' }, t.desc)),
       { v: String(spent), cls: 'num' },
       t.unit === '%'
         ? h('div', { class: 'mi-chance' }, h('div', { class: 'mi-xp' }, bar(cur, 'mi-xpbar'), h('b', { class: 'mi-xpnum' }, val(cur))), extra)
@@ -162,7 +172,7 @@ function intelPanel(ctx) {
       kpi('Next point', `Day ${nextDay}`, inDays === 0 ? 'at the end of today' : `in ${inDays} day${inDays === 1 ? '' : 's'}`),
       kpi('Rate', `1 per ${dpp} days`, `end of day ${dpp}, ${dpp * 2}, ${dpp * 3}, ...`)),
     h('p', { class: 'mi-note' },
-      `You earn 1 intel point every ${dpp} days. Spend it on one track; each track has its own steps. `,
+      `You earn 1 intel point every ${dpp} days. Spend it on one track; each track has its own steps. Spend points before you start the next day: the plan screen will not start it while a point can still be spent. `,
       'Scouting is applied at once, including to the roster you can already see: each enemy\'s hidden rolls are fixed, so a higher chance reveals more of the same roster.'),
     tbl(['Track', { v: 'Points spent', cls: 'num' }, 'Now', 'Next point', 'Spend'], rows, 'mi-intel'),
     h('p', { class: 'mi-note' }, `Ore sight is your sight: the higher it is, the more of the items still in the ground you see in a field (Map tab). Battle simulation is not a chance: its value is the number of extra guesses and extra test fights per enemy in the plan screen's win-chance estimate (on top of the base ${cfg.sim.samples} x ${cfg.sim.evalFights}). Your best Foresight smith ring adds to it too (only one counts).`));

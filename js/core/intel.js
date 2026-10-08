@@ -37,6 +37,20 @@ export function nextIntelGain(state, track, cfg = CONFIG) {
   return next - cur;
 }
 
+// The chance (in %) that applies to an enemy of this tier: the Enemy scouting value x the tier's % (config
+// intel.tracks.enemySight.tierMult; 100 when the track has none). An attribute is visible when its fixed roll (0..100)
+// is below this.
+export function enemySightFor(state, tier, cfg = CONFIG) {
+  const t = cfg.intel.tracks.enemySight;
+  return (intelValue(state, 'enemySight', cfg) * ((t.tierMult && t.tierMult[tier]) ?? 100)) / 100;
+}
+
+// Same for the grade of a ring reward: the Ring grade scouting value x the grade's % (intel.tracks.ringGradeSight.gradeMult).
+export function ringGradeSightFor(state, grade, cfg = CONFIG) {
+  const t = cfg.intel.tracks.ringGradeSight;
+  return (intelValue(state, 'ringGradeSight', cfg) * ((t.gradeMult && t.gradeMult[grade]) ?? 100)) / 100;
+}
+
 // "25%" for a chance, "20 sight" for sight, "+3" for a count.
 export function trackValueText(track, value, cfg = CONFIG) {
   const unit = cfg.intel.tracks[track].unit;

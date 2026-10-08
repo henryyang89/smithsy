@@ -128,6 +128,16 @@ test('guard: tips work on touch screens: index.html has the #tip holder and main
   assert.match(read(join(ROOT, 'css', 'style.css')), /#tip\b/);
 });
 
+test('guard: a screen that puts a scroll box back after a re-render goes through restoreScrollLeft, and the tip popover ignores that scroll', () => {
+  const main = read(join(ROOT, 'js', 'main.js'));
+  assert.match(main, /isRestoredScroll\(/);
+  assert.doesNotMatch(main, /addEventListener\('scroll', hide/, 'the popover must not close on a scroll the screen made');
+  for (const f of filesUnder(join(ROOT, 'js', 'ui'))) {
+    if (f.endsWith('dom.js')) continue;
+    assert.doesNotMatch(read(f), /\.scrollLeft\s*=[^=]/, `${relative(ROOT, f)} sets scrollLeft directly`);
+  }
+});
+
 // ------------------------------------------------------------ batch 3 guards ----
 test('guard: enemy growth is never shown (R8): no "Rating growth" in endday.js, Help does not read growthPerDay or growth()', () => {
   const endday = read(join(ROOT, 'js', 'ui', 'endday.js'));
@@ -222,4 +232,62 @@ test('request pins (batch 3): R6 tiers rise, R40 and R41 Low = none, R21 S sits 
   // R21 in the config's own terms: copper S (1.55) is between iron D (1.45) and iron C (1.595)
   const { materialMult: M, gradeMult: G } = CONFIG.gear;
   assert.ok(M.copper * G.S > M.iron * G.D && M.copper * G.S < M.iron * G.C);
+});
+
+// ------------------------------------------------------------ batch 4 guards ----
+test('guard: the win estimate is automatic (R12): no Estimate all button, no startEstimateAll / cancelRun, no old plan run state', () => {
+  const css = filesUnder(join(ROOT, 'css'), ['.css']);
+  assert.deepEqual(hits(JS_FILES, /Estimate all/i), [], 'js/');
+  assert.deepEqual(hits(JS_FILES, /\bstartEstimateAll\b|\bcancelRun\b|\bplan_est\b|\bplan_run\b|adv-est-btn|adv-est-fill|adv-estrun/), []);
+  assert.deepEqual(hits(css, /adv-est-|adv-estrun/), [], 'css/');
+  // the estimates come from one module: the screens ask for them, they never call estimateWinChance themselves
+  assert.deepEqual(hits(filesUnder(join(ROOT, 'js', 'ui')).filter((f) => !f.endsWith('estimates.js')), /\bestimateWinChance(Sync)?\(/), []);
+  assert.match(read(join(ROOT, 'js', 'ui', 'estimates.js')), /estimateWinChance\(/);
+});
+
+test('guard: the roster has no names row under Defense (R1): no namesRow, no rt-sect-names, Defense is a plain section row', () => {
+  assert.deepEqual(hits([...JS_FILES, ...filesUnder(join(ROOT, 'css'), ['.css'])], /\bnamesRow\b|rt-sect-names|\brt-nm\b/), []);
+  assert.match(read(join(ROOT, 'js', 'ui', 'endday.js')), /sectionRow\('Defense'/);
+});
+
+test('guard: pack mules and the intel gate live in the core: validatePlan uses packLimit, confirmPlan checks canSpendIntel, only a win records a defeat', () => {
+  const game = read(join(ROOT, 'js', 'core', 'game.js'));
+  assert.match(game, /packLimit\(state, g\.slot, cfg\)/);
+  assert.doesNotMatch(game, /> 2\b/, 'no hard-coded limit of 2 per slot');
+  assert.match(game, /if \(canSpendIntel\(state, cfg\)\) return \{ ok: false/);
+  // recordDefeat is called once, inside the win branch of resolveBattle
+  assert.equal(game.split('recordDefeat(').length - 1, 1);
+  const win = game.slice(game.indexOf('if (result.win) {'), game.indexOf('const report = {'));
+  assert.match(win, /recordDefeat\(/);
+  // the pack limit is never read from the config anywhere else in the screens (they ask packLimit)
+  assert.deepEqual(hits(['endday.js', 'adventurer.js'].map((f) => join(ROOT, 'js', 'ui', f)), /\.slice\(0, 2\)|n >= 2\b|\/2 packed/), []);
+  assert.deepEqual(hits(TOOL_FILES, /\.slice\(0, 2\)\.map\(\(g\) => g\.id\)/), [], 'the bot packs packLimit items too');
+});
+
+test('guard: visibility goes through the multiplier helpers (R22, R23): no screen or core file compares a roll with the plain track value', () => {
+  const src = [...JS_FILES].filter((f) => !f.endsWith('intel.js'));
+  assert.deepEqual(hits(src, /sight\[[^\]]+\]\s*<\s*intelValue\(/), [], 'attributes use enemySightFor');
+  assert.deepEqual(hits(src, /ringGradeRoll\s*<\s*intelValue\(/), [], 'ring grades use ringGradeSightFor');
+  assert.match(read(join(ROOT, 'js', 'core', 'enemies.js')), /enemySightFor\(state, enemy\.tier, cfg\)/);
+  assert.match(read(join(ROOT, 'js', 'core', 'enemies.js')), /ringGradeSightFor\(state, enemy\.ring\.grade, cfg\)/);
+});
+
+test('guard: no tier points on the roster rows added in batch 4 (U3): the Banner row and the confirm bar carry none', () => {
+  const endday = read(join(ROOT, 'js', 'ui', 'endday.js'));
+  const bannerRow = endday.slice(endday.indexOf("const banner = row('Banner'"), endday.indexOf('const hiddenRow'));
+  assert.doesNotMatch(bannerRow, /pts|score/);
+  const bar = endday.slice(endday.indexOf('function confirmBar('), endday.indexOf('function confirmClicked('));
+  assert.doesNotMatch(bar, /pts|\.score/);
+});
+
+test('request pins (batch 4): R13 three banners, +1 pack slot per 4 wins against the most-beaten banner, at most +1 per gear type, R14 R45 intel', () => {
+  assert.equal(Object.keys(CONFIG.groups.list).length, 3, 'R13: three groups');
+  assert.deepEqual(Object.values(CONFIG.groups.list).map((g) => g.name), ['Red Banner', 'Black Banner', 'Gold Banner']);
+  assert.equal(CONFIG.groups.defeatsPerReward, 4, 'R13: +1 gear slot per 4 enemies defeated of the group with the most defeats');
+  assert.equal(CONFIG.groups.maxExtraPerType, 1, 'R13: at most +1 per gear type');
+  assert.ok(CONFIG.intel.tracks.groupSight, 'R14: banner scouting is an intel track');
+  const t = CONFIG.intel.tracks;
+  assert.ok(t.enemySight.tierMult.elite < t.enemySight.tierMult.normal && t.enemySight.tierMult.champion < t.enemySight.tierMult.elite, 'R23: elites a little harder to scout, champions harder than elites');
+  const gm = t.ringGradeSight.gradeMult;
+  assert.ok(gm.D > gm.C && gm.C > gm.B && gm.B > gm.A && gm.A > gm.S, 'R22: the higher the ring grade, the harder to scout');
 });

@@ -1,6 +1,6 @@
 import { CONFIG, TIERS, LEVELS } from '../config.js';
 import { rollRing } from './rings.js';
-import { intelValue } from './intel.js';
+import { intelValue, enemySightFor, ringGradeSightFor } from './intel.js';
 
 export const ATTR_KEYS = Object.keys(CONFIG.enemies.attributes);
 
@@ -21,7 +21,8 @@ export function rollLevels(rng, tier, cfg = CONFIG) {
 }
 
 // One roster = the enemies available for the fight on `day`.
-// Visibility rolls are stored (0..100) so spending intel later reveals more of the same roster.
+// Visibility rolls are stored (0..100) so spending intel later reveals more of the same roster. Every enemy also
+// marches under one banner (config groups.list), random and not tied to its name; it has no effect on its attributes.
 export function generateRoster(rng, day, cfg = CONFIG) {
   const enemies = [];
   for (const tier of TIERS) {
@@ -33,22 +34,54 @@ export function generateRoster(rng, day, cfg = CONFIG) {
       usedNames.add(name);
       const levels = rollLevels(rng, tier, cfg);
       const sight = Object.fromEntries(Object.keys(levels).map((k) => [k, rng.float(0, 100)]));
-      enemies.push({ tier, name, day, levels, sight, ring: rollRing(rng, tier, cfg), ringTypeRoll: rng.float(0, 100), ringGradeRoll: rng.float(0, 100) });
+      const ring = rollRing(rng, tier, cfg);
+      const ringTypeRoll = rng.float(0, 100);
+      const ringGradeRoll = rng.float(0, 100);
+      const group = rng.pick(Object.keys(cfg.groups.list));
+      const groupRoll = rng.float(0, 100);
+      enemies.push({ tier, name, day, levels, sight, ring, ringTypeRoll, ringGradeRoll, group, groupRoll });
     }
   }
   return { day, enemies };
 }
 
+// An attribute is visible when its fixed roll is below the Enemy scouting chance that applies to the enemy's tier
+// (normal 100%, elite 90%, champion 80% of the track's value).
 export function attrVisible(state, enemy, attr, cfg = CONFIG) {
-  return enemy.sight[attr] < intelValue(state, 'enemySight', cfg);
+  return enemy.sight[attr] < enemySightFor(state, enemy.tier, cfg);
 }
 
 export function ringTypeVisible(state, enemy, cfg = CONFIG) {
   return enemy.ringTypeRoll < intelValue(state, 'ringTypeSight', cfg);
 }
 
+// The ring's grade is visible when its roll is below the Ring grade scouting chance that applies to that grade
+// (better grades are harder to scout).
 export function ringGradeVisible(state, enemy, cfg = CONFIG) {
-  return enemy.ringGradeRoll < intelValue(state, 'ringGradeSight', cfg);
+  return !!enemy.ring && enemy.ringGradeRoll < ringGradeSightFor(state, enemy.ring.grade, cfg);
+}
+
+// The banner is visible when its roll is below the Banner scouting chance (the battle report always shows it).
+export function groupVisible(state, enemy, cfg = CONFIG) {
+  return enemy.groupRoll < intelValue(state, 'groupSight', cfg);
+}
+
+// What the player can work out about a ring grade that is still hidden: the odds of each grade GIVEN that it is hidden.
+// A grade g was hidden with chance 1 - c x m_g (c = Ring grade scouting, m_g = its grade multiplier), so
+// P(g) is proportional to weight_g x (1 - c x m_g), over the tier's grade weights. Returns { grade: percent } adding
+// up to 100, in the weights' order (low grade first); better grades gain share as the scouting chance rises.
+export function hiddenGradeOdds(state, enemy, cfg = CONFIG) {
+  const weights = cfg.rings.gradeWeights[enemy.tier];
+  const t = cfg.intel.tracks.ringGradeSight;
+  const c = intelValue(state, 'ringGradeSight', cfg);
+  const raw = Object.fromEntries(Object.entries(weights).map(([g, w]) => {
+    const seen = Math.min(100, (c * ((t.gradeMult && t.gradeMult[g]) ?? 100)) / 100);
+    return [g, w * (1 - seen / 100)];
+  }));
+  let total = Object.values(raw).reduce((a, b) => a + b, 0);
+  const src = total > 0 ? raw : weights; // every grade surely seen (cannot happen below the track's max): fall back to the plain odds
+  total = Object.values(src).reduce((a, b) => a + b, 0);
+  return Object.fromEntries(Object.entries(src).map(([g, v]) => [g, (v / total) * 100]));
 }
 
 // Known attribute levels (others undefined) as the player sees them.

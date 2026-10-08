@@ -310,13 +310,20 @@ export const CONFIG = {
   //   unit: '%' = a chance, 'sight' = sight points (see field.sight), 'count' = extra guesses and test fights.
   //   gains: what each point adds, in order; the last value repeats. Steps get smaller: diminishing returns.
   //   max: the track's ceiling.
+  //   tierMult / gradeMult (optional): a track's chance is multiplied by this % for the enemy's tier / the ring's grade
+  //   (enemySightFor, ringGradeSightFor in js/core/intel.js).
+  // A point that can still raise some track MUST be spent before the next day can start (confirmPlan refuses).
   intel: {
     daysPerPoint: 5,
     tracks: {
       oreSight: { name: 'Ore sight', unit: 'sight', base: 0, gains: [10, 10, 10, 8, 8, 8, 6, 6, 6, 4], max: 100, desc: 'see more of the items still in the ground' },
-      enemySight: { name: 'Enemy scouting', unit: '%', base: 10, gains: [6, 6, 6, 4, 4, 4, 3, 3, 3, 2], max: 100, desc: 'chance to see each enemy attribute' },
+      enemySight: { name: 'Enemy scouting', unit: '%', base: 10, gains: [6, 6, 6, 4, 4, 4, 3, 3, 3, 2], max: 100,
+        tierMult: { normal: 100, elite: 90, champion: 80 }, // % of the chance that applies per enemy tier
+        desc: 'chance to see each enemy attribute (a little less for elites, less for champions)' },
       ringTypeSight: { name: 'Ring type scouting', unit: '%', base: 25, gains: [8, 8, 8, 6, 6, 6, 4, 4, 4, 2], max: 100, desc: 'chance to see the type of the ring an enemy drops' },
-      ringGradeSight: { name: 'Ring grade scouting', unit: '%', base: 25, gains: [10, 10, 10, 8, 8, 8, 5, 5, 5, 3], max: 100, desc: 'chance to see the grade of the ring an enemy drops' },
+      ringGradeSight: { name: 'Ring grade scouting', unit: '%', base: 25, gains: [10, 10, 10, 8, 8, 8, 5, 5, 5, 3], max: 100,
+        gradeMult: { D: 100, C: 90, B: 80, A: 70, S: 60 }, // % of the chance that applies per ring grade
+        desc: 'chance to see the grade of the ring an enemy drops (harder for better grades)' },
       groupSight: { name: 'Banner scouting', unit: '%', base: 20, gains: [10, 10, 10, 6, 6, 6, 4, 4, 4, 2], max: 100, desc: 'chance to see which banner an enemy marches under' },
       simDepth: { name: 'Battle simulation', unit: 'count', base: 0, gains: [1], max: 3, desc: 'extra guesses and test fights per enemy in the win estimate' },
     },
@@ -331,5 +338,21 @@ export const CONFIG = {
     fightsPerLoadout: 5, // fights per gear combination when picking the best gear for a guess
     maxExactCombos: 48, // up to this many gear combinations are all tried; above it the gear is picked one type at a time
     searchPasses: 2, // one-type-at-a-time search: at most this many passes over the five gear types
+  },
+
+  // ------------------------------------------------------------ BANNERS ----
+  // Every enemy marches under one of three banners (random, equally likely; it has no effect on its attributes).
+  // For every `defeatsPerReward` wins against the banner your adventurer has beaten most, it captures a pack mule and
+  // can pack 1 more item of a random gear type from then on (js/core/groups.js).
+  groups: {
+    list: { red: { name: 'Red Banner' }, black: { name: 'Black Banner' }, gold: { name: 'Gold Banner' } },
+    defeatsPerReward: 4, // wins against your most-beaten banner per extra pack slot
+    maxExtraPerType: 1, // each gear type gets at most this many extra slots (so at most 5 pack mules in all)
+  },
+
+  // --------------------------------------------------------------- PLAN ----
+  plan: {
+    perSlot: 2, // items of one gear type the adventurer can pack (before banner pack mules)
+    leaveHomeBelow: 50, // "Leave worn gear home" unpacks repairable items below this durability %
   },
 };

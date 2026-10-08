@@ -104,6 +104,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 pre.error { white-space: pre-wrap; color: var(--err); }
 /* hover details on touch screens: a tap on an element with data-tip opens this under it (installTips in js/main.js) */
 [data-tip] { cursor: help; }
+button[data-tip]:not(:disabled), [data-tip] button:not(:disabled) { cursor: pointer; }
 #tip {
   position: fixed; display: none; z-index: 30; max-width: min(320px, calc(100vw - 16px));
   background: var(--panel); color: var(--text); border: 1px solid var(--accent-2); border-radius: 8px;

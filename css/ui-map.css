@@ -100,8 +100,6 @@
 .mv-pct { font-weight: 600; }
 .mv-done-l { font-weight: 700; letter-spacing: 0.02em; }
 .mv-debris-l { font-weight: 700; text-shadow: 0 1px 1px rgba(0, 0, 0, 0.6); }
-.mv-empty { color: var(--muted); font-style: italic; }
-.mv-done .mv-empty { color: var(--mv-done-text); }
 .mv-root .mv-field .cell.mv-seen { outline: 1px dashed var(--accent-2); outline-offset: -4px; }
 .mv-root .mv-field .cell.debris.mv-seen { outline-color: #fff; }
 .mv-seentag { display: inline-flex; align-items: center; gap: 1px; }
@@ -189,7 +187,6 @@ details.mv-odds-box > summary { cursor: pointer; font-weight: 600; font-size: 15
 details.mv-odds-box:not([open]) > summary { margin-bottom: 0; }
 .mv-sight { margin-left: 4px; cursor: help; }
 .mv-odds th, .mv-odds td { padding: 3px 6px; white-space: nowrap; }
-.mv-odds th.mv-group { text-align: center; }
 .mv-odds .mv-sep-l { border-left: 1px solid var(--border); }
 .mv-odds thead th { vertical-align: bottom; }
 

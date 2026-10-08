@@ -10,7 +10,7 @@ import { endDay, confirmPlan, acknowledgeReport, serialize, deserialize } from '
 import { wearLoss, wornDurability, repairInfo, repairPlan, repair } from '../js/core/gear.js';
 import { skillDefs, xpToNext } from '../js/core/skills.js';
 import { smithBonuses } from '../js/core/bonuses.js';
-import { game, cfgWith, fullSet, addGear, setSkillLevel, totalXp, WEAK_ENEMIES, DEADLY_ENEMIES } from './helpers.mjs';
+import { game, cfgWith, fullSet, addGear, setSkillLevel, totalXp, spendAllIntel, WEAK_ENEMIES, DEADLY_ENEMIES } from './helpers.mjs';
 
 const WIN = cfgWith(WEAK_ENEMIES);
 const LOSE = cfgWith(DEADLY_ENEMIES);
@@ -228,6 +228,7 @@ test('wear: durability stays at one decimal over many fights (no float drift) an
   endDay(s, cfg);
   let expected = 100;
   for (let fight = 1; fight <= 4; fight++) {
+    spendAllIntel(s, cfg); // an intel point (every 5th day) must be spent before the next day starts
     assert.equal(confirmPlan(s, plan(tierIndex(s, 'normal'), set.map((g) => g.id)), cfg).ok, true);
     const rep = endDay(s, cfg).report;
     assert.equal(rep.win, true);
@@ -259,6 +260,7 @@ test('wear: durability stays at one decimal over many fights (no float drift) an
   assert.ok(slightlyMore.baseMinutes >= info.baseMinutes);
   s.storage.bars[barKey] = 10;
   // repairs happen by day: leave everything home tomorrow, and the repair is possible at camp
+  spendAllIntel(s, cfg);
   assert.equal(confirmPlan(s, plan(tierIndex(s, 'normal'), []), cfg).ok, true);
   const before = s.storage.bars[barKey];
   assert.equal(repairPlan(s, g, cfg).ok, true);

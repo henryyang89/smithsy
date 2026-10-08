@@ -4,7 +4,9 @@ import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../config.js';
 import { rngFor, mixSeed } from './rng.js';
 import { generateMap, atCamp } from './map.js';
 import { newSkills, skillDefs, addXp } from './skills.js';
-import { newIntel } from './intel.js';
+import { newIntel, canSpendIntel } from './intel.js';
+import { newGroups, recordDefeat, groupRewardText } from './groups.js';
+import { packLimit, slotNoun } from './pack.js';
 import { smithBonuses } from './bonuses.js';
 import { generateRoster, enemyCombatant, knownLevels } from './enemies.js';
 import { ringTotals, ringDef, wornRings, ringLabel } from './rings.js';
@@ -39,8 +41,9 @@ export function newGame(seed = (Math.random() * 2 ** 32) >>> 0, cfg = CONFIG) {
     nextId: 1,
     skills: newSkills(cfg),
     intel: newIntel(cfg),
+    groups: newGroups(cfg), // banners beaten and the pack mules they paid: { defeats, extra, earned }
     roster: null, // enemies for tomorrow's fight
-    plan: null, // today's fight (adventurer is away): { day, enemy, gearIds, ringIds }
+    plan: null, // today's fight (adventurer is away): { day, enemy, gearIds, ringIds, shownEstimate }
     report: null, // last battle report, shown at end of day
     stats: { score: 0, wins: { normal: 0, elite: 0, champion: 0 }, fights: 0, bestDay: 1 },
     log: [],
@@ -101,7 +104,8 @@ export function acknowledgeReport(state) {
   return { ok: true };
 }
 
-// Validate a battle plan. gearIds: up to 2 items per slot. ringIds: up to maxWorn adventurer rings.
+// Validate a battle plan. gearIds: up to packLimit items per gear type (2, plus pack mules). ringIds: up to maxWorn
+// adventurer rings.
 export function validatePlan(state, plan, cfg = CONFIG) {
   if (!state.roster || !state.roster.enemies[plan.enemyIndex]) return 'Pick an enemy.';
   const perSlot = {};
@@ -109,7 +113,8 @@ export function validatePlan(state, plan, cfg = CONFIG) {
     const g = state.gear.find((x) => x.id === id);
     if (!g) return 'Unknown gear selected.';
     perSlot[g.slot] = (perSlot[g.slot] || 0) + 1;
-    if (perSlot[g.slot] > 2) return `At most 2 items per slot (${g.slot}).`;
+    const limit = packLimit(state, g.slot, cfg);
+    if (perSlot[g.slot] > limit) return `At most ${limit} ${slotNoun(g.slot, limit)}.`;
   }
   if (plan.ringIds.length > cfg.rings.maxWorn) return `At most ${cfg.rings.maxWorn} rings.`;
   for (const id of plan.ringIds) {
@@ -119,15 +124,24 @@ export function validatePlan(state, plan, cfg = CONFIG) {
   return null;
 }
 
-// Lock in tomorrow's fight and start the next day.
+// A win estimate the plan screen showed, as the plan keeps it: { winPct, margin } (margin may be null), or null.
+function cleanEstimate(e) {
+  if (!e || !Number.isFinite(e.winPct)) return null;
+  return { winPct: e.winPct, margin: Number.isFinite(e.margin) ? e.margin : null };
+}
+
+// Lock in tomorrow's fight and start the next day. An intel point that can still be spent must be spent first.
+// plan.shownEstimate = { winPct, margin } is the win estimate the screen showed for this enemy (null if it was not
+// finished); it goes to the battle report as report.planEstimate.
 export function confirmPlan(state, plan, cfg = CONFIG) {
   if (state.phase !== 'plan') return { ok: false, msg: 'Not planning right now.' };
+  if (canSpendIntel(state, cfg)) return { ok: false, msg: 'Spend your intel point first (Intel, at the top of this screen).' };
   const err = validatePlan(state, plan, cfg);
   if (err) return { ok: false, msg: err };
   const enemy = state.roster.enemies[plan.enemyIndex];
   for (const g of state.gear) g.packed = plan.gearIds.includes(g.id);
   for (const r of state.rings) if (ringDef(r.type, cfg).owner === 'adventurer') r.worn = plan.ringIds.includes(r.id);
-  state.plan = { day: state.day + 1, enemy, gearIds: [...plan.gearIds], ringIds: [...plan.ringIds] };
+  state.plan = { day: state.day + 1, enemy, gearIds: [...plan.gearIds], ringIds: [...plan.ringIds], shownEstimate: cleanEstimate(plan.shownEstimate) };
   state.day += 1;
   state.time = cfg.time.dayStartMin;
   state.phase = 'work';
@@ -182,15 +196,17 @@ export function resolveBattle(state, cfg = CONFIG) {
   for (const g of state.gear) g.packed = false;
 
   let ring = null;
+  let groupReward = null; // the gear type that won a pack mule with this win
   if (result.win) {
     ring = { id: state.nextId++, type: e.ring.type, grade: e.ring.grade, worn: false };
     state.rings.push(ring);
     state.stats.score += cfg.enemies.tiers[e.tier].score;
     state.stats.wins[e.tier] += 1;
+    groupReward = recordDefeat(state, e, rng, cfg).reward;
   }
   const report = {
     day: state.day,
-    enemy: { name: e.name, tier: e.tier, levels: e.levels },
+    enemy: { name: e.name, tier: e.tier, levels: e.levels, group: e.group || null },
     win: result.win,
     draw: result.draw,
     time: result.time,
@@ -206,7 +222,10 @@ export function resolveBattle(state, cfg = CONFIG) {
     notUsed: notUsedSnap,
     ringTotals: { ...rings }, // the adventurer's ring totals in this fight
     loadoutsTried: pick.evaluated, // gear combinations the adventurer thought through
-    planEstimate: null, // the win estimate the plan showed (filled in when the plan is confirmed with one)
+    planEstimate: plan.shownEstimate || null, // the win estimate the plan screen showed: { winPct, margin }, or null
+    groupReward, // gear type that got a pack mule from this win (config groups), else null
+    groupDefeats: groupReward && e.group ? state.groups.defeats[e.group] : null, // that banner's defeats after this win
+    groupLimit: groupReward ? packLimit(state, groupReward, cfg) : null, // how many of that type the adventurer can pack now
     analysis: null, // the loss analysis (computed on the run summary screen when needed)
     wear,
     notes,
@@ -227,6 +246,7 @@ export function resolveBattle(state, cfg = CONFIG) {
       ? `The fight with ${e.name} was called off after ${result.time.toFixed(1)}s: a draw (the adventurer survives, no ring).`
       : `The adventurer fell to ${e.name} after ${result.time.toFixed(1)}s.`);
   if (destroyed.length) addLog(state, `Destroyed (0% durability): ${destroyed.join(', ')}.`);
+  if (groupReward) addLog(state, groupRewardText(report, cfg));
   for (const n of notes) addLog(state, n);
   state.plan = null;
   return report;
@@ -264,7 +284,7 @@ export function deserialize(text, cfg = CONFIG) {
   return s;
 }
 
-// A same-version save must list exactly the config's skills and intel tracks. Only a developer who changed
+// A same-version save must list exactly the config's skills, intel tracks and banners. Only a developer who changed
 // the config without bumping VERSION can ever trip this: it is a safety net, not a migration.
 function assertShape(s, cfg) {
   const sameKeys = (obj, want, what) => {
@@ -274,6 +294,8 @@ function assertShape(s, cfg) {
   };
   sameKeys(s.skills, skillDefs(cfg).map((d) => d.key), 'skills');
   sameKeys(s.intel && s.intel.spent, Object.keys(cfg.intel.tracks), 'intel tracks');
+  sameKeys(s.groups && s.groups.defeats, Object.keys(cfg.groups.list), 'banners');
+  sameKeys(s.groups && s.groups.extra, SLOTS, 'pack mule slots');
 }
 
 export function packedSlotsSummary(state) {

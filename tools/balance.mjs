@@ -88,9 +88,11 @@ import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade
 import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, couldBreak } from '../js/core/gear.js';
 import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
-import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
+import { knownLevels, enemyCombatant, rollLevels, ringTypeVisible, ringGradeVisible, groupVisible, hiddenGradeOdds } from '../js/core/enemies.js';
 import { adventurerCombatant, fight } from '../js/core/combat.js';
-import { spendIntel, intelValue } from '../js/core/intel.js';
+import { spendIntel, intelValue, nextIntelGain, canSpendIntel } from '../js/core/intel.js';
+import { groupProgress } from '../js/core/groups.js';
+import { packLimit } from '../js/core/pack.js';
 import { smithBonuses } from '../js/core/bonuses.js';
 import { itemXp } from '../js/core/skills.js';
 import { seededRng, mixSeed } from '../js/core/rng.js';
@@ -110,6 +112,8 @@ try {
   for (const [path, value] of ARGS.set) SET_LOG.push(...applySet(path, value));
   // System ablations that are pure config switches (applied before anything reads CONFIG).
   if (ARGS.ablate.includes('skills')) SET_LOG.push(...applySet('skills.maxLevel', '0'));
+  // Without intel no track can gain, so a point can never be spent and the plan gate (confirmPlan) stays open.
+  if (ARGS.ablate.includes('intel')) SET_LOG.push(...applySet('intel.tracks.*.gains', '[0]'));
 } catch (err) {
   if (!IS_MAIN) throw err;
   console.error(`balance.mjs: ${err.message}`);
@@ -1343,6 +1347,13 @@ function botParams(T, o) {
     simOpts: o.quick ? { samples: 8, fightsPerLoadout: 1, evalFights: 15 } : { samples: 24, fightsPerLoadout: 1, evalFights: 25 },
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
     verifyTop: 3,
+    // Intel: spend each point on the first entry whose track is below its target value and can still gain; '*' = the
+    // track with the fewest points that can still gain (config order on ties). Every point is spent (confirmPlan refuses
+    // while one can be). The careful persona's list (docs/PLAN-2.0.md 8.3; the personas themselves are batch 6).
+    intel: [['enemySight', 40], ['simDepth', 3], ['groupSight', 50], ['oreSight', 30], ['*']],
+    // Fight choice: EV = p/100 x (score + future + ringValue + bannerBonus). ringPoints = score points per unit of
+    // (win % per ring value) x ring value; bannerBonus = points when the enemy's banner is seen and is the most-beaten one.
+    ringPoints: 1, bannerBonus: 10,
     minRate: 0.003, minCraftGain: 1.0, minGemGain: 1.0, cutCap: 3, ironReserve: 4, reserveCap: 240,
     // Repairs happen by day, at camp, on gear that stayed home (they cost time). Rest rule: before packing, an item
     // below restBelow % that the stock can repair tomorrow, or one a champion fight could destroy, stays home when its
@@ -1776,12 +1787,50 @@ function spareTime(st, ctx, rec) {
   if (cutAny) campWork(st, ctx, rec);
 }
 
+// Spends EVERY intel point (the plan gate refuses the next day while a point can still be spent), following P.intel.
 function spendIntelPoints(st, P) {
-  if (P.ablate.has('intel')) return;
-  for (let guard = 0; guard < 20 && st.intel.points >= 1; guard++) {
-    const track = intelValue(st, 'enemySight') < 80 ? 'enemySight' : intelValue(st, 'oreSight') < 40 ? 'oreSight' : 'ringTypeSight';
-    if (!spendIntel(st, track).ok) break;
+  if (P.ablate.has('intel')) return; // no track can gain: nothing to spend
+  const tracks = Object.keys(cfg.intel.tracks);
+  const canGain = (t) => nextIntelGain(st, t) > 0;
+  for (let guard = 0; guard < 200 && canSpendIntel(st); guard++) {
+    let track = null;
+    for (const [t, target] of P.intel) {
+      if (t === '*') {
+        track = tracks.filter(canGain).sort((a, b) => (st.intel.spent[a] || 0) - (st.intel.spent[b] || 0) || tracks.indexOf(a) - tracks.indexOf(b))[0] || null;
+        break;
+      }
+      if (canGain(t) && intelValue(st, t) < target) {
+        track = t;
+        break;
+      }
+    }
+    if (!track) track = tracks.find(canGain); // the list ran out (no '*' entry): never leave a point
+    if (!track || !spendIntel(st, track).ok) break;
   }
+}
+
+// The reward ring as the bot values it, in score points: the ring's value x its weight (win % per unit for adventurer
+// rings, smithW for smith rings) x ringPoints. A hidden type or grade counts as its expectation (the grade through the
+// odds given that it is hidden).
+function ringValueOf(st, e, P) {
+  if (!e.ring) return 0;
+  const types = ringTypeVisible(st, e) ? [e.ring.type] : Object.keys(cfg.rings.types);
+  const grades = ringGradeVisible(st, e) ? { [e.ring.grade]: 100 } : hiddenGradeOdds(st, e);
+  let total = 0;
+  for (const t of types) {
+    const def = cfg.rings.types[t];
+    const w = def.owner === 'adventurer' ? P.ringW[t] || 0 : P.smithW[t] || 0;
+    for (const [g, pct] of Object.entries(grades)) total += w * def.values[GRADES.indexOf(g)] * (pct / 100);
+  }
+  return (total / types.length) * P.ringPoints;
+}
+
+// What winning against this enemy is worth besides its score: the reward ring, and the banner when it is the one the
+// adventurer has beaten most (it earns the next pack mule sooner).
+function winExtras(st, e, P) {
+  const top = groupProgress(st).top;
+  const banner = top && groupVisible(st, e) && e.group === top ? P.bannerBonus : 0;
+  return ringValueOf(st, e, P) + banner;
 }
 
 function choosePlan(st, ctx, rec) {
@@ -1791,7 +1840,7 @@ function choosePlan(st, ctx, rec) {
   for (const slot of SLOTS) {
     const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
     // the rest rule: worn items stay home so they can be repaired tomorrow (when the slot keeps another item)
-    gearIds.push(...items.filter((g) => !rest.has(g.id)).slice(0, 2).map((g) => g.id));
+    gearIds.push(...items.filter((g) => !rest.has(g.id)).slice(0, packLimit(st, slot)).map((g) => g.id));
   }
   const advRings = P.ablate.has('rings') ? [] : st.rings.filter((r) => ringDef(r.type).owner === 'adventurer');
   const ringIds = pickRings(advRings, P.ringW, cfg.rings.maxWorn).map((r) => r.id);
@@ -1809,7 +1858,7 @@ function choosePlan(st, ctx, rec) {
   // "picked the luckiest estimate" bias) and choose among those.
   const primary = SLOTS.map((s) => packed.filter((g) => g.slot === s).sort((a, b) => score(b, P) - score(a, P))[0]).filter(Boolean);
   const est = (gear, e, i, salt, opts) => estimateWinChanceSync({ gearItems: gear, ringTotals: rings, tier: e.tier, day: e.day, known: knownLevels(st, e), seed: mixSeed(ctx.seed, st.day, i, salt) }, opts).winPct;
-  const evOf = (x) => (x.p / 100) * (cfg.enemies.tiers[x.tier].score + P.future);
+  const evOf = (x) => (x.p / 100) * (cfg.enemies.tiers[x.tier].score + P.future + winExtras(st, st.roster.enemies[x.i], P));
   let evals;
   let pool;
   if (P.estimator === 'game') {
@@ -1937,6 +1986,7 @@ function runBot(seed, D, P) {
   rec.rings = st.rings.map((r) => ({ type: r.type, grade: r.grade, worn: r.worn }));
   rec.skills = Object.fromEntries(Object.entries(st.skills).map(([k, v]) => [k, v.level]));
   rec.intel = { ...st.intel.spent };
+  rec.groups = { earned: st.groups.earned, top: Math.max(...Object.values(st.groups.defeats)) };
   rec.oreLeft = { ...st.storage.ore };
   rec.gemLeft = { ...st.storage.gem };
   const sb = smithBonuses(st);
@@ -2188,6 +2238,7 @@ function botSection(o, T) {
   const perTop = per.map((k) => [k, mean(recs.map((r) => r.skills[k]))]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   note('Per-material skill levels (non-zero): ' + (perTop.map(([k, v]) => `${k} ${f1(v)}`).join(', ') || 'none'));
   note('Intel spent: ' + Object.keys(recs[0].intel).map((k) => `${k} ${f1(mean(recs.map((r) => r.intel[k])))}`).join(', '));
+  note(`Banners: ${f1(mean(recs.map((r) => r.groups.earned)))} pack mules earned per run (of ${SLOTS.length * cfg.groups.maxExtraPerType}), the most-beaten banner has ${f1(mean(recs.map((r) => r.groups.top)))} wins at the end.`);
 
   // ---- one-line summary for comparing what-if runs
   const mid = recs.flatMap((r) => r.picks.filter((x) => x.day >= 11 && x.day <= 30 && x.win !== undefined));

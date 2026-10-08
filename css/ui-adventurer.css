@@ -106,10 +106,6 @@ table.rt { --rt-label: 100px; --rt-col: 96px; border-collapse: separate; border-
 .rt tr.rt-sect th.rt-row { background: var(--cell); color: var(--text); text-transform: uppercase; letter-spacing: 0.05em; font-size: 11px; border-top: 2px solid var(--border); }
 .rt tr.rt-sect td { background: var(--cell); border-top: 2px solid var(--border); padding: 3px 0; text-align: left; font-size: 11px; color: var(--muted); }
 .rt-sect-sub { position: sticky; left: 108px; padding-left: 6px; white-space: nowrap; } /* stays in view while the enemies scroll */
-/* the Defense divider repeats the enemy names (compact, muted) so they stay visible below the header */
-.rt tr.rt-sect-names td { padding: 3px 4px; text-align: center; font-size: 11px; font-weight: 600; line-height: 1.15; color: var(--muted); overflow-wrap: anywhere; border-left: 2px solid transparent; border-right: 2px solid transparent; }
-.rt tr.rt-sect-names td.rt-pick:hover { background: linear-gradient(rgba(181, 101, 29, 0.07), rgba(181, 101, 29, 0.07)), var(--cell); }
-.rt tr.rt-sect-names td.rt-sel { background: linear-gradient(rgba(181, 101, 29, 0.13), rgba(181, 101, 29, 0.13)), var(--cell); border-left-color: var(--accent); border-right-color: var(--accent); color: var(--text); }
 .rt-ring { line-height: 1.25; }
 .rt .rt-pm { margin-top: 1px; }
 .rt tr.rt-est td { padding-top: 5px; padding-bottom: 5px; }
@@ -121,11 +117,30 @@ table.rt { --rt-label: 100px; --rt-col: 96px; border-collapse: separate; border-
 .rt th.rt-head.rt-sel { box-shadow: inset 0 4px 0 var(--accent); }
 .rt tr.rt-last td.rt-sel { border-bottom: 3px solid var(--accent); }
 
+/* banners: Red / Black / Gold chips (roster row, report, Adventurer tab) */
+.bn { display: inline-block; padding: 0 8px; border-radius: 8px; font-size: 12px; font-weight: 700; line-height: 1.5; border: 1px solid transparent; }
+.bn-red { background: #c62828; color: #fff; }
+.bn-black { background: #2b2b2b; color: #fff; border-color: #777; }
+.bn-gold { background: #d4a017; color: #222; }
+.bn-unknown { background: var(--cell); color: var(--muted); }
+.adv-banners { margin: 6px 0 0; }
+
 /* plan */
-.adv-estrun { margin: 0 0 8px; }
 .adv-how p { margin: 4px 0 0; }
 .adv-intel { font-size: 13px; }
-.adv-progress { height: 12px; margin: 4px 0; }
+.adv-intel-hl { border-color: var(--accent); border-width: 2px; background: rgba(181, 101, 29, 0.08); }
+.adv-intel-hl h3 { margin: 0 0 4px; }
+.adv-intel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; }
+.adv-intel-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px dotted var(--border); }
+.adv-intel-name { min-width: 0; }
+.adv-flag { font-weight: 700; }
+.adv-dur span.adv-flag { min-width: 0; text-align: center; }
+/* the gear step keeps a fixed slot after the durability number, so the bars line up whether or not a row has an icon */
+.adv-geartable .adv-dur span.adv-flag { flex: none; width: 22px; align-self: stretch; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.adv-flag.warn { color: var(--warn); }
+.adv-flag.ok { color: var(--ok); }
+.adv-answers td { background: var(--cell); }
+.est-status:empty { display: none; }
 .adv-bar {
   position: sticky; bottom: 0; z-index: 4;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
@@ -146,10 +161,17 @@ table.rt { --rt-label: 100px; --rt-col: 96px; border-collapse: separate; border-
 .adv-bbody .panel { margin-bottom: 8px; }
 
 @media (max-width: 600px) {
+  .adv-intel-grid { grid-template-columns: minmax(0, 1fr); }
   .adv-hprow { grid-template-columns: 80px 1fr 96px; }
   .adv-pairs { gap: 0 8px; }
   table.rt { --rt-label: 84px; --rt-col: 96px; }
   .rt-sect-sub { left: 92px; }
+  /* the gear step's table (pack box, item, durability + icon) has to fit a 360-390 px screen without scrolling sideways:
+     a gem wraps under the item name and the bar gives way */
+  .adv-geartable .adv-gname { white-space: normal; }
+  .adv-geartable .adv-gbase, .adv-geartable .adv-gem { white-space: nowrap; }
+  .adv-geartable .adv-dur { min-width: 0; gap: 4px; }
+  .adv-geartable .adv-dur .bar { flex: 1 1 24px; min-width: 24px; }
 }
 
 /* dark mode: brighter level colors so chips stay readable on dark panels */

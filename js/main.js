@@ -5,7 +5,7 @@ import * as Game from './core/game.js';
 import { atCamp, timeLeft, currentField, returnMinutes, projectedLoad } from './core/map.js';
 import { formatClock, formatDuration, EPS } from './core/util.js';
 import { VERSION } from './version.js';
-import { h, clear } from './ui/dom.js';
+import { h, clear, isRestoredScroll } from './ui/dom.js';
 import { renderMap } from './ui/mapview.js';
 import { renderWorkshop } from './ui/workshop.js';
 import { renderAdventurer } from './ui/adventurer.js';
@@ -13,7 +13,8 @@ import { renderRings } from './ui/ringsview.js';
 import { renderSkills } from './ui/skillsview.js';
 import { renderLog } from './ui/logview.js';
 import { renderHelp } from './ui/help.js';
-import { renderReport, renderPlan, renderGameOver, cancelRun } from './ui/endday.js';
+import { renderReport, renderPlan, renderGameOver } from './ui/endday.js';
+import { clearEstimates } from './ui/estimates.js';
 
 const TABS = [
   { id: 'map', label: 'Map', render: renderMap },
@@ -57,10 +58,9 @@ const ctx = {
   save: () => save(),
   toast: (msg, kind) => toast(msg, kind),
   newGame(seed) {
-    cancelRun(ctx); // a running "Estimate all" belongs to the old game
+    clearEstimates(ctx); // the automatic win estimates belong to the old game
     state = Game.newGame(seed);
     ui.plan = null;
-    ui.plan_est = {};
     ui.tab = 'map';
     save();
     render();
@@ -277,7 +277,9 @@ function installTips() {
   document.addEventListener('pointerup', (e) => {
     if (e.pointerType === 'mouse') return;
     const el = e.target && e.target.closest ? e.target.closest('[data-tip]') : null;
-    if (!el || el === open) {
+    // a tap on an enabled button or a checkbox does what it says: no popover (it would keep showing out-of-date text after the re-render)
+    const control = e.target && e.target.closest ? e.target.closest('button:not(:disabled), input:not(:disabled)') : null;
+    if (!el || el === open || control) {
       hide();
       return;
     }
@@ -290,7 +292,9 @@ function installTips() {
     const below = r.bottom + 6;
     pop.style.top = `${below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, r.top - pop.offsetHeight - 6) : below}px`;
   });
-  window.addEventListener('scroll', hide, true);
+  window.addEventListener('scroll', (e) => {
+    if (!isRestoredScroll(e.target)) hide(); // a screen putting a scroll box back after a re-render is not the player scrolling
+  }, true);
 }
 
 installTips();

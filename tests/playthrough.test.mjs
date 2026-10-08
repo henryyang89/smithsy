@@ -11,7 +11,8 @@ import {
 import { refine, cut } from '../js/core/processing.js';
 import { craft, repair, canCraft } from '../js/core/gear.js';
 import { toggleRing, wornRings } from '../js/core/rings.js';
-import { spendIntel } from '../js/core/intel.js';
+import { spendIntel, canSpendIntel } from '../js/core/intel.js';
+import { packLimit } from '../js/core/pack.js';
 import { scrap } from '../js/core/gear.js';
 import { cfgWith, WEAK_ENEMIES } from './helpers.mjs';
 
@@ -38,6 +39,12 @@ function checkInvariants(s, ctx, cfg = CONFIG) {
   assert.equal(new Set(ids).size, ids.length, `duplicate ids ${where}`);
   assert.ok(ids.every((id) => id < s.nextId), where);
   if (s.phase === 'work' && s.day > 1) assert.ok(s.plan && s.plan.day === s.day, `missing plan ${where}`);
+  // banners: pack mules are never taken back and never exceed the config's limits
+  const gm = s.groups;
+  assert.ok(Object.values(gm.defeats).every((n) => Number.isInteger(n) && n >= 0), `defeats ${where}`);
+  assert.ok(Object.values(gm.extra).every((n) => Number.isInteger(n) && n >= 0 && n <= cfg.groups.maxExtraPerType), `pack mules ${where}`);
+  assert.equal(Object.values(gm.extra).reduce((a, b) => a + b, 0), gm.earned, `earned = pack mules ${where}`);
+  assert.equal(gm.earned, Math.min(SLOTS.length * cfg.groups.maxExtraPerType, Math.floor(Math.max(...Object.values(gm.defeats)) / cfg.groups.defeatsPerReward)), `pack mules follow the most-beaten banner ${where}`);
   if (s.phase === 'work') assert.equal(s.roster.day, s.day + 1, where);
   for (const k of Object.keys(s.skills)) assert.ok(s.skills[k].level >= 0 && s.skills[k].level <= cfg.skills.maxLevel);
   const validItem = (t) => {
@@ -74,12 +81,12 @@ function randomCarry(s, rng, cfg) {
   return sel;
 }
 
-// Highest-power gear for each slot (up to 2), for a reasonable plan.
+// Highest-power gear for each slot (up to the pack limit, which pack mules raise), for a reasonable plan.
 function pickGear(s, cfg = CONFIG) {
   const power = (g) => cfg.gear.materialMult[g.material] * cfg.gear.gradeMult[g.grade];
   const ids = [];
   for (const slot of SLOTS) {
-    ids.push(...s.gear.filter((g) => g.slot === slot).sort((a, b) => power(b) - power(a)).slice(0, 2).map((g) => g.id));
+    ids.push(...s.gear.filter((g) => g.slot === slot).sort((a, b) => power(b) - power(a)).slice(0, packLimit(s, slot, cfg)).map((g) => g.id));
   }
   return ids;
 }
@@ -212,7 +219,17 @@ function playRuns(seeds, days, cfg = CONFIG) {
       // fight the weakest-looking enemy with the best gear and every adventurer ring (max)
       const enemyIndex = s.roster.enemies.findIndex((x) => x.tier === 'normal');
       const ringIds = s.rings.filter((r) => cfg.rings.types[r.type].owner === 'adventurer').slice(0, cfg.rings.maxWorn).map((r) => r.id);
-      const c = confirmPlan(s, { enemyIndex, gearIds: pickGear(s, cfg), ringIds }, cfg);
+      const choice = { enemyIndex, gearIds: pickGear(s, cfg), ringIds };
+      // an intel point that can still be spent blocks the next day, and nothing changes while it does
+      if (canSpendIntel(s, cfg)) {
+        const before = serialize(s);
+        const refused = confirmPlan(s, choice, cfg);
+        assert.equal(refused.ok, false, 'an unspent intel point blocks confirmPlan');
+        assert.equal(serialize(s), before, 'a refused confirmPlan changes nothing');
+        for (let guard = 0; guard < 200 && canSpendIntel(s, cfg); guard++) spendIntel(s, rng.pick(Object.keys(cfg.intel.tracks)), cfg); // a maxed track refuses
+        assert.equal(canSpendIntel(s, cfg), false, 'every point was spent');
+      }
+      const c = confirmPlan(s, choice, cfg);
       assert.equal(c.ok, true, c.msg);
       checkInvariants(s, 'confirmPlan', cfg);
       const back = deserialize(serialize(s));
