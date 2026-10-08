@@ -233,3 +233,57 @@ test('about base-chance % of attributes are visible at base intel', () => {
   const expected = Math.min(100, CONFIG.intel.tracks.enemySight.base) / 100;
   assert.ok(Math.abs(vis / total - expected) < 0.03, `${vis / total} vs ${expected}`);
 });
+
+// ----------------------------------------------- 2.0 enemy table (B3) ----
+test('tier base stats: normal <= elite <= champion in HP, damage and defense, with at least one strict step each', () => {
+  const T = CONFIG.enemies.tiers;
+  const stats = ['hp', 'damage', 'defense'];
+  for (const [lo, hi] of [['normal', 'elite'], ['elite', 'champion']]) {
+    for (const k of stats) assert.ok(T[hi][k] >= T[lo][k], `${hi} ${k} (${T[hi][k]}) >= ${lo} (${T[lo][k]})`);
+    assert.ok(stats.some((k) => T[hi][k] > T[lo][k]), `${hi} is strictly above ${lo} in at least one stat`);
+  }
+  // and the base numbers an enemy gets on day 1 are exactly those
+  for (const tier of TIERS) {
+    const b = enemyBase(tier, 1);
+    assert.ok(approx(b.hp, T[tier].hp) && approx(b.damage, T[tier].damage) && b.defense === T[tier].defense, tier);
+  }
+});
+
+test('every attribute: Low <= Normal <= High', () => {
+  for (const [k, a] of Object.entries(ATTR)) {
+    assert.ok(a.values.low <= a.values.normal, `${k} low <= normal`);
+    assert.ok(a.values.normal <= a.values.high, `${k} normal <= high`);
+    assert.ok(a.values.low < a.values.high, `${k} Low and High differ`);
+  }
+});
+
+test('Low = none: the four specials and the four resistances are 0 at Low', () => {
+  const specials = ['piercing', 'magical', 'stunning', 'chilling'];
+  const resistances = ['pierceRes', 'magicRes', 'stunRes', 'slowRes'];
+  for (const k of [...specials, ...resistances]) assert.equal(val(k, 'low'), 0, k);
+  // and positive at Normal and High, so Low really is "has none"
+  for (const k of [...specials, ...resistances]) {
+    assert.ok(val(k, 'normal') > 0 && val(k, 'high') > val(k, 'normal'), k);
+  }
+  // an enemy with all of them Low has none of the abilities
+  const e = enemyCombatant('champion', 1, allLevels('low'));
+  for (const k of ['pierce', 'pierceRes', 'magicPct', 'magicRes', 'stunChance', 'stunChanceRed', 'stunDurRed', 'slowPct', 'slowRed', 'slowDurRed']) assert.equal(e[k], 0, k);
+});
+
+test('Accurate, Evasion, Fast and HP are core stats: they move in small steps (not 0 at Low)', () => {
+  for (const k of ['accurate', 'evasion', 'hp']) assert.ok(val(k, 'low') > 0, k);
+  assert.ok(val('fast', 'low') < 0 && val('fast', 'high') > 0);
+  for (const k of ['accurate', 'evasion', 'hp']) assert.ok(val(k, 'high') - val(k, 'low') <= 0.25 * val(k, 'normal'), `${k} stays within a quarter of Normal`);
+});
+
+test('growth is applied to the combat stats (HP, damage, accuracy, dodge) and nothing else', () => {
+  const lv = allLevels('normal');
+  const d1 = enemyCombatant('elite', 1, lv);
+  const d11 = enemyCombatant('elite', 11, lv);
+  const g = growth(11);
+  assert.ok(approx(d11.hp, d1.hp * g.hpDamage) && approx(d11.damage, d1.damage * g.hpDamage));
+  assert.ok(approx(d11.accuracy, d1.accuracy * g.ratings) && approx(d11.dodge, d1.dodge * g.ratings));
+  assert.equal(d11.defense, d1.defense);
+  assert.equal(d11.magicPct, d1.magicPct);
+  assert.equal(d11.stunChance, d1.stunChance);
+});

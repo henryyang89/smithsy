@@ -2,7 +2,7 @@
 // ============================================================================
 // SMITHSY BALANCE REPORT — is the pacing and difficulty sensible?
 //
-//   node tools/balance.mjs [--section economy|power|bot|benchmark|specials|estimator|all] [--seeds N] [--days N] [--samples N]
+//   node tools/balance.mjs [--section economy|power|day2|bot|benchmark|specials|estimator|all] [--seeds N] [--days N] [--samples N]
 //                          [--minwin P] [--future F] [--ablate x,y] [--immortal] [--carry value|default]
 //                          [--estimator game|bot] [--jobs N] [--quick] [--set path=value ...]
 //
@@ -50,6 +50,10 @@
 //            hidden = a typical enemy of the tier): the day-2 fight with day-1 gear, archetype sets,
 //            the weakest full set that holds target win rates on each day, and how much each gem /
 //            ring / gear slot is worth.
+//   day2     The first fight (day 2) without equipment (R7), tier by tier: 600 enemies x 300 fights each, win % overall
+//            and by how many of Magical / Stunning / Chilling are High, flagged against the targets in docs/PLAN-2.0.md
+//            (T-R7); then the same with a day-1 kit (Copper D sword; sword + chest; sword + chest + one matching gem per
+//            High special) as information and against T-GEAR. Prints a DAY2 summary line. Not part of `all`.
 //   benchmark  Difficulty benchmark that works on any version: the careful bot (below) on a FIXED list of
 //            seeds, reporting the SURVIVAL CURVE (% of runs still alive at day 5, 10, ... 100), the median
 //            life and the mean score, as a table row, a one-line BENCHMARK summary and a markdown row for
@@ -81,7 +85,7 @@ import {
   travel, search, defaultCarry, distanceRow, sightValue, sightShare, seenItems,
 } from '../js/core/map.js';
 import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
-import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, wearLoss } from '../js/core/gear.js';
+import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, couldBreak } from '../js/core/gear.js';
 import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
 import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
@@ -211,7 +215,7 @@ function parseArgs(argv) {
     } else if (a === '-h' || a === '--help') o.help = true;
     else throw new Error(`Unknown option ${a} (try --help)`);
   }
-  if (!['all', 'economy', 'power', 'bot', 'benchmark', 'specials', 'estimator'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
+  if (!['all', 'economy', 'power', 'day2', 'bot', 'benchmark', 'specials', 'estimator'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
   if (o.days == null) o.days = o.section === 'benchmark' ? 100 : 80;
   return o;
 }
@@ -1542,12 +1546,10 @@ function doRepair(st, item, plan, rec) {
 function restingIds(st, P) {
   const rest = new Set();
   if (P.ablate.has('repair')) return rest;
-  const dl = cfg.gear.durabilityLoss;
-  const worst = wearLoss(dl.max, (dl.tierMult && dl.tierMult.champion) || 1, smithBonuses(st).gearCarePct);
   for (const slot of SLOTS) {
     const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
     for (const it of items) {
-      const wants = (it.durability < P.restBelow && repairPlan(st, it).ok) || it.durability <= worst;
+      const wants = (it.durability < P.restBelow && repairPlan(st, it).ok) || couldBreak(it, st, 'champion', cfg);
       if (wants && items.some((o) => o !== it && !rest.has(o.id))) rest.add(it.id);
     }
   }
@@ -2318,6 +2320,120 @@ async function benchmarkSection(o) {
   return recs;
 }
 
+// ================================================================= DAY 2 =====
+// R7 / T-R7 / T-GEAR (docs/PLAN-2.0.md section 9): the first fight of the game (day 2) against the whole range of enemies
+// of each tier, with everything hidden (the adventurer fights each enemy as it is), first with no equipment at all, then
+// with a day-1 kit. Win % counts draws as survival, like everywhere else in the tool.
+const DAY2_SPECIALS = ['magical', 'stunning', 'chilling']; // the specials that matter on day 2 (a High one is what an unarmed adventurer cannot answer)
+const DAY2_GEM = { magical: 'ruby', stunning: 'topaz', chilling: 'sapphire' }; // the armor gem that answers each
+// T-R7 (unarmed): group = how many of the three specials are High; [label, lo, hi]. mean = the tier's overall target band,
+// hard = limits that hold for every group even when the bands cannot all be met.
+const DAY2_TARGETS = {
+  elite: { group: (nh) => (nh >= 2 ? '2H+' : `${nh}H`), groups: [['0H', 44, 50], ['1H', 36, 44], ['2H+', 30, 36]], mean: [38, 45], hard: [28, 52] },
+  champion: { group: (nh) => (nh <= 1 ? '<=1H' : `${nh}H`), groups: [['<=1H', 18, 25], ['2H', 8, 16], ['3H', 0, 6]], mean: [8, 16], hard: [0, 27] },
+};
+// T-GEAR: [lo, hi] win % for elites and champions with the day-1 kit (sword + chest) and with the kit plus matching gems.
+const DAY2_GEAR_TARGETS = { kit2: { elite: [75, 80], champion: [50, 55] }, kit3: { elite: [85, 90], champion: [65, 75] } };
+
+function day2Section(o) {
+  const N = o.quick ? 200 : 600; // enemies per tier
+  const F = o.quick ? 100 : 300; // fights per enemy
+  const DAY = 2;
+  const GEM_GRADE = 'C';
+  const band = (v, lo, hi) => (v < lo - 1e-9 ? 'below' : v > hi + 1e-9 ? 'ABOVE' : 'ok');
+  // The gear an adventurer has for one enemy. The kit variants do not depend on the enemy except kit3, which puts one
+  // matching armor gem on the chest for the first High special and on an extra plain Copper D helmet / gloves for the next ones.
+  const copperD = (slot, gem = null) => mkItem(slot, 'copper', 'D', gem);
+  const kits = {
+    unarmed: () => [],
+    kit1: () => [copperD('sword')],
+    kit2: () => [copperD('sword'), copperD('chest')],
+    kit3: (nh, lv) => {
+      const highs = DAY2_SPECIALS.filter((k) => lv[k] === 'high');
+      const slots = ['chest', 'helmet', 'gloves'];
+      const gearBySlot = highs.map((k, i) => copperD(slots[i], { type: DAY2_GEM[k], grade: GEM_GRADE }));
+      return [copperD('sword'), ...(gearBySlot.some((g) => g.slot === 'chest') ? [] : [copperD('chest')]), ...gearBySlot];
+    },
+  };
+  const LABEL = { unarmed: 'Unarmed', kit1: 'Copper D sword', kit2: 'Copper D sword + Copper D chest', kit3: 'sword + chest + a matching gem per High special' };
+
+  // per variant and tier: { all: [win%], groups: { label: [win%] } }
+  const results = {};
+  for (const [variant, gearFor] of Object.entries(kits)) {
+    results[variant] = {};
+    for (const [ti, tier] of TIERS.entries()) {
+      const rng = seededRng(mixSeed(99, ti));
+      const all = [];
+      const groups = {};
+      for (let i = 0; i < N; i++) {
+        const lv = rollLevels(rng, tier, cfg);
+        const nh = DAY2_SPECIALS.filter((k) => lv[k] === 'high').length;
+        const adv = adventurerCombatant(gearFor(nh, lv), {}, cfg);
+        const en = enemyCombatant(tier, DAY, lv, 'Enemy', cfg);
+        const fr = seededRng(mixSeed(5, i, ti));
+        let w = 0;
+        for (let f = 0; f < F; f++) {
+          const r = fight(adv, en, fr.next, false, cfg);
+          if (r.win || r.draw) w++;
+        }
+        const pct = (100 * w) / F;
+        all.push(pct);
+        const tg = DAY2_TARGETS[tier];
+        if (tg) (groups[tg.group(nh)] ||= []).push(pct);
+      }
+      results[variant][tier] = { all, groups };
+    }
+  }
+
+  h1(`DAY 2 — the first fight (day ${DAY}) with no equipment, then with a day-1 kit (${N} enemies per tier x ${F} fights each; everything hidden)`);
+  note('Win % counts a draw as survival. "nH" = how many of Magical / Stunning / Chilling the enemy has at High (an unarmed adventurer cannot answer them).');
+  note('Targets (T-R7, docs/PLAN-2.0.md section 9): the user asked for elites at 30-50% and champions at 0-25% without equipment; the bands below keep every group inside that.');
+  let hits = 0;
+  let checks = 0;
+  const flagCell = (v, lo, hi, hardLo, hardHi) => {
+    const f = band(v, lo, hi);
+    const hard = v < hardLo - 1e-9 || v > hardHi + 1e-9;
+    checks++;
+    if (f === 'ok') hits++;
+    return hard ? `${f} (HARD LIMIT ${hardLo}-${hardHi})` : f;
+  };
+  h2('Unarmed (T-R7)');
+  const rows = [];
+  const un = results.unarmed;
+  const normalMean = mean(un.normal.all);
+  const eliteMean = mean(un.elite.all);
+  rows.push(['normal', 'all', String(un.normal.all.length), f1(normalMean), `${f0(quantile(un.normal.all, 0.1))}-${f0(quantile(un.normal.all, 0.9))}`, `>= elite mean + 15 (${f1(eliteMean + 15)})`, normalMean >= eliteMean + 15 ? 'ok' : 'info: not clearly easier than elites']);
+  for (const tier of ['elite', 'champion']) {
+    const tg = DAY2_TARGETS[tier];
+    const r = un[tier];
+    rows.push([tier, 'all', String(r.all.length), f1(mean(r.all)), `${f0(quantile(r.all, 0.1))}-${f0(quantile(r.all, 0.9))}`, `${tg.mean[0]}-${tg.mean[1]}`, flagCell(mean(r.all), tg.mean[0], tg.mean[1], tg.hard[0], tg.hard[1])]);
+    for (const [label, lo, hi] of tg.groups) {
+      const g = r.groups[label] || [];
+      rows.push([tier, label, String(g.length), g.length ? f1(mean(g)) : '-', g.length ? `${f0(quantile(g, 0.1))}-${f0(quantile(g, 0.9))}` : '-', `${lo}-${hi}`, g.length ? flagCell(mean(g), lo, hi, tg.hard[0], tg.hard[1]) : 'no enemies']);
+    }
+  }
+  printTable(['tier', 'group', 'enemies', 'win %', 'p10-p90', 'target', 'flag'], rows);
+  note('Hard limits if the bands cannot all be met: every elite group within 28-52, every champion group at most 27.');
+
+  h2('With a day-1 kit (information; T-GEAR for the last two)');
+  const kitRows = Object.keys(kits).map((variant) => {
+    const r = results[variant];
+    const cell = (tier) => {
+      const m = mean(r[tier].all);
+      const t = DAY2_GEAR_TARGETS[variant] && DAY2_GEAR_TARGETS[variant][tier];
+      return `${f1(m)}${t ? ` (target ${t[0]}-${t[1]}: ${band(m, t[0], t[1])})` : ''}`;
+    };
+    return [LABEL[variant], cell('normal'), cell('elite'), cell('champion')];
+  });
+  printTable(['gear', 'normal', 'elite', 'champion'], kitRows);
+  note(`kit3 puts a ${GEM_GRADE} gem that answers each High special on the chest, then on an extra plain Copper D helmet and gloves (a chest holds one gem). T-GEAR: kit2 elite 75-80 / champion 50-55, kit3 elite 85-90 / champion 65-75.`);
+
+  const m = (variant, tier) => f0(mean(results[variant][tier].all));
+  const g = (tier, label) => f0(mean(un[tier].groups[label] || [NaN]));
+  console.log(`\nDAY2 | unarmed n/e/c ${m('unarmed', 'normal')}/${m('unarmed', 'elite')}/${m('unarmed', 'champion')} | elite 0H/1H/2H+ ${g('elite', '0H')}/${g('elite', '1H')}/${g('elite', '2H+')} | champ <=1H/2H/3H ${g('champion', '<=1H')}/${g('champion', '2H')}/${g('champion', '3H')} | kit1 n/e/c ${m('kit1', 'normal')}/${m('kit1', 'elite')}/${m('kit1', 'champion')} | kit2 n/e/c ${m('kit2', 'normal')}/${m('kit2', 'elite')}/${m('kit2', 'champion')} | kit3 n/e/c ${m('kit3', 'normal')}/${m('kit3', 'elite')}/${m('kit3', 'champion')} | T-R7 in band ${hits}/${checks}`);
+  return results;
+}
+
 // ================================================================= MAIN =====
 async function main() {
   const o = ARGS;
@@ -2340,6 +2456,7 @@ async function main() {
   if (o.section === 'all' || o.section === 'economy') await run('economy', () => economySection(o));
   if (o.section === 'all' || o.section === 'power') await run('power', () => (T = powerSection(o, null)));
   if (o.section === 'all' || o.section === 'bot') await run('bot', () => botSection(o, T));
+  if (o.section === 'day2') await run('day2', () => day2Section(o));
   if (o.section === 'benchmark') await run('benchmark', () => benchmarkSection(o));
   if (o.section === 'specials') await run('specials', () => specialsSection(o));
   if (o.section === 'estimator') await run('estimator', () => estimatorSection(o));
@@ -2358,7 +2475,7 @@ function readHelp() {
 }
 
 export {
-  applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, botSection, benchmarkSection,
+  applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, day2Section, botSection, benchmarkSection,
   centerOptions, chooseField, makeValueFn, campReserve, winPct, setOf, mkItem,
 };
 

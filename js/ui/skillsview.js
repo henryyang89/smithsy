@@ -140,7 +140,7 @@ function intelPanel(ctx) {
     if (key === 'oreSight' && ringReveal > 0) extra = h('div', { class: 'mi-note ok' }, `+ ${num(ringReveal, 2)} from Ore sight rings = ${num(cur + ringReveal, 2)} sight`);
     if (t.unit === 'count') {
       const c = simCounts(state, cfg);
-      extra = h('div', { class: 'mi-note ok' }, `${c.samples} guesses x ${c.evalFights} test fights per enemy now (base ${cfg.sim.samples}, +${cur} from intel${c.extra - cur > 0 ? `, +${c.extra - cur} from Foresight rings` : ''})`);
+      extra = h('div', { class: 'mi-note ok' }, `${c.samples} guesses x ${c.evalFights} test fights per enemy now (base ${cfg.sim.samples}, +${cur} from intel${c.extra - cur > 0 ? `, +${c.extra - cur} from your best Foresight ring` : ''})`);
     }
     return [
       h('div', {}, h('b', {}, t.name), h('div', { class: 'mi-note' }, t.desc)),
@@ -165,6 +165,6 @@ function intelPanel(ctx) {
       `You earn 1 intel point every ${dpp} days. Spend it on one track; each track has its own steps. `,
       'Scouting is applied at once, including to the roster you can already see: each enemy\'s hidden rolls are fixed, so a higher chance reveals more of the same roster.'),
     tbl(['Track', { v: 'Points spent', cls: 'num' }, 'Now', 'Next point', 'Spend'], rows, 'mi-intel'),
-    h('p', { class: 'mi-note' }, `Ore sight is your sight: the higher it is, the more of the items still in the ground you see in a field (Map tab). Battle simulation is not a chance: its value is the number of extra guesses and extra test fights per enemy in the plan screen's win-chance estimate (on top of the base ${cfg.sim.samples} x ${cfg.sim.evalFights}). Foresight smith rings add to it too.`));
+    h('p', { class: 'mi-note' }, `Ore sight is your sight: the higher it is, the more of the items still in the ground you see in a field (Map tab). Battle simulation is not a chance: its value is the number of extra guesses and extra test fights per enemy in the plan screen's win-chance estimate (on top of the base ${cfg.sim.samples} x ${cfg.sim.evalFights}). Your best Foresight smith ring adds to it too (only one counts).`));
 }
 

@@ -17,9 +17,12 @@ import { renderHelp } from '../js/ui/help.js';
 import { renderPlan, renderReport, renderGameOver } from '../js/ui/endday.js';
 import { endDay, confirmPlan } from '../js/core/game.js';
 import { tip } from '../js/ui/dom.js';
-import { scrapReturn, smithMinutes, repairMinutes } from '../js/core/gear.js';
+import { scrapReturn, smithMinutes, repairMinutes, wearLoss } from '../js/core/gear.js';
 import { skillDefs, skillHoverText } from '../js/core/skills.js';
 import { intelValue } from '../js/core/intel.js';
+import { growth } from '../js/core/enemies.js';
+import { durText, repairGainShown, winText } from '../js/ui/present.js';
+import { attrValueText, wearText } from '../js/ui/endday.js';
 import { travel, search, currentField, sightValue, seenItems, expectedSearches, searchesText, searchesToFinish } from '../js/core/map.js';
 import { game, cfgWith, addGear, addRing, fieldAt, setSkillLevel, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START } from './helpers.mjs';
 
@@ -471,6 +474,161 @@ test('the map explains the Carrying skill: the load penalty per item shrinks and
   const text = textOf(render(renderMap, s));
   assert.match(text, new RegExp(`${CONFIG.map.travelMinPerStep}m per step, \\+[\\d.]+% per item carried \\(${CONFIG.map.loadPenaltyPerItem}% before the Carrying skill\\)`));
   assert.doesNotMatch(text, /way home \(skill\)|Return travel/i);
+});
+
+// ------------------------------------------- enemies, durability, margin (batch 3) ----
+const ALL_SCREENS = (s) => (s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderGameOver]]);
+
+test('enemy growth is never shown: no "Rating growth" row, no "Ratings x1.05" stat, no growth table or formula anywhere (R8)', () => {
+  const plan = statePlan(1);
+  const states = [['day 1', stateDay1()], ['plan', plan], ['report', stateReport()], ['over', stateOver()]];
+  for (const [label, s] of states) {
+    for (const [name, fn] of ALL_SCREENS(s)) {
+      const text = readable(render(fn, s));
+      assert.doesNotMatch(text, /rating growth|ratings x\d|growth by day|daily growth|\+\d+(\.\d+)?% x \(day/i, `${name} (${label})`);
+    }
+  }
+  // the roster still exists, and Help only says the plain thing
+  assert.match(textOf(render(renderPlan, plan)), /Base HP/);
+  assert.match(textOf(render(renderHelp, plan)), /Enemies get a little stronger every day\./);
+});
+
+test('a Low special reads "none", and Accurate / Evasion show the value on the fight day', () => {
+  const s = statePlan(0);
+  s.intel.spent.enemySight = 1000; // every attribute visible
+  const day = s.roster.day;
+  const A = CONFIG.enemies.attributes;
+  const text = textOf(render(renderPlan, s));
+  assert.match(text, /Low · none/, 'a Low special is none');
+  assert.doesNotMatch(text, /Low · 0%/);
+  // fight-day ratings: the base value x the day's growth, rounded; never the growth itself. The rating chips
+  // (Accurate / Evasion) are the only ones with a plain number and no "%".
+  const fightDay = (lv) => Math.round(A.accurate.values[lv] * growth(day).ratings);
+  const root = render(renderPlan, s);
+  const chips = withClass(root, 'adv-lv').map(textOf).filter((t) => /^(Low|Normal|High) · \d+$/.test(t));
+  const enemies = s.roster.enemies.length;
+  assert.equal(chips.length, enemies * 2, 'Accurate and Evasion for every enemy, all visible');
+  for (const t of chips) {
+    const [level, value] = t.split(' · ');
+    assert.equal(Number(value), fightDay(level.toLowerCase()), t);
+  }
+  assert.ok(day > 1 && growth(day).ratings > 1);
+  assert.ok(chips.some((t) => Number(t.split(' · ')[1]) !== A.accurate.values[t.split(' · ')[0].toLowerCase()]), 'the fight-day value differs from the base value');
+  // the helper itself
+  for (const k of ['piercing', 'pierceRes', 'magical', 'magicRes', 'stunning', 'stunRes', 'chilling', 'slowRes']) assert.equal(attrValueText(k, 'low', CONFIG), 'none', k);
+  assert.equal(attrValueText('magical', 'high', CONFIG), `${A.magical.values.high}%`);
+  assert.equal(attrValueText('fast', 'high', CONFIG), `+${A.fast.values.high}%`);
+  assert.equal(attrValueText('fast', 'low', CONFIG), `${A.fast.values.low}%`);
+  assert.equal(attrValueText('accurate', 'normal', CONFIG), String(A.accurate.values.normal), 'without a day: the base value');
+  assert.equal(attrValueText('accurate', 'high', CONFIG, 30), String(Math.round(A.accurate.values.high * growth(30).ratings)));
+  assert.equal(attrValueText('evasion', 'low', CONFIG, 12), String(Math.round(A.evasion.values.low * growth(12).ratings)));
+  // the Adventurer tab roster and the battle report's enemy card use the same wording
+  assert.match(textOf(render(renderAdventurer, (() => { const t = stateDay1(); t.intel.spent.enemySight = 1000; return t; })())), /Low · none/);
+  assert.match(textOf(render(renderReport, stateReport())), /Low · none/);
+});
+
+test('durability is shown as a whole number on every screen (never a decimal followed by %)', () => {
+  const addWorn = (s) => {
+    addGear(s, 'sword', 'iron', 'B', null, { durability: 63.4 });
+    addGear(s, 'sword', 'copper', 'D', null, { durability: 99.6 });
+    addGear(s, 'chest', 'iron', 'C', { type: 'ruby', grade: 'B' }, { durability: 12.7 });
+    addGear(s, 'helmet', 'copper', 'D', null, { durability: 0.4 });
+    return s;
+  };
+  const whole = /^\d+%$/;
+  // Workshop gear table + Adventurer tab gear table
+  for (const [label, fn, cls] of [['Workshop', renderWorkshop, 'ws-durcell'], ['Adventurer tab', renderAdventurer, 'adv-dur']]) {
+    const root = render(fn, addWorn(stateDay1()));
+    const cells = withClass(root, cls);
+    assert.equal(cells.length, 4, `${label}: one durability cell per item`);
+    assert.deepEqual(cells.map(textOf).sort(), ['1%', '12%', '63%', '99%'], label);
+    for (const t of cells.map(textOf)) assert.match(t, whole);
+    assert.doesNotMatch(readable(root), /\d\.\d+%\s*(durability|left)/i, label);
+  }
+  // Workshop repair buttons: the gain is 100 minus the shown durability
+  const wk = render(renderWorkshop, addWorn(stateDay1()));
+  const gains = findAll(wk, (el) => el.attributes['data-repair'] !== undefined).map(textOf).sort();
+  assert.deepEqual(gains, ['Repair +1%', 'Repair +37%', 'Repair +88%', 'Repair +99%'].sort());
+  // plan screen (pack gear step): durability bars and the could-be-destroyed list
+  const plan = addWorn(statePlan(0));
+  const planRoot = render(renderPlan, plan);
+  const planDur = withClass(planRoot, 'adv-dur').map(textOf);
+  assert.ok(planDur.length >= 4);
+  for (const t of planDur) assert.match(t, whole);
+  assert.doesNotMatch(readable(planRoot), /\d\.\d+%\s*(durability|left)|\(\d+\.\d+%\)/i);
+  // today's packed gear on the Adventurer tab while the adventurer is away
+  const away = stateDay1();
+  const sw = addGear(away, 'sword', 'iron', 'B', null, { durability: 63.4 });
+  assert.equal(endDay(away).ok, true);
+  assert.equal(confirmPlan(away, { enemyIndex: 0, gearIds: [sw.id], ringIds: [] }).ok, true);
+  assert.match(textOf(render(renderAdventurer, away)), /\(63%\)/);
+  assert.doesNotMatch(textOf(render(renderAdventurer, away)), /63\.4/);
+});
+
+test('the battle report shows wear and what is left as whole numbers', () => {
+  const s = game(7, WIN);
+  const sw = addGear(s, 'sword', 'mythril', 'S', null, { durability: 80.3 });
+  assert.equal(endDay(s, WIN).ok, true);
+  assert.equal(confirmPlan(s, { enemyIndex: 0, gearIds: [sw.id], ringIds: [] }, WIN).ok, true);
+  const rep = endDay(s, WIN).report;
+  const w = rep.wear[0];
+  const root = render(renderReport, s);
+  const cells = findAll(root, (el) => el.tagName === 'TD' && /left$|Destroyed$/.test(textOf(el)));
+  assert.equal(cells.length, 1);
+  assert.equal(textOf(cells[0]), `${durText(w.left)} left`);
+  assert.match(textOf(cells[0]), /^\d+% left$/);
+  const loss = findAll(root, (el) => el.tagName === 'TD' && /^-\d+(\.\d+)?%$/.test(textOf(el)));
+  assert.equal(textOf(loss[0]), `-${Math.round(w.loss)}%`);
+  assert.doesNotMatch(textOf(loss[0]), /\./);
+});
+
+test('wear ranges in the gear notes are whole numbers (low end rounded down, high end up)', () => {
+  const s = statePlan(0);
+  const dl = CONFIG.gear.durabilityLoss;
+  const mults = Object.values(dl.tierMult);
+  const lo = wearLoss(dl.min, Math.min(...mults), 0);
+  const hi = wearLoss(dl.max, Math.max(...mults), 0);
+  const t = wearText(s, CONFIG);
+  assert.equal(t.split(' (')[0], `${Math.floor(lo + 1e-9)}-${Math.ceil(hi - 1e-9)}% per fight`);
+  // against one tier, with the average
+  const eliteMult = dl.tierMult.elite;
+  const elite = wearText(s, CONFIG, 'elite');
+  assert.equal(elite.split(' (')[0], `${Math.floor(wearLoss(dl.min, eliteMult, 0) + 1e-9)}-${Math.ceil(wearLoss(dl.max, eliteMult, 0) - 1e-9)}% per fight`);
+  assert.match(elite, /\(avg \d+%/);
+  assert.doesNotMatch(elite, /avg \d+\.\d/);
+  // the plan screen and the Adventurer tab say the same thing
+  assert.ok(textOf(render(renderPlan, s)).includes(wearText(s, CONFIG)));
+  assert.ok(textOf(render(renderAdventurer, s)).includes(wearText(s, CONFIG)));
+});
+
+test('the estimate panel talks about the test fights\' own noise (the ±), not "9 times in 10", and Foresight counts only the best ring', () => {
+  const s = statePlan(0);
+  addRing(s, 'foresight', 'D', false);
+  const plan = render(renderPlan, s);
+  const text = readable(plan);
+  assert.match(text, /test fights alone could be off/);
+  assert.match(text, /hidden attributes can make the real chance higher or lower/);
+  assert.doesNotMatch(text, /9 times in 10/);
+  assert.match(text, /only your best one counts/);
+  const help = readable(render(renderHelp, s));
+  assert.match(help, /Only your best Foresight ring counts/);
+  assert.doesNotMatch(help, /9 times in 10/);
+  assert.match(help, /Both attack bars start the fight partly filled/);
+  assert.match(help, /Low means the enemy does not have that ability at all/);
+  // the Rings tab
+  const worn = game(7);
+  addRing(worn, 'foresight', 'S', true);
+  addRing(worn, 'foresight', 'D', true);
+  const rings = textOf(render(renderRings, worn));
+  assert.match(rings, /only your best Foresight ring counts/);
+});
+
+test('winText is the whole-percent text used by the estimates', () => {
+  assert.equal(winText(61.6), '62%');
+  assert.equal(winText(0), '0%');
+  assert.equal(winText(100), '100%');
+  assert.equal(repairGainShown(99.6), 1);
+  assert.equal(durText(99.6), '99%');
 });
 
 test('the day clock still starts at the configured time (sanity for the shared test states)', () => {

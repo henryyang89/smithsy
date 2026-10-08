@@ -361,3 +361,45 @@ test('Gear care progress and decimal durability survive a save and load', () => 
   assert.equal(back.gear[0].durability, 73.4);
   assert.deepEqual(back, s);
 });
+
+// ------------------------------------------- lasts the whole fight (R11) ----
+test('gear always lasts the whole fight: an item at 0.1% fights exactly like one at 100% (same seed) and is destroyed after', () => {
+  const cfg = CONFIG; // a real fight against a real enemy, not a scripted outcome
+  const fight = (durability) => {
+    const { s, set } = toFightDay({ seed: 7, tier: 'normal', cfg });
+    for (const g of set) g.durability = durability;
+    const rep = endDay(s, cfg).report;
+    return { s, set, rep };
+  };
+  const full = fight(100);
+  const frail = fight(0.1);
+  // the fight itself is identical: same log, same result, same items used
+  assert.deepEqual(frail.rep.log, full.rep.log);
+  for (const k of ['win', 'draw', 'time', 'advHp', 'enemyHp', 'advMaxHp', 'usedIds', 'usedNames', 'summary']) assert.deepEqual(frail.rep[k], full.rep[k], k);
+  assert.equal(frail.rep.usedIds.length, frail.set.length, 'the whole set was used');
+  // the report remembers how worn the items were before the fight
+  for (const g of frail.rep.used) assert.equal(g.durability, 0.1);
+  for (const g of full.rep.used) assert.equal(g.durability, 100);
+  // after the fight every used item is gone at 0%, while the full ones are just worn
+  assert.equal(frail.rep.destroyed.length, frail.rep.usedIds.length);
+  for (const w of frail.rep.wear) assert.equal(w.left, 0);
+  assert.equal(frail.s.gear.length, 0);
+  assert.equal(full.rep.destroyed.length, 0);
+  assert.equal(full.s.gear.length, full.set.length);
+});
+
+test('an item at exactly the worst wear is destroyed after a worst-roll fight, and one above it survives', () => {
+  // pin the wear: every roll is the same 10, so the loss is certain; the item at 10% is destroyed, 10.1% is not
+  const cfg = cfgWith(WEAK_ENEMIES, { gear: { durabilityLoss: { min: 10, max: 10, tierMult: { normal: 1, elite: 1, champion: 1 } } } });
+  const run = (d) => {
+    const { s, set } = toFightDay({ seed: 3, cfg });
+    set[0].durability = d;
+    const rep = endDay(s, cfg).report;
+    return { s, set, rep };
+  };
+  const at = run(10);
+  assert.ok(!at.s.gear.includes(at.set[0]) && at.rep.destroyed.length === 1);
+  const above = run(10.1);
+  assert.ok(above.s.gear.includes(above.set[0]));
+  assert.equal(above.set[0].durability, 0.1);
+});

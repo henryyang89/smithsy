@@ -3,11 +3,12 @@
 import { h, section, bar, num, tip } from './dom.js';
 import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { craft, canCraft, craftCost, craftMinutes, smithMinutes, gearStats, gearName, scrap, scrapReturn, STAT_LABELS, fmtStat } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, smithMinutes, gearStats, gearName, gearPower, scrap, scrapReturn, STAT_LABELS, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, EPS } from '../core/util.js';
 import { qty, repairLine } from './repairui.js';
+import { durText } from './present.js';
 
 const OUTCOMES = GRADE_ORDER; // F D C B A S: lowest on the left, highest on the right
 const GRADE_LIST = GRADE_ORDER.filter((g) => g !== 'F'); // D C B A S (lowest first, for display)
@@ -441,7 +442,7 @@ function smithPanel(ctx, blocked) {
 function gearPanel(ctx, blocked) {
   const s = ctx.state;
   const cfg = ctx.cfg;
-  const power = (g) => cfg.gear.materialMult[g.material] * cfg.gear.gradeMult[g.grade];
+  const power = (g) => gearPower(g, cfg);
   const items = [...s.gear].sort((a, b) => SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot) || power(b) - power(a) || a.id - b.id);
   const packedCount = items.filter((g) => g.packed).length;
   const title = `Gear (${items.length} item${items.length === 1 ? '' : 's'}${packedCount ? `, ${packedCount} with the adventurer today` : ''})`;
@@ -456,7 +457,7 @@ function gearPanel(ctx, blocked) {
     const back = scrapReturn(item, cfg);
     const [bm, bg] = back.key.split(':');
     const backText = back.qty > EPS ? `${qty(back.qty)} ${cap(bm)} ${bg} bar${back.qty === 1 ? '' : 's'}` : 'nothing';
-    const scrapMath = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${num(d)}% durability`;
+    const scrapMath = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${durText(d)} durability`;
     const scrapNote = `You get back ${backText} (${scrapMath}).${item.gem ? ' The gem is lost.' : ''}`;
     return {
       attrs: { class: item.packed ? 'ws-packed' : '' },
@@ -464,7 +465,7 @@ function gearPanel(ctx, blocked) {
         h('div', {}, h('b', { class: `grade-${item.grade}` }, gearName(item)),
           item.packed ? h('div', {}, h('span', { class: 'chip ws-chip-packed' }, 'with the adventurer today')) : null),
         h('span', { class: 'ws-statstext' }, statLine(gearStats(item, cfg))),
-        h('div', { class: 'ws-durcell' }, bar(d, `ws-dur ${d >= 60 ? 'hi' : d >= 30 ? 'mid' : 'lo'}`), h('span', { class: 'num' }, `${num(d)}%`)),
+        h('div', { class: 'ws-durcell' }, bar(d, `ws-dur ${d >= 60 ? 'hi' : d >= 30 ? 'mid' : 'lo'}`), h('span', { class: 'num' }, durText(d))),
         repairCell,
         h('button', {
           class: 'small ghost ws-scrap',

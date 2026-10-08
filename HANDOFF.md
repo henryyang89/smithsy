@@ -575,6 +575,117 @@ what was done instead and which batch it touches.
   closes it, no horizontal scroll), Workshop Repair and Scrap buttons through a real click, the plan screen's repairs
   note, no console errors.
 
+**Batch 3 (enemies, combat, gear multipliers, gems, durability display, gear search, margin, report snapshots)**
+- **Head start uses no `rand()` when `combat.startFillMax` is 0.** Section 4.6 says "2 `rand()` calls"; with 0 the calls
+  are skipped, so a scripted rand sequence (the hand-timed combat tests) gives exactly the old timing and "0 restores the
+  old timing" holds for the random stream too. With a value above 0 the adventurer's bar is rolled first, then the enemy's.
+- **`report.loadoutsTried` (new report field) and `searchLoadout(...).best`, `estimateWinChance(Sync)(...).evaluated`.** The
+  plan wants a test that `resolveBattle` with 3 items per type stays within the search bound, but module exports cannot
+  be wrapped, so `resolveBattle` stores how many gear combinations the adventurer thought through (`pick.evaluated`) in
+  the report (a single number), and the estimates sum the same count over their guesses. `best` is the chosen loadout's
+  `evalFn` result (null when there was nothing to choose).
+- **`ringFactor(type, n, cfg)` (new, `js/core/rings.js`)** is the one place that knows a ring's weight (duplicate factor, or
+  best-only for `stack: false`); `ringTotals` and `ringContributions` both use it.
+- **`gearMatchNotes(item, enemy, known, cfg)` reads only `known`**; `enemy` is accepted for the plan's signature and
+  deliberately not read, so a caller can pass the real enemy without leaking hidden attributes (a test pins that).
+- **Fast Normal (0) still reads "0%", not "none".** Section 4.6 says a 0 value shows as "none": that is applied to every
+  value of 0 except Fast, where 0 is a normal speed rather than an absent ability. Every Low special and resistance reads
+  "Low · none". Accurate and Evasion chips and hovers take the fight day (`attrValueText(key, level, cfg, day)`); on the
+  Adventurer tab the roster's day is tomorrow's fight day.
+- **`estimateHow` does not say "Worked out automatically"** (the plan's wording): the estimate still runs from the
+  Estimate all button until batch 4 removes it, so the text says "5 guesses x 5 test fights per enemy (base 5 x 5, +1 per
+  Battle simulation point and Foresight ring step ...)" and the plan's sentence about the ± being the test fights' own
+  noise. The "about 9 times in 10" claims are gone from the plan screen and from Help (they described the old margin).
+  B4 only has to swap the first sentence.
+- **Break risk UI is still B4's.** `couldBreak` / `worstWear` exist and the tool's rest rule uses `couldBreak`, but the plan
+  screen's gear step keeps the 1.2 "could be destroyed" line and the red durability number (now whole numbers, compared
+  with the worst wear of the chosen tier through `wearRange`); the warning icon, the default pack and the confirm-dialog
+  line are B4. `wearRange` stays exact; only `wearText` / `durabilityNode` round (low end down, high end up).
+- **Durability text everywhere is `durText`** (Workshop gear table and scrap math, repair button "+38%" = 100 minus the shown
+  value, Adventurer tab, plan gear step, battle report "52% left", wear "-11%"). The Workshop scrap sentence ("35% of its 2
+  bars × 63% durability") therefore uses the shown value while the bars returned use the exact one, so for a 63.4% item
+  the arithmetic in the sentence can be 0.01 off the number it announces.
+- **Topaz armor fallback (section 4.7) not applied.** A one-off measurement with the plan's reference method (iron / steel /
+  mythril C sets vs an elite, reference day = all-Normal elite near 55%, 1,500 fights x 5 days): M2 topaz 3.9 mean (iron 3.9,
+  steel 3.5, mythril 4.4), magic 7.7, pierce 6.9, slow 6.5; M3 about -2.5 to -3.0; M1 magic 14.6, pierce 18.3, stun 9.1, slow
+  12.4. Topaz is on the +4 line, inside the noise (about +-0.8), so the start values stay and B7 decides with the real M1-M7
+  instrument (B6).
+- **`--section day2` reproduces the plan's reference numbers** (unarmed n/e/c 64/35/13, elite 0H/1H/2H+ 43/32/23, champion
+  <=1H/2H/3H 15/10/8, Copper D sword 98/92/72). Not tuned yet (B7): 2 of 8 T-R7 cells are in band, the kit rows are far above
+  T-GEAR (kit2 elite 94 / champion 77 vs 75-80 / 50-55). "kit3" (sword + chest + a C gem for every High special) puts the gems on the chest, then
+  on extra plain Copper D helmet and gloves, because one chest holds one gem; the plan does not say where the second and
+  third gem go. The section is not part of `--section all`.
+- **Help got two extra B3 lines** ("Materials overlap" in Gear, "Bring the right gem" in Gem infusions) besides the growth
+  table removal, the Low = none text and the head start sentence; B5 still owns the full Help pass.
+- **Batch 3 open notes**
+  - [minor] The battle report still lists the gear from `ctx.state.gear` ("Packed but not used") and the old "Gear the
+    adventurer used" panel; the snapshots (`report.used` / `notUsed`) exist but the report layout is B5.
+  - [minor] `tools/balance.mjs --section estimator` still describes 10x10 / 13x13 ... sizes (B6 rewrites it for 5x5 .. 10x10).
+  - [minor] The Matchup table's "Rough time to win / to lose" can read "9-9s" (the range collapses to one number printed
+    twice); pre-existing, not touched.
+  - [minor] Topaz armor fallback not applied although the measured M2 is below +4. Plan 4.7: "Topaz armor fallback if M2 < +4:
+    `stunChanceRed`/`stunDurRed` `[12, 18, 24, 30, 36]`." HANDOFF records a topaz M2 mean of 3.9 (steel 3.5), below +4, but
+    js/config.js gemEffects.topaz.armor stays at [10,15,20,25,30]. The deviation is written up (inside the noise, batch 7
+    tunes it with the batch 6 instrument), so it is a recorded choice, but the plan's condition is strictly met. Either apply
+    the fallback, or make sure batch 7 decides it explicitly.
+  - [minor] The lost-fight test was not given used/notUsed checks (section 11 row: "add `used`/`notUsed` asserts; `state.end`
+    on a loss | B3, B5"). The day-2 win test got them (tests/game.test.mjs ~line 184); 'a lost fight is game over: no ring,
+    no score' is unchanged. Expected: add `assert.deepEqual(r.report.used, [])` and `notUsed` checks, with a packed item.
+  - [minor] Help attribute table shows Fast Normal as "none", unlike the roster chip. js/ui/help.js enemySection `lvCells`
+    maps value 0 to 'none' for every attribute, so Fast renders "-2 / none / 2" (confirmed with tests/fakedom.mjs). The roster
+    chip says "Normal · 0%" and Fast 0 is a normal speed. Expected: leave Fast out of the 'none' rule, as attrValueText does.
+  - [minor] The 'could be destroyed' line can name a threshold that a listed-as-safe item meets. js/ui/endday.js:900 prints
+    `At ${Math.ceil(maxLoss - 1e-9)}% or less, could be destroyed`, while listed items use `g.durability <= maxLoss + 1e-9`.
+    Elite worst wear 13.2 and a chest at 14.9% (shown "14%"): the line reads "At 14% or less, could be destroyed if used
+    against Dire Wolf: D Copper Helmet (1%)" and omits the chest. Batch 4 replaces it with the couldBreak icon; until then
+    floor the threshold, or phrase it by exact wear.
+  - [minor] Grammar in the estimate explanation: "1 attributes hidden". js/ui/endday.js estimateHow prints
+    `(${nHidden} attributes hidden for ${sel.name})`; singular is needed when the count is 1.
+  - [minor] Request-pins test hard-codes a number the user never asked for: tests/spec-guards.test.mjs 'request pins (batch 3)'
+    has `assert.equal(CONFIG.combat.startFillMax, 50, ...)`. That is one of the changes the user did not ask for (section 13),
+    so it goes beyond the documented pins exception. The other pins trace to user requests.
+  - [minor] Report wear numbers are rounded separately, so they may not add up. js/ui/endday.js:502-503 shows
+    `-${Math.round(w.loss)}%` and `${durText(w.left)} left`, with the starting durability floored: 63.9 before shows "63%",
+    loss 10.5 shows "-11%", 53.4 after shows "53% left" (63 - 11 = 52). Cosmetic; batch 5's report rework could show the loss
+    as the difference of the shown values.
+  - [minor] README still describes the 1.2 estimate size: README.md:128 "(10 guesses of the hidden attributes x 10 test
+    fights each)" and line 237 "estimator (v1.2) ... at 10 x 10"; the game now uses 5 x 5. Reminder for batch 7's docs pass.
+
+**Tests (B3)**
+- `helpers.mjs` has `NO_HEAD_START`; `combat.test.mjs` pins its hand-timed fights with it (`CFG` and `capAt`). New combat
+  tests: Low Chilling / Magical / Stunning do nothing, `startFillMax` 0 = old timing, 50 = both bars in [0, 0.5) with
+  exact first-attack times from a scripted rand, deterministic per rand source, and the default config really randomizes
+  who strikes first.
+- `rings.test.mjs`: Foresight has whole values and `stack: false`; D + C -> 1, B + A -> 2; `ringContributions` gives the
+  others factor 0; Foresight is the only non-stacking type.
+- `sim.test.mjs`: `simCounts` pinned with whole Foresight values and best-ring-only (+ one test with a stacking Foresight
+  type for the float-epsilon case) and one with the real config (base, +1 per point up to the max, best ring on top);
+  `pruneDominated` (plain vs gem chest, different gems both stay, identical items keep the lowest id, trade-offs stay),
+  `searchLoadout` (equals `bestLoadout` on small cases, exact up to `maxExactCombos` inclusive, one type at a time above
+  it, `evaluated` <= `searchPasses` x items + 1, early stop, start item rule, nothing to choose = nothing simulated),
+  `loadoutEval`, usage keyed by ids, `res.wins`, and `shownMargin` (25/25 and 0/25 -> 14, 2 x se when larger, never below
+  1, null without fights). Tests that need two swords to be a real choice use `TWO_SWORDS` (a strong plain sword and a
+  weak emerald one): a plain copper sword next to an iron C sword is dominated and pruned now.
+- `gear.test.mjs`: R21 position rule for each material pair and `A_N < D_{N+1}` (from CONFIG), `gearPower`, `shownDurability`
+  (the plan's cases and a sweep over every stored value), `worstWear`, `couldBreak` (pinned wear, equal = true, sweep),
+  `GEM_MATCH`, `gearMatchNotes` (visible High only, nothing for hidden / Normal / Low, nothing leaks from `enemy`).
+- `enemies.test.mjs`: tier bases non-decreasing with a strict step, Low <= Normal <= High, Low = 0 for the four specials and
+  four resistances, core stats stay small, growth only touches HP / damage / ratings.
+- `durability.test.mjs`: an item at 0.1% fights exactly like one at 100% (same seed, same log) and is destroyed after; an
+  item at exactly the worst wear is destroyed, one above survives. `game.test.mjs`: `report.used` / `notUsed` snapshots
+  (SLOTS order, durability before the fight, own copies, home gear in neither), `analysis` / `planEstimate` null,
+  `ringTotals`, and `resolveBattle` with 3 items per type stays within the search bound (32 combinations are all tried).
+- `spec-guards.test.mjs`: no "Rating growth" / `ratingMult` in endday.js, Help does not read `growthPerDay` or `growth(`,
+  no raw decimal durability printing in the gear screens, no `marginPts`, `resolveBattle` uses `searchLoadout`, one
+  `gearPower`; a B3 "request pins" test (R6, R40, R41, head start 50, A2 5 x 5 with at most +5 = 10 x 10) - the same
+  documented exception to "tests never hard-code CONFIG numbers" as in B1 and B2.
+- `ui-render.test.mjs`: no growth text on any screen, "Low · none" and fight-day Accurate / Evasion chips (every rating chip
+  checked), whole-number durability in the Workshop, Adventurer tab, plan, today's packed list and the report, whole-number
+  wear text, the new estimate wording and the Foresight "only your best ring counts" text.
+- Hand-checked in headless Chromium at 1280 and 390 px: the plan screen with worn gear (durabilities 63 / 99 / 12 / 1%), the
+  roster with "Low · none" and fight-day ratings, Estimate all in a real DOM (100% ± 14, usage by ids), confirm, end day and
+  the report, the Adventurer tab, Workshop, Rings and Help: no console errors, no horizontal overflow.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),

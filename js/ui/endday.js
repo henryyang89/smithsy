@@ -3,19 +3,20 @@
 // Also exports widgets reused by the Adventurer tab and the Log tab: rosterTable (one enemy per column),
 // enemyCard (a single enemy), renderBattleReport, renderCombatLog, combatStatsTable and small gear/ring helpers.
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.plan*.
-import { h, section, bar, num } from './dom.js';
+import { h, section, bar, num, tip } from './dom.js';
 import { SLOTS, GRADES, LEVELS, TIERS } from '../config.js';
 import * as Game from '../core/game.js';
-import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisible } from '../core/enemies.js';
-import { estimateWinChance, loadouts, simCounts } from '../core/sim.js';
+import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisible, growth } from '../core/enemies.js';
+import { estimateWinChance, loadouts, simCounts, shownMargin } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
-import { gearStats, wearLoss } from '../core/gear.js';
+import { gearStats, gearPower, wearLoss } from '../core/gear.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { intelValue, nextIntelGain, trackValueText } from '../core/intel.js';
 import { mixSeed } from '../core/rng.js';
 import { cap } from '../core/util.js';
 import { spendIntelAction } from './skillsview.js';
+import { durText, winText } from './present.js';
 
 // ------------------------------------------------------------------ format ----
 const f1 = (v) => num(v, 1);
@@ -25,19 +26,22 @@ const signedPct = (v) => `${v > 0 ? '+' : ''}${num(v, 1)}%`;
 const LV = { low: 'Low', normal: 'Normal', high: 'High' };
 const planTracks = (cfg) => Object.keys(cfg.intel.tracks); // the plan screen offers every intel track
 
-// "25%", "120", "+5%" — the attribute's value with its unit (pierce resistance is a % of your piercing ignored).
-export function attrValueText(key, level, cfg) {
+// "25%", "101", "+2%", "none" — the attribute's value with its unit (pierce resistance is a % of your piercing
+// ignored). A value of 0 (every Low special and resistance) reads "none": the enemy simply does not have it. With
+// `day`, Accurate and Evasion show the value on that fight day (the daily growth is never shown as a number).
+export function attrValueText(key, level, cfg, day = null) {
   const v = cfg.enemies.attributes[key].values[level];
-  if (key === 'accurate' || key === 'evasion') return String(v);
+  if (key === 'accurate' || key === 'evasion') return String(day == null ? v : Math.round(v * growth(day, cfg).ratings));
   if (key === 'fast') return `${v > 0 ? '+' : ''}${v}%`;
+  if (v === 0) return 'none';
   return `${v}%`;
 }
 
 const mixText = (c) => `${c.low} low · ${c.normal} normal · ${c.high} high`;
 
 // -------------------------------------------------------------- gear/ring ----
-// Rough strength of an item: material multiplier x grade multiplier (ignores gems).
-export const gearPower = (g, cfg) => cfg.gear.materialMult[g.material] * cfg.gear.gradeMult[g.grade];
+// Rough strength of an item: material multiplier x grade multiplier (ignores gems). Lives in core/gear.js.
+export { gearPower };
 
 // Up to n items per slot: highest power first, then highest durability.
 export function bestPerSlot(items, n, cfg) {
@@ -107,26 +111,29 @@ export function wearRange(state, cfg, tier = null) {
   return { min: at(dl.min, Math.min(...mults)), max: at(dl.max, Math.max(...mults)), red, avg };
 }
 
-// "8.8-13.2% per fight (avg 10.6%; more against tougher enemies: x1 / x1.1 / x1.2 ...; 5% less from Gear care)" for notes and tooltips.
+// Whole numbers, the low end rounded down and the high end up: "9-13% per fight (avg 11%; more against tougher
+// enemies: x1 / x1.1 / x1.2 ...; 5% less from Gear care)" for notes and tooltips.
 export function wearText(state, cfg, tier = null) {
   const w = wearRange(state, cfg, tier);
   const dl = cfg.gear.durabilityLoss;
   const extra = [];
-  if (w.avg != null) extra.push(`avg ${num(w.avg, 1)}%`);
+  if (w.avg != null) extra.push(`avg ${Math.round(w.avg)}%`);
   if (!tier && dl.tierMult) extra.push(`more against tougher enemies: x${TIERS.map((t) => dl.tierMult[t] || 1).join(' / x')} for ${TIERS.join(' / ')}`);
   if (tier && dl.tierMult && (dl.tierMult[tier] || 1) !== 1) extra.push(`x${dl.tierMult[tier]} against ${/^[aeiou]/i.test(tier) ? 'an' : 'a'} ${tier} enemy`);
   if (w.red > 0) extra.push(`${num(w.red, 1)}% less from Gear care`);
-  return `${num(w.min, 1)}-${num(w.max, 1)}% per fight${extra.length ? ` (${extra.join('; ')})` : ''}`;
+  return `${Math.floor(w.min + 1e-9)}-${Math.ceil(w.max - 1e-9)}% per fight${extra.length ? ` (${extra.join('; ')})` : ''}`;
 }
 
-// wear: { min, max } from wearRange (defaults to the raw config range).
+// wear: { min, max } from wearRange (defaults to the raw config range). The text is a whole number (durText); the
+// bar keeps the exact value.
 export function durabilityNode(g, cfg, wear) {
   const d = g.durability;
   const { min, max } = wear || cfg.gear.durabilityLoss;
-  const risky = d <= max;
+  const risky = d <= max + 1e-9;
   const cls = risky ? 'adv-dur-low' : d < 50 ? 'adv-dur-mid' : '';
-  return h('div', { class: 'adv-dur', title: risky ? `Could break in its next fight (a used item loses ${num(min, 1)}-${num(max, 1)}% per fight; 0% = destroyed)` : `A used item loses ${num(min, 1)}-${num(max, 1)}% durability per fight` },
-    bar(d, cls), h('span', { class: risky ? 'err' : '' }, `${f1(d)}%`));
+  const range = `${Math.floor(min + 1e-9)}-${Math.ceil(max - 1e-9)}%`;
+  return h('div', { class: 'adv-dur', ...tip(risky ? `Could break in its next fight (a used item loses ${range} per fight; 0% = destroyed)` : `A used item loses ${range} durability per fight`) },
+    bar(d, cls), h('span', { class: risky ? 'err' : '' }, durText(d)));
 }
 
 export function ringNameNode(r, cfg) {
@@ -195,17 +202,18 @@ function enemyView(ctx, enemy, opts = {}) {
   return { A, tierCfg, day, base, known, hidden, rem, possible, hpText };
 }
 
-// "Normal · 15%" chip, or "?" while the level is hidden.
-function levelChip(cfg, key, lv) {
+// "Normal · 15%" chip ("Low · none" for a special the enemy does not have), or "?" while the level is hidden.
+// day = the fight day: Accurate and Evasion show their value on that day.
+function levelChip(cfg, key, lv, day = null) {
   return lv
-    ? h('span', { class: `adv-lv attr-${lv}` }, `${LV[lv]} · ${attrValueText(key, lv, cfg)}`)
+    ? h('span', { class: `adv-lv attr-${lv}` }, `${LV[lv]} · ${attrValueText(key, lv, cfg, day)}`)
     : h('span', { class: 'adv-lv attr-unknown' }, '?');
 }
 
 // Tooltip for an attribute: what it does and the value at each level.
-function attrTitle(cfg, key) {
+function attrTitle(cfg, key, day = null) {
   const a = cfg.enemies.attributes[key];
-  return `${a.name}: ${a.desc}. ${LEVELS.map((l) => `${LV[l]} ${attrValueText(key, l, cfg)}`).join(' / ')}`;
+  return `${a.name}: ${a.desc}. ${LEVELS.map((l) => `${LV[l]} ${attrValueText(key, l, cfg, day)}`).join(' / ')}`;
 }
 
 const remText = (rem) => LEVELS.filter((l) => rem[l] > 0).map((l) => `${rem[l]} ${l}`).join(' · ');
@@ -248,14 +256,12 @@ export function enemyCard(ctx, enemy, opts = {}) {
   const v = enemyView(ctx, enemy, opts);
   const { A, tierCfg, day, base, known, hidden, rem, hpText } = v;
   const stat = (label, value, title) => h('span', { class: 'adv-bstat', title }, h('span', { class: 'muted' }, `${label} `), h('b', {}, value));
-  const growthPct = Math.round((base.ratingMult - 1) * 100);
   const baseLine = h('div', { class: 'adv-base' },
-    stat('HP', hpText, `Base ${f1(base.hp)} (day ${day}) x HP attribute`),
+    stat('HP', hpText, `Base ${f1(base.hp)} x HP attribute`),
     stat('Damage', f1(base.damage), 'Damage per hit before magic, defense and piercing'),
-    stat('Defense', `${base.defense}%`, 'Reduces your physical damage (piercing ignores part of it)'),
-    stat('Ratings', `x${f2(base.ratingMult)}`, `Accurate and Evasion values are multiplied by ${f2(base.ratingMult)} (+${growthPct}% daily growth)`));
+    stat('Defense', `${base.defense}%`, 'Reduces your physical damage (piercing ignores part of it)'));
 
-  const cell = (k) => h('div', { class: 'adv-attr', title: attrTitle(cfg, k) }, h('span', { class: 'adv-an' }, A[k].name), levelChip(cfg, k, known[k]));
+  const cell = (k) => h('div', { class: 'adv-attr', title: attrTitle(cfg, k, day) }, h('span', { class: 'adv-an' }, A[k].name), levelChip(cfg, k, known[k], day));
   const pairs = h('div', { class: 'adv-pairs' },
     h('div', { class: 'adv-ph' }, 'Offense'), h('div', { class: 'adv-ph' }, 'Defense'),
     cfg.enemies.pairs.flatMap(([o, d]) => [cell(o), cell(d)]));
@@ -311,13 +317,12 @@ export function rosterTable(ctx, enemies, opts = {}) {
   const baseHp = row('Base HP', 'Base HP on the fight day, before the HP attribute (see the HP row below)', (e, v) => f1(v.base.hp));
   const baseDmg = row('Damage', 'Damage per hit before magic, defense and piercing', (e, v) => f1(v.base.damage));
   const baseDef = row('Defense', 'Reduces your physical damage (piercing ignores part of it)', (e, v) => `${v.base.defense}%`);
-  const growth = row('Rating growth', 'Accurate and Evasion values below are multiplied by this (daily growth)', (e, v) => `x${f2(v.base.ratingMult)}`);
   const ring = row('Ring reward', 'The ring a win drops (hidden until your ring scouting reveals it)', (e) => ringRewardCell(ctx, e));
   const hiddenRow = row('Hidden attributes', 'How many of the 12 attributes you cannot see yet, and the Low / Normal / High levels they can still have', (e, v) => (v.hidden > 0
     ? [h('b', {}, String(v.hidden)), h('div', { class: 'muted rt-sm' }, remText(v.rem))]
     : h('span', { class: 'muted' }, 'none')));
 
-  const rows = [tier, baseHp, baseDmg, baseDef, growth, ring, hiddenRow];
+  const rows = [tier, baseHp, baseDmg, baseDef, ring, hiddenRow];
   if (opts.estimates) {
     rows.push(h('tr', { class: 'rt-est' }, rowHead('Win estimate', 'Estimated win chance with the current gear and ring selection (press Estimate all)'),
       enemies.map((e, i) => h('td', { ...colAttrs(i), 'data-est': i }, estimateCell(opts.estimates[i], opts.running)))));
@@ -329,8 +334,8 @@ export function rosterTable(ctx, enemies, opts = {}) {
   const namesRow = (label, sub) => h('tr', { class: 'rt-sect rt-sect-names' },
     h('th', { class: 'rt-row', scope: 'rowgroup', title: sub }, label),
     enemies.map((e, i) => h('td', { ...colAttrs(i, 'rt-nm'), title: `${e.name}: ${sub}` }, e.name)));
-  const attrRow = (key, last) => row(A[key].name, attrTitle(cfg, key), (e, v) => {
-    const chip = levelChip(cfg, key, v.known[key]);
+  const attrRow = (key, last) => row(A[key].name, attrTitle(cfg, key, views.length ? views[0].day : opts.day), (e, v) => {
+    const chip = levelChip(cfg, key, v.known[key], v.day);
     if (key !== 'hp') return chip;
     return [chip, h('div', { class: 'muted rt-sm', title: `HP = base ${f1(v.base.hp)} x the HP attribute` }, `= ${v.hpText} HP`)];
   }, last ? 'rt-last' : '');
@@ -375,9 +380,9 @@ function ringRewardCell(ctx, enemy) {
 // A cell of the "Win estimate" row: the win % (colour by chance) with its margin, "…" while that estimate runs, "—" if none.
 function estimateCell(res, running) {
   if (res) {
-    const m = marginPts(res);
+    const m = shownMargin(res);
     return h('div', { class: 'rt-ec' },
-      h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${winWithMargin(res)}${m != null ? ` point${m === 1 ? '' : 's'}` : ''} from ${res.fights} simulated fights${m != null ? ` (the ± is how far the simulation alone could be off; hidden attributes add more)` : ''}` }, winText(res.winPct)),
+      h('span', { class: `adv-badge ${winClass(res.winPct)}`, ...tip(`${winWithMargin(res)}${m != null ? ` point${m === 1 ? '' : 's'}` : ''} from ${res.fights} test fights${m != null ? ` (the ± is how far the test fights alone could be off; hidden attributes can make the real chance higher or lower)` : ''}`) }, winText(res.winPct)),
       m != null ? h('div', { class: 'muted rt-sm rt-pm' }, `± ${m}`) : null);
   }
   if (running) return h('span', { class: 'muted', title: 'Simulating…' }, '…');
@@ -385,14 +390,11 @@ function estimateCell(res, running) {
 }
 
 const winClass = (p) => (p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'err');
-const winText = (v) => `${Math.round(v)}%`;
 
-// Margin of an estimate in points: twice the standard error, shown in whole points and never below 1. It covers
-// the simulation's own noise only (about 9 times in 10 when every attribute is known), not the guesswork about
-// hidden attributes. null for results without one (nothing simulated).
-export const marginPts = (res) => (res && Number.isFinite(res.se) ? Math.max(1, Math.round(2 * res.se)) : null);
-// "62% ± 12" (or just "62%" without a margin)
-const winWithMargin = (res) => (marginPts(res) != null ? `${winText(res.winPct)} ± ${marginPts(res)}` : winText(res.winPct));
+// "62% ± 14" (or just "62%" without a margin). The margin is core's shownMargin: it covers the test fights'
+// own noise only (with a floor from the number of fights, so 25 wins of 25 is not "± 1"), not the guesswork
+// about hidden attributes.
+const winWithMargin = (res) => (shownMargin(res) != null ? `${winText(res.winPct)} ± ${shownMargin(res)}` : winText(res.winPct));
 
 // -------------------------------------------------------------- combat log ----
 // Backpack-Battles style log lines. Returns a DOM node.
@@ -497,8 +499,8 @@ export function renderBattleReport(report, ctx, opts = {}) {
   };
   const wearRows = (report.wear || []).map((w) => h('tr', {},
     h('td', {}, w.name, wearDetail(w) ? h('div', { class: 'muted adv-small' }, wearDetail(w)) : null),
-    h('td', { class: 'num err' }, `-${f1(w.loss)}%`),
-    h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${f1(w.left)}% left`)));
+    h('td', { class: 'num err' }, `-${Math.round(w.loss)}%`),
+    h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${durText(w.left)} left`)));
   const survived = report.win || report.draw;
   const gearCareNode = survived && Array.isArray(report.notes) && cfg.skills.activity.gearCare
     ? h('p', { class: 'adv-tight muted adv-small' }, `${cfg.skills.activity.gearCare.name}: +${cfg.skills.activity.gearCare.xp} XP for surviving the fight.`,
@@ -784,7 +786,7 @@ export function renderPlan(root, ctx) {
     section('1. Choose an enemy',
       h('p', { class: 'adv-tight muted adv-small' }, 'Click a column to choose that enemy. Each row compares one attribute across the roster: ',
         h('span', { class: 'attr-low' }, 'green = Low'), ' (weaker enemy), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. ',
-        'Offense = what it does to you, defense = how well it resists your attacks. Press ', h('b', {}, 'Estimate all'), ` (bottom bar) to fill the win-estimate row: ${counts.samples} guesses x ${counts.evalFights} test fights per enemy (raise with Battle simulation intel and Foresight rings).`),
+        'Offense = what it does to you, defense = how well it resists your attacks. Press ', h('b', {}, 'Estimate all'), ` (bottom bar) to fill the win-estimate row: ${counts.samples} guesses x ${counts.evalFights} test fights per enemy (raise with Battle simulation intel and a Foresight ring).`),
       running ? progressBlock(running) : null,
       rosterTable(ctx, s.roster.enemies, { day: s.roster.day, selected: p.enemyIndex, onSelect: select, estimates, running: !!running })),
     h('div', { class: 'cols' }, gearStep(ctx, p, selGear, sel), ringStep(ctx, p, advRings, selRings)),
@@ -880,7 +882,7 @@ function gearStep(ctx, p, selGear, sel) {
         h('td', {}, durabilityNode(g, cfg, wear))));
     }
   }
-  const risky = selGear.filter((g) => g.durability <= maxLoss);
+  const risky = selGear.filter((g) => g.durability <= maxLoss + 1e-9);
   const combos = loadouts(selGear).length;
   return section('2. Pack gear',
     h('p', { class: 'adv-tight muted' }, 'Repairs happen at camp during the day, on gear the adventurer does not have. To repair an item, leave it home: tomorrow you can repair it in the Workshop.'),
@@ -895,7 +897,7 @@ function gearStep(ctx, p, selGear, sel) {
         h('thead', {}, h('tr', {}, h('th', {}, 'Pack'), h('th', {}, 'Item and stats'), h('th', {}, 'Durability'))),
         h('tbody', {}, rows)))
       : h('p', { class: 'warn' }, 'You own no gear: the adventurer fights unarmed with no armor.'),
-    risky.length ? h('p', { class: 'err adv-small' }, `At ${maxLoss}% or less, could be destroyed if used${sel ? ` against ${sel.name}` : ''}: ${risky.map((g) => `${g.grade} ${cap(g.material)} ${cap(g.slot)} (${f1(g.durability)}%)`).join(', ')}.`) : null);
+    risky.length ? h('p', { class: 'err adv-small' }, `At ${Math.ceil(maxLoss - 1e-9)}% or less, could be destroyed if used${sel ? ` against ${sel.name}` : ''}: ${risky.map((g) => `${g.grade} ${cap(g.material)} ${cap(g.slot)} (${durText(g.durability)})`).join(', ')}.`) : null);
 }
 
 function ringStep(ctx, p, advRings, selRings) {
@@ -1008,27 +1010,27 @@ function matchupTable(ctx, sel, preview) {
     h('p', { class: 'adv-tight muted adv-small' }, 'Uses the preview gear above. Ranges cover the levels hidden attributes could still have. Ignores stuns, slows and damage rolls — run the estimate for the full picture.'));
 }
 
-// "10 guesses x 10 test fights per enemy" and how to raise it. counts = simCounts(state); est = the chosen
+// "5 guesses x 5 test fights per enemy" and how to raise it. counts = simCounts(state); est = the chosen
 // enemy's finished estimate (or null): the caveat then states its actual margin.
 function estimateHow(ctx, sel, counts, est = null) {
   const { state, cfg } = ctx;
   const known = sel ? knownLevels(state, sel, cfg) : null;
   const nHidden = known ? Object.keys(cfg.enemies.attributes).length - Object.keys(known).length : null;
+  const o = cfg.sim;
+  const m = shownMargin(est);
   const intelPart = intelValue(state, 'simDepth', cfg);
   const ringPart = counts.extra - intelPart;
-  const o = cfg.sim;
-  const m = marginPts(est);
   return h('div', { class: 'adv-how' },
     h('p', { class: 'muted adv-small' },
       h('b', {}, `${counts.samples} guesses x ${counts.evalFights} test fights per enemy`),
-      ` (base ${o.samples} x ${o.evalFights}${counts.extra ? `, +${intelPart} from Battle simulation intel${ringPart ? ` and +${ringPart} from Foresight rings` : ''}` : ''}). `,
-      `For each guess of the hidden attributes${nHidden != null ? ` (${nHidden} hidden for ${sel.name})` : ''}, consistent with the tier mix, the adventurer picks the best packed gear (${counts.fightsPerLoadout} test fights per combination), then fights ${counts.evalFights} fresh fights: ${counts.samples * counts.evalFights} fights per enemy. A draw (safety time cap) counts as survival.`),
+      ` (base ${o.samples} x ${o.evalFights}, +1 per Battle simulation point and Foresight ring step${counts.extra ? `; now +${counts.extra}: ${[intelPart ? `+${intelPart} from Battle simulation intel` : null, ringPart ? `+${ringPart} from your Foresight ring` : null].filter(Boolean).join(' and ')}` : ''}). `,
+      `For each guess${nHidden != null ? ` (${nHidden} attributes hidden for ${sel.name})` : ''}, consistent with the tier mix, the adventurer picks the best packed gear (${counts.fightsPerLoadout} test fights per gear combination it tries), then fights ${counts.evalFights} fresh fights: ${counts.samples * counts.evalFights} fights per enemy. A draw (safety time cap) counts as survival.`),
     h('p', { class: 'muted adv-small', 'data-margin-note': m != null ? m : null },
       m != null
-        ? ['A small simulation is noisy: this estimate is ', h('b', {}, winWithMargin(est)), ` point${m === 1 ? '' : 's'}. The ± is how far the simulation alone could be off (about 9 times in 10 when every attribute is known); attributes you can't see add more uncertainty. It is a rough guide, and a risk you take on. `]
-        : 'A small simulation is noisy: every estimate shows its margin of error (± points), and it is a rough guide, a risk you take on. ',
+        ? ['This estimate is ', h('b', {}, winWithMargin(est)), ` point${m === 1 ? '' : 's'}. The ± is how far the test fights alone could be off; hidden attributes can make the real chance higher or lower. It is a rough guide, and a risk you take on. `]
+        : 'Every estimate shows its ± (how far the test fights alone could be off); hidden attributes can make the real chance higher or lower. It is a rough guide, and a risk you take on. ',
       'To make it steadier, spend intel on ',
-      h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear ', h('b', {}, cfg.rings.types.foresight.name), ' smith rings (Rings tab). Both add guesses and test fights, which tightens the margin (about 4 times as many guesses halve it) and makes the run slower.'));
+      h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear a ', h('b', {}, cfg.rings.types.foresight.name), ` smith ring (Rings tab; only your best one counts). Both add guesses and test fights, which tightens the ± and makes the run slower.`));
 }
 
 function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
@@ -1055,18 +1057,18 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
     };
     right = h('div', {},
       h('div', { class: 'adv-bignums' },
-        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, title: marginPts(est) != null ? `± ${marginPts(est)} is how far the simulation alone could be off (about 9 times in 10 when every attribute is known). Attributes you can't see add more uncertainty.` : null },
-          winText(est.winPct), marginPts(est) != null ? h('span', { class: 'adv-pm' }, ` ± ${marginPts(est)}`) : null), h('div', { class: 'muted' }, marginPts(est) != null ? 'win chance (± points)' : 'win chance')),
+        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, ...(shownMargin(est) != null ? tip(`± ${shownMargin(est)} is how far the test fights alone could be off. Hidden attributes can make the real chance higher or lower.`) : {}) },
+          winText(est.winPct), shownMargin(est) != null ? h('span', { class: 'adv-pm' }, ` ± ${shownMargin(est)}`) : null), h('div', { class: 'muted' }, shownMargin(est) != null ? 'win chance (± points)' : 'win chance')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),
       h('p', { class: 'adv-small muted' }, `${est.fights} simulated fights vs ${sel.name} (${c.samples} guesses x ${c.evalFights}).`),
       h('h4', { class: 'adv-h4' }, 'Gear the adventurer would use'),
-      est.usage.length && est.usage[0].items.length
+      est.usage.length && est.usage[0].ids
         ? h('table', { class: 'adv-stats' },
           h('thead', {}, h('tr', {}, h('th', { class: 'num' }, 'Guesses'), h('th', {}, 'Items'))),
           h('tbody', {}, est.usage.slice(0, 6).map((u) => h('tr', {},
             h('td', { class: 'num' }, `${Math.round((u.count / c.samples) * 100)}%`),
-            h('td', {}, u.items.map((id, i) => [i ? ', ' : '', name(id)]))))))
+            h('td', {}, u.ids.split(',').map((id, i) => [i ? ', ' : '', name(Number(id))]))))))
         : h('p', { class: 'muted' }, 'No gear packed (unarmed).'),
       est.usage.length > 6 ? h('p', { class: 'muted adv-small' }, `… and ${est.usage.length - 6} more combinations.`) : null,
       how);

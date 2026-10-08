@@ -9,7 +9,7 @@ import { smithBonuses } from './bonuses.js';
 import { generateRoster, enemyCombatant, knownLevels } from './enemies.js';
 import { ringTotals, ringDef, wornRings, ringLabel } from './rings.js';
 import { adventurerCombatant, fight } from './combat.js';
-import { loadouts, bestLoadout } from './sim.js';
+import { searchLoadout, loadoutEval } from './sim.js';
 import { gearName, wearLoss, wornDurability } from './gear.js';
 import { formatClock } from './util.js';
 import { VERSION } from '../version.js';
@@ -139,17 +139,25 @@ export function confirmPlan(state, plan, cfg = CONFIG) {
   return { ok: true };
 }
 
+// A gear item as the report keeps it: what it was and how worn it was BEFORE the fight.
+export function gearSnapshot(g) {
+  return { id: g.id, slot: g.slot, material: g.material, grade: g.grade, gem: g.gem ? { type: g.gem.type, grade: g.gem.grade } : null, durability: g.durability };
+}
+
 // Resolve today's planned fight. The adventurer sees the enemy's real attributes,
-// picks the best packed gear (one per slot), then fights with the game's RNG.
+// picks the best packed gear (one per slot: searchLoadout, bestGearFights fights per combination tried),
+// then fights with the game's RNG. Wear is applied after the fight, so every item lasts the whole fight.
 export function resolveBattle(state, cfg = CONFIG) {
   const plan = state.plan;
   const e = plan.enemy;
   const enemyC = enemyCombatant(e.tier, e.day, e.levels, e.name, cfg);
   const packed = state.gear.filter((g) => plan.gearIds.includes(g.id));
   const rings = adventurerRingTotals(state, plan.ringIds, cfg);
-  const combos = loadouts(packed);
-  const pick = bestLoadout(combos, rings, enemyC, mixSeed(state.seed, state.day, 77), cfg.combat.bestGearFights, cfg);
-  const used = combos[pick.index];
+  const pick = searchLoadout(packed, loadoutEval(rings, enemyC, mixSeed(state.seed, state.day, 77), cfg.combat.bestGearFights, cfg), cfg);
+  const used = pick.items;
+  // snapshots from before the wear: what was used, and what was packed but not used (both in SLOTS order)
+  const usedSnap = used.map(gearSnapshot);
+  const notUsedSnap = SLOTS.flatMap((slot) => packed.filter((g) => g.slot === slot && !used.includes(g))).map(gearSnapshot);
   const adv = adventurerCombatant(used, rings, cfg);
   const rng = rngFor(state);
   const result = fight(adv, enemyC, rng.next, true, cfg);
@@ -194,6 +202,12 @@ export function resolveBattle(state, cfg = CONFIG) {
     enemyC,
     usedIds: used.map((g) => g.id),
     usedNames: used.map(gearName),
+    used: usedSnap, // snapshots of the gear used and of the packed gear that was not (durability before the fight)
+    notUsed: notUsedSnap,
+    ringTotals: { ...rings }, // the adventurer's ring totals in this fight
+    loadoutsTried: pick.evaluated, // gear combinations the adventurer thought through
+    planEstimate: null, // the win estimate the plan showed (filled in when the plan is confirmed with one)
+    analysis: null, // the loss analysis (computed on the run summary screen when needed)
     wear,
     notes,
     destroyed,

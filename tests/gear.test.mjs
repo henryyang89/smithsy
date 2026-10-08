@@ -4,7 +4,7 @@ import { CONFIG, SLOTS, GRADES, BARS } from '../js/config.js';
 import * as GearModule from '../js/core/gear.js';
 import {
   gearStats, craft, canCraft, craftCost, craftMinutes, smithMinutes, repairInfo, repairMinutes, repair, scrap, scrapReturn, gearName, barKey, statsText,
-  repairPlan, substituteWarning,
+  repairPlan, substituteWarning, gearPower, shownDurability, worstWear, couldBreak, gearMatchNotes, GEM_MATCH, wearLoss,
 } from '../js/core/gear.js';
 import { endDay, acknowledgeReport, confirmPlan } from '../js/core/game.js';
 import { xpToNext } from '../js/core/skills.js';
@@ -743,4 +743,146 @@ test('scrap requires the work phase and being at camp', () => {
   s.location = { ...s.map.camp };
   assert.equal(scrap(s, a.id).ok, true);
   assert.deepEqual(s.gear, []);
+});
+
+// ------------------------------------------------ materials and grades (R21) ----
+test('R21: an S item of one material sits between D and C of the next one, closer to C; A stays below the next D', () => {
+  const { materialMult: M, gradeMult: G } = CONFIG.gear;
+  for (let i = 0; i < BARS.length - 1; i++) {
+    const lo = BARS[i];
+    const hi = BARS[i + 1];
+    const sTop = M[lo] * G.S;
+    const dNext = M[hi] * G.D;
+    const cNext = M[hi] * G.C;
+    const position = (sTop - dNext) / (cNext - dNext); // 0 = the next material's D, 1 = its C
+    assert.ok(position > 0.5 && position < 1, `${lo} S sits ${Math.round(position * 100)}% of the way from ${hi} D to ${hi} C`);
+    assert.ok(M[lo] * G.A < dNext, `${lo} A (${M[lo] * G.A}) stays below ${hi} D (${dNext})`);
+  }
+  // the same through gearPower and the stats of a real item
+  assert.ok(gearPower(item('chest', 'copper', 'S')) > gearPower(item('chest', 'iron', 'D')));
+  assert.ok(gearPower(item('chest', 'copper', 'S')) < gearPower(item('chest', 'iron', 'C')));
+  assert.ok(gearStats(item('chest', 'iron', 'S')).defense > gearStats(item('chest', 'steel', 'D')).defense);
+  assert.ok(gearStats(item('chest', 'iron', 'A')).defense < gearStats(item('chest', 'steel', 'D')).defense);
+});
+
+test('gearPower = material multiplier x grade multiplier (defaults to CONFIG, ignores the gem)', () => {
+  for (const m of BARS) for (const g of GRADES) close(gearPower(item('sword', m, g)), CONFIG.gear.materialMult[m] * CONFIG.gear.gradeMult[g]);
+  close(gearPower(item('sword', 'iron', 'B', { type: 'ruby', grade: 'S' })), gearPower(item('sword', 'iron', 'B')));
+  close(gearPower(item('sword', 'iron', 'B'), PG), 1.5 * 1.2);
+});
+
+// ----------------------------------------------- durability display (R9) ----
+test('shownDurability: whole numbers rounded down, at least 1 while the item exists, 100 only when full', () => {
+  assert.equal(shownDurability(100), 100);
+  assert.equal(shownDurability(99.6), 99);
+  assert.equal(shownDurability(99.9), 99, '99.9 is not full');
+  assert.equal(shownDurability(90.1), 90);
+  assert.equal(shownDurability(63), 63);
+  assert.equal(shownDurability(0.4), 1);
+  assert.equal(shownDurability(0.1), 1);
+  assert.equal(shownDurability(0), 0);
+  assert.equal(shownDurability(-3), 0);
+  assert.equal(shownDurability(120), 100);
+  // a hair under a whole number (float noise) is that whole number; a real fraction below it is not
+  assert.equal(shownDurability(60 - 1e-12), 60);
+  assert.equal(shownDurability(59.99999), 59);
+  assert.equal(shownDurability(59.9), 59);
+  // every stored value (one decimal) maps to its floor
+  for (let tenths = 1; tenths < 1000; tenths++) {
+    const d = tenths / 10;
+    assert.equal(shownDurability(d), Math.max(1, Math.floor(tenths / 10)), `${d}`);
+  }
+});
+
+// -------------------------------------------------------- break risk (R11) ----
+const WEAR = { gear: { durabilityLoss: { min: 8, max: 12, tierMult: { normal: 1, elite: 1.1, champion: 1.2 } } } };
+
+test('worstWear: the highest roll x the tier multiplier x (1 - Gear care), through the same wearLoss as the fight', () => {
+  const cfg = cfgWith(WEAR);
+  const s = game(1, cfg);
+  close(worstWear(s, 'normal', cfg), 12);
+  close(worstWear(s, 'elite', cfg), 13.2);
+  close(worstWear(s, 'champion', cfg), 14.4);
+  close(worstWear(s, null, cfg), 14.4, 'no tier = the toughest');
+  assert.equal(worstWear(s, 'elite', cfg), wearLoss(12, 1.1, 0));
+  // Gear care: 10 levels of 1% less loss
+  s.skills.gearCare.level = 10;
+  const red = 10 * cfg.skills.activity.gearCare.effects.wear;
+  close(worstWear(s, 'champion', cfg), wearLoss(12, 1.2, red));
+  assert.ok(worstWear(s, 'champion', cfg) < 14.4);
+  // a tier without a multiplier counts as x1
+  const odd = cfgWith(WEAR, { gear: { durabilityLoss: { tierMult: { elite: 2 } } } });
+  close(worstWear(game(1, odd), 'normal', odd), 12);
+});
+
+test('couldBreak is true exactly when the worst wear reaches the durability', () => {
+  const cfg = cfgWith(WEAR);
+  const s = game(1, cfg);
+  const at = (d) => item('sword', 'copper', 'D', null, { durability: d });
+  assert.equal(couldBreak(at(13.2), s, 'elite', cfg), true, 'equal: a worst roll takes it to 0');
+  assert.equal(couldBreak(at(13.3), s, 'elite', cfg), false);
+  assert.equal(couldBreak(at(13.1), s, 'elite', cfg), true);
+  assert.equal(couldBreak(at(12), s, 'normal', cfg), true);
+  assert.equal(couldBreak(at(12.1), s, 'normal', cfg), false);
+  assert.equal(couldBreak(at(100), s, 'champion', cfg), false);
+  assert.equal(couldBreak(at(1), s, 'normal', cfg), true);
+  // no tier = the toughest one
+  assert.equal(couldBreak(at(14.4), s, null, cfg), true);
+  assert.equal(couldBreak(at(14.5), s, null, cfg), false);
+  // property: couldBreak === (worstWear >= durability) over a sweep
+  for (const tier of [null, 'normal', 'elite', 'champion']) {
+    for (let tenths = 1; tenths <= 1000; tenths += 7) {
+      const d = tenths / 10;
+      assert.equal(couldBreak(at(d), s, tier, cfg), worstWear(s, tier, cfg) >= d - 1e-9, `${tier} ${d}`);
+    }
+  }
+  // Gear care makes fewer items risky
+  const careful = game(1, cfg);
+  careful.skills.gearCare.level = 10;
+  assert.equal(couldBreak(at(worstWear(s, 'champion', cfg)), careful, 'champion', cfg), false);
+});
+
+// ----------------------------------------------- gem matches (R33 notes) ----
+test('GEM_MATCH: each gem is about one offensive special (its armor answers it) and one resistance (it blunts the sword)', () => {
+  assert.deepEqual(Object.keys(GEM_MATCH).sort(), Object.keys(CONFIG.gemEffects).sort());
+  for (const [gem, [special, resist]] of Object.entries(GEM_MATCH)) {
+    assert.equal(CONFIG.enemies.attributes[special].side, 'O', `${gem}: ${special} is an offensive attribute`);
+    assert.equal(CONFIG.enemies.attributes[resist].side, 'D', `${gem}: ${resist} is a defensive attribute`);
+    assert.ok(CONFIG.enemies.pairs.some(([o, d]) => o === special && d === resist), `${gem}: ${special} and ${resist} are a pair`);
+  }
+});
+
+test('gearMatchNotes: a ruby chest answers a visible High Magical; a ruby sword is blunted by a visible High Magic resistance', () => {
+  const enemy = { name: 'Lich', tier: 'champion' };
+  const rubyChest = item('chest', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  const rubySword = item('sword', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy, { magical: 'high' }), [{ kind: 'ok', text: 'answers High Magical' }]);
+  assert.deepEqual(gearMatchNotes(rubySword, enemy, { magicRes: 'high' }), [{ kind: 'warn', text: 'blunted by High Magic resistance' }]);
+  // the other side of the pair does not matter for that slot
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy, { magicRes: 'high' }), []);
+  assert.deepEqual(gearMatchNotes(rubySword, enemy, { magical: 'high' }), []);
+  // every armor slot answers; every other gem uses its own pair
+  for (const slot of ['chest', 'helmet', 'gloves', 'boots']) assert.equal(gearMatchNotes(item(slot, 'iron', 'C', { type: 'diamond', grade: 'D' }), enemy, { piercing: 'high' })[0].kind, 'ok', slot);
+  assert.equal(gearMatchNotes(item('chest', 'iron', 'C', { type: 'topaz', grade: 'D' }), enemy, { stunning: 'high' })[0].text, 'answers High Stunning');
+  assert.equal(gearMatchNotes(item('helmet', 'iron', 'C', { type: 'sapphire', grade: 'D' }), enemy, { chilling: 'high' })[0].text, 'answers High Chilling');
+  assert.equal(gearMatchNotes(item('boots', 'iron', 'C', { type: 'emerald', grade: 'D' }), enemy, { accurate: 'high' })[0].text, 'answers High Accurate');
+  assert.equal(gearMatchNotes(item('sword', 'iron', 'C', { type: 'diamond', grade: 'D' }), enemy, { pierceRes: 'high' })[0].text, 'blunted by High Pierce resistance');
+  assert.equal(gearMatchNotes(item('sword', 'iron', 'C', { type: 'emerald', grade: 'D' }), enemy, { evasion: 'high' })[0].text, 'blunted by High Evasion');
+  // a gem for another pair says nothing
+  assert.deepEqual(gearMatchNotes(item('chest', 'iron', 'C', { type: 'topaz', grade: 'D' }), enemy, { magical: 'high' }), []);
+});
+
+test('gearMatchNotes: only visible High attributes count - hidden, Normal and Low say nothing, and nothing leaks from the enemy', () => {
+  const rubyChest = item('chest', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  const rubySword = item('sword', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  // the enemy object carries the real levels, but only `known` (what the player sees) is read
+  const enemy = { name: 'Lich', tier: 'champion', levels: { magical: 'high', magicRes: 'high' } };
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy, {}), [], 'hidden');
+  assert.deepEqual(gearMatchNotes(rubySword, enemy, {}), [], 'hidden');
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy), [], 'no known levels at all');
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy, { magical: 'normal' }), []);
+  assert.deepEqual(gearMatchNotes(rubyChest, enemy, { magical: 'low' }), []);
+  assert.deepEqual(gearMatchNotes(rubySword, enemy, { magicRes: 'low' }), []);
+  // gear without a gem has no notes
+  assert.deepEqual(gearMatchNotes(item('chest', 'iron', 'C'), enemy, { magical: 'high' }), []);
 });

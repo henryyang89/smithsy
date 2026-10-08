@@ -1,12 +1,13 @@
 // Adventurer tab: today's fight, owned gear, adventurer stats and rings, tomorrow's roster.
 // Read-only screen (no game actions); shared widgets come from endday.js.
-import { h, section, num, tip } from './dom.js';
+import { h, section, tip } from './dom.js';
 import { SLOTS } from '../config.js';
 import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
 import { wornRings, ringContributions, ringDef, ringValue } from '../core/rings.js';
 import { intelValue, trackValueText } from '../core/intel.js';
 import { cap } from '../core/util.js';
+import { durText } from './present.js';
 import { enemyCard, rosterTable, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
 
 const f2 = (v) => String(Math.round(v * 100) / 100);
@@ -29,7 +30,7 @@ function todayPanel(ctx) {
       const items = packed.filter((g) => g.slot === slot);
       return h('tr', {},
         h('td', {}, cap(slot)),
-        h('td', {}, items.length ? items.map((g, i) => [i ? ', ' : '', gearNameNode(g), h('span', { class: 'muted' }, ` (${num(g.durability, 1)}%)`)]) : h('span', { class: 'muted' }, slot === 'sword' ? 'none (unarmed)' : 'none')));
+        h('td', {}, items.length ? items.map((g, i) => [i ? ', ' : '', gearNameNode(g), h('span', { class: 'muted' }, ` (${durText(g.durability)})`)]) : h('span', { class: 'muted' }, slot === 'sword' ? 'none (unarmed)' : 'none')));
     });
     return section(`Today (day ${s.day}): fighting ${e.name}`,
       h('p', { class: 'adv-tight' }, 'The adventurer is away fighting ', h('b', {}, e.name), ' ', h('span', { class: `tier-${e.tier}` }, `(${e.tier}, +${cfg.enemies.tiers[e.tier].score} pts)`),

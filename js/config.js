@@ -89,9 +89,11 @@ export const CONFIG = {
 
   // --------------------------------------------------------------- GEAR ----
   gear: {
-    // Final stat = slot base stat x material multiplier x grade multiplier
-    materialMult: { copper: 1.0, iron: 1.5, steel: 2.0, mythril: 3.0 },
-    gradeMult: { D: 1.0, C: 1.1, B: 1.2, A: 1.3, S: 1.5 },
+    // Final stat = slot base stat x material multiplier x grade multiplier. An S item of one material sits between
+    // D and C of the next one (about 70% of the way from the next material's D to its C), so a top-grade copper
+    // piece is still worth a little more than a plain iron one. A (1.3) stays below the next material's D.
+    materialMult: { copper: 1.0, iron: 1.45, steel: 2.1, mythril: 3.0 },
+    gradeMult: { D: 1.0, C: 1.1, B: 1.2, A: 1.3, S: 1.55 },
     slots: {
       sword: { bars: 2, stats: { damage: 16, accuracy: 10 } },
       chest: { bars: 3, stats: { defense: 6 } },
@@ -115,31 +117,31 @@ export const CONFIG = {
 
   // Gem infusion effects, indexed by gem grade [D, C, B, A, S].
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
-  // Balance (1.2): an S sword gem is a little weaker than the matching enemy special at High (ruby 18 vs
-  // Magical 25, diamond 55 vs Piercing 60, topaz 30% / 1.5s vs Stunning 35% / 1.5s, sapphire 30% / 2s vs
-  // Chilling 40% / 2.5s) and every sword gem is worth about the same in win points (C ~ +6 to +10, S ~ +14
-  // to +20 for a steel set vs an elite; ruby is on top because magic ignores defense). Armor gems (3 pieces
-  // at C + a B ring) win back about half to all of what a High special costs (magic ~50-70%).
+  // Balance (2.0): gems are meant to be worth crafting for. Against a High special, armor with the matching gem
+  // should beat emerald armor; against a Low special emerald wins (so bring the right gem to each fight). Armor
+  // resistances are about 2.5x their 1.2 values; sword gems are about as strong as before. An S sword gem stays
+  // worth less in win points than the matching enemy special costs (Low to High). Targets M1-M7 and the way to
+  // measure them: docs/BALANCE.md and `node tools/balance.mjs --section specials`.
   gemEffects: {
     ruby: {
-      weapon: { magicPct: [6, 9, 12, 15, 18] }, // + magic damage as % of weapon damage (ignores defense)
-      armor: { magicRes: [4, 6, 8, 10, 12] }, // % magic damage reduction
+      weapon: { magicPct: [5, 7, 9, 11, 15] }, // + magic damage as % of weapon damage (ignores defense)
+      armor: { magicRes: [12, 18, 24, 30, 36] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [10, 15, 20, 25, 30], stunDur: [1, 1, 1.5, 1.5, 1.5] }, // % per hit, seconds
-      armor: { stunChanceRed: [4, 6, 8, 10, 12], stunDurRed: [4, 6, 8, 10, 12] }, // % reductions
+      weapon: { stunChance: [15, 20, 25, 30, 30], stunDur: [1, 1.5, 1.5, 1.5, 2] }, // % per hit, seconds
+      armor: { stunChanceRed: [10, 15, 20, 25, 30], stunDurRed: [10, 15, 20, 25, 30] }, // % reductions
     },
     emerald: {
       weapon: { accuracy: [20, 30, 40, 50, 60] }, // accuracy rating
-      armor: { dodge: [4, 6, 8, 10, 12] }, // dodge rating
+      armor: { dodge: [2, 3, 4, 5, 6] }, // dodge rating (halved: emerald armor must not beat the matching gem)
     },
     sapphire: {
-      weapon: { slowPct: [10, 15, 20, 25, 30], slowDur: [1.5, 1.5, 1.5, 1.5, 2] }, // % slower attacks, seconds
-      armor: { slowRed: [4, 6, 8, 10, 12], slowDurRed: [4, 6, 8, 10, 12] }, // % reductions
+      weapon: { slowPct: [15, 20, 25, 30, 30], slowDur: [2, 2, 2, 2, 2.5] }, // % slower attacks, seconds
+      armor: { slowRed: [10, 15, 20, 25, 30], slowDurRed: [10, 15, 20, 25, 30] }, // % reductions
     },
     diamond: {
       weapon: { pierce: [15, 25, 35, 45, 55] }, // % of enemy defense ignored
-      armor: { pierceRes: [6, 9, 12, 15, 18] }, // % of enemy piercing ignored
+      armor: { pierceRes: [8, 12, 16, 20, 24] }, // % of enemy piercing ignored
     },
   },
 
@@ -164,6 +166,10 @@ export const CONFIG = {
     resistCap: 75, // cap for magic resistance and all stun/slow reductions
     safetyCapSeconds: 36000, // fights have no time limit; this only guards against infinite loops
     bestGearFights: 200, // fights per loadout the adventurer "thinks through" to pick the best gear
+    // Each attack bar starts the fight a random 0..this % full (one roll per side), so who strikes first is luck.
+    // Without it, Low = 0 specials make both bars tie every exchange and a hidden "adventurer first" rule would decide
+    // fights. 0 = both bars start empty (the old timing; scripted tests use that).
+    startFillMax: 50,
   },
 
   // ------------------------------------------------------------ ENEMIES ----
@@ -171,29 +177,32 @@ export const CONFIG = {
     attackInterval: 2.0,
     stunDuration: 1.5, // seconds, when an enemy with Stunning lands a stun
     slowDuration: 2.5, // seconds, when an enemy with Chilling hits
-    // Daily scaling: multiplier = 1 + growth/100 * (day - 1)
-    growthPerDay: { hpDamage: 3.5, ratings: 1 }, // HP & damage +3.5%/day, accuracy & dodge +1%/day
-    // All tiers share the same base HP / damage / defense: tiers differ only by attribute levels
-    // (normal: 6 low, elite: 3 low / 3 high, champion: 6 high) and by their score and ring rewards.
+    // Daily scaling: multiplier = 1 + growth/100 * (day - 1). The player is never shown these numbers.
+    growthPerDay: { hpDamage: 4.5, ratings: 1 }, // HP & damage +4.5%/day, accuracy & dodge +1%/day
+    // Base HP / damage / defense on day 1. Elites slightly above normals, champions slightly above elites.
+    // Fights are steep (+1% enemy HP and damage is about -3.5 win points), so the steps are small on purpose.
+    // Tiers also differ by attribute levels (normal: 6 low, elite: 3 low / 3 high, champion: 6 high), score and ring grades.
     tiers: {
-      normal: { count: 2, hp: 80, damage: 8, defense: 25, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 80, damage: 8, defense: 25, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 80, damage: 8, defense: 25, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      normal: { count: 2, hp: 80, damage: 9, defense: 22, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
+      elite: { count: 3, hp: 81, damage: 9.1, defense: 23, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 82, damage: 9.2, defense: 24, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
+    // Specials and resistances: Low = the enemy does not have it at all (0, shown as "none"). Core stats (Accurate,
+    // Evasion, Fast, HP) move in small steps.
     attributes: {
-      piercing: { name: 'Piercing', side: 'O', values: { low: 10, normal: 25, high: 60 }, desc: '% of your defense ignored' },
-      pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% of your piercing ignored' },
-      magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 15, high: 25 }, desc: 'extra magic damage, % of its damage' },
-      magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% magic damage reduction' },
-      stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 15, high: 35 }, desc: '% stun chance per hit' },
+      piercing: { name: 'Piercing', side: 'O', values: { low: 0, normal: 20, high: 45 }, desc: '% of your defense ignored' },
+      pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 25, high: 60 }, desc: '% of your piercing ignored' },
+      magical: { name: 'Magical', side: 'O', values: { low: 0, normal: 5, high: 12 }, desc: 'extra magic damage, % of its damage' },
+      magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 25, high: 60 }, desc: '% magic damage reduction' },
+      stunning: { name: 'Stunning', side: 'O', values: { low: 0, normal: 5, high: 15 }, desc: '% stun chance per hit' },
       stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less stun chance and duration' },
-      accurate: { name: 'Accurate', side: 'O', values: { low: 80, normal: 100, high: 120 }, desc: 'accuracy rating (before daily growth)' },
-      evasion: { name: 'Evasion', side: 'D', values: { low: 80, normal: 100, high: 120 }, desc: 'dodge rating (before daily growth)' },
-      chilling: { name: 'Chilling', side: 'O', values: { low: 10, normal: 20, high: 40 }, desc: '% slower attacks for 2.5s on hit' },
+      accurate: { name: 'Accurate', side: 'O', values: { low: 95, normal: 100, high: 105 }, desc: 'accuracy rating' },
+      evasion: { name: 'Evasion', side: 'D', values: { low: 95, normal: 100, high: 105 }, desc: 'dodge rating' },
+      chilling: { name: 'Chilling', side: 'O', values: { low: 0, normal: 5, high: 15 }, desc: '% slower attacks for 2.5s on hit' },
       slowRes: { name: 'Slow resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less slow strength and duration' },
-      fast: { name: 'Fast', side: 'O', values: { low: -5, normal: 0, high: 5 }, desc: '% attack speed' },
-      hp: { name: 'HP', side: 'D', values: { low: 90, normal: 100, high: 110 }, desc: '% of base HP' },
+      fast: { name: 'Fast', side: 'O', values: { low: -2, normal: 0, high: 2 }, desc: '% attack speed' },
+      hp: { name: 'HP', side: 'D', values: { low: 97, normal: 100, high: 103 }, desc: '% of base HP' },
     },
     pairs: [
       ['piercing', 'pierceRes'],
@@ -220,7 +229,7 @@ export const CONFIG = {
       elite: { C: 60, B: 30, A: 10 },
       champion: { B: 60, A: 30, S: 10 },
     },
-    // Each type is equally likely. values = [D, C, B, A, S].
+    // Each type is equally likely. values = [D, C, B, A, S]. A type with `stack: false` counts only its best worn ring.
     types: {
       travelTime: { owner: 'smith', name: 'Travel', values: [5, 6, 7, 8, 10], desc: '% less travel time' },
       searchTime: { owner: 'smith', name: 'Quick search', values: [5, 6, 7, 8, 10], desc: '% less search time' },
@@ -229,7 +238,8 @@ export const CONFIG = {
       processTime: { owner: 'smith', name: 'Refining', values: [5, 6, 7, 8, 10], desc: '% less refining and cutting time' },
       oreGrade: { owner: 'smith', name: 'Bar luck', values: [2, 3, 4, 5, 6], desc: '% chance a bar is upgraded one grade' },
       gemGrade: { owner: 'smith', name: 'Gem luck', values: [2, 3, 4, 5, 6], desc: '% chance a gem is upgraded one grade' },
-      foresight: { owner: 'smith', name: 'Foresight', values: [2, 3, 4, 5, 6], desc: 'more guesses and test fights in the win-chance estimate' },
+      // stack: false = only the best worn ring of this type counts (no duplicate bonus from the rest)
+      foresight: { owner: 'smith', name: 'Foresight', values: [1, 1, 2, 2, 2], stack: false, desc: 'extra guesses and test fights per enemy in the win estimate' },
       pierce: { owner: 'adventurer', name: 'Piercing', values: [6, 8, 10, 12, 14], desc: '% of enemy defense ignored' },
       pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [6, 9, 12, 15, 18], desc: '% of enemy piercing ignored' },
       magicDmg: { owner: 'adventurer', name: 'Magic damage', values: [3, 4, 5, 6, 7], desc: '% of weapon damage added as magic' },
@@ -313,12 +323,13 @@ export const CONFIG = {
   },
 
   // ---------------------------------------------------------------- SIM ----
-  // Base sizes of the win-chance estimate (one button estimates every enemy). Each count is raised by
-  // the Battle simulation intel track and Foresight rings (see simCounts in js/core/sim.js). Kept small
-  // on purpose: with 10 x 10 = 100 test fights the estimate is noisy, which is a little risk to plan with.
+  // The win estimate runs by itself for every enemy. Each count is raised by Battle simulation intel and the best
+  // Foresight ring (simCounts in js/core/sim.js). Small on purpose: the estimate is a risk to plan with.
   sim: {
-    samples: 10, // random guesses of the hidden enemy attributes per enemy
-    evalFights: 10, // fresh fights with the chosen gear per guess (the reported win %)
-    fightsPerLoadout: 10, // fights per gear combination when picking the best gear for a guess
+    samples: 5, // random guesses of the hidden enemy attributes per enemy
+    evalFights: 5, // fresh fights with the chosen gear per guess (the reported win %)
+    fightsPerLoadout: 5, // fights per gear combination when picking the best gear for a guess
+    maxExactCombos: 48, // up to this many gear combinations are all tried; above it the gear is picked one type at a time
+    searchPasses: 2, // one-type-at-a-time search: at most this many passes over the five gear types
   },
 };

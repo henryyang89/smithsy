@@ -6,7 +6,7 @@ import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
 import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
 import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, scrapReturn, wearLoss } from '../core/gear.js';
-import { enemyCombatant, growth } from '../core/enemies.js';
+import { enemyCombatant } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp, xpPerUnit, effectText } from '../core/skills.js';
 import { trackValueText } from '../core/intel.js';
 import { sightRange, searchesToFinish, searchesText } from '../core/map.js';
@@ -16,7 +16,7 @@ import { formatClock, formatDuration, cap } from '../core/util.js';
 import { VERSION } from '../version.js';
 
 // ------------------------------------------------------------------ helpers ----
-// "10 guesses x 10 test fights per enemy" for this game (base + Battle simulation intel + Foresight rings).
+// "5 guesses x 5 test fights per enemy" for this game (base + Battle simulation intel + the best Foresight ring).
 const simSummary = (state, cfg) => {
   const c = simCounts(state, cfg);
   return `${c.samples} guesses x ${c.evalFights} test fights per enemy`;
@@ -177,7 +177,7 @@ function howToPlay(ctx) {
     h('ul', { class: 'mi-list' },
       h('li', {}, 'Enemy attributes and reward rings are partly hidden. Intel (1 point every ', String(cfg.intel.daysPerPoint), ' days, ', tab('skills', 'Skills & Intel'), ') raises the chance to see them.'),
       h('li', {}, 'Fights are automatic. Each side has an attack bar that fills (faster with more speed) and attacks when full; slows make the bar fill slower for a while, stuns stop it for a moment.'),
-      h('li', {}, `The plan screen can simulate the fight to estimate your win chance before you confirm: one button, Estimate all, runs ${simSummary(ctx.state, cfg)} for every enemy of the roster and fills the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and Foresight rings make it bigger.`),
+      h('li', {}, `The plan screen can simulate the fight to estimate your win chance before you confirm: one button, Estimate all, runs ${simSummary(ctx.state, cfg)} for every enemy of the roster and fills the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and a Foresight ring make it bigger.`),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
       h('li', {}, 'Skills level up on their own as you work (', tab('skills', 'Skills & Intel'), '). Farther fields are richer but cost more travel time.'),
       h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
@@ -392,6 +392,7 @@ function gearSection(cfg) {
   return [
     kv([
       ['Stat formula', formula('stat = slot base x material multiplier x grade multiplier')],
+      ['Materials overlap', 'The grades of one material reach into the next: a top-grade (S) piece of one material is a little better than a plain (D) piece of the next, but not as good as its C. A plain piece of a better material always beats a good piece of a worse one up to grade A.'],
       ['Bars', 'All bars in one item must be the same material and grade. The item\'s grade is the bars\' grade.'],
       ['Smithing time', `${mins(g.smithMinPerBar)} per bar, +${mins(g.infuseMin)} to infuse a cut gem (optional, any gem grade).`],
       ['Armor', 'Defense % reduces physical damage (defense from all armor pieces adds up, capped in combat). Gloves add accuracy; boots add dodge and speed.'],
@@ -432,7 +433,8 @@ function gemSection(cfg) {
       h('li', {}, 'Topaz: chance per hit to stun (the target\'s attack bar stops filling for the duration) / reduces enemy stun chance and duration.'),
       h('li', {}, 'Emerald: accuracy rating / dodge rating.'),
       h('li', {}, 'Sapphire: on hit, the target\'s attack bar fills slower (by the slow %) for a few seconds / reduces enemy slow strength and duration.'),
-      h('li', {}, 'Diamond: piercing (% of enemy defense ignored) / pierce resistance (% of enemy piercing ignored).')),
+      h('li', {}, 'Diamond: piercing (% of enemy defense ignored) / pierce resistance (% of enemy piercing ignored).'),
+      h('li', {}, 'Bring the right gem: armor with a gem that answers an enemy\'s High special (ruby for Magical, diamond for Piercing, topaz for Stunning, sapphire for Chilling) beats emerald armor against that enemy, while emerald armor is the better choice against an enemy without that special. A sword gem is blunted by the matching High resistance of the enemy.')),
   ];
 }
 
@@ -507,7 +509,7 @@ function combatSection(cfg) {
   return [
     sub('Attack bars'),
     formula('attack bar fills in base interval / (1 + speed% / 100) seconds; a full bar attacks and starts again from empty',
-      `Base interval: adventurer ${num(a.attackInterval, 2)}s, enemies ${num(cfg.enemies.attackInterval, 2)}s. If both bars fill at the same moment, the adventurer attacks first.`),
+      `Base interval: adventurer ${num(a.attackInterval, 2)}s, enemies ${num(cfg.enemies.attackInterval, 2)}s.${c.startFillMax > 0 ? ` Both attack bars start the fight partly filled (a random 0-${p(c.startFillMax, 0)} each), so who strikes first is luck.` : ''} If both bars are full at the same moment, the adventurer attacks first.`),
     formula('slowed by X%: the bar fills X% slower (fill rate / (1 + X / 100)) until the slow ends',
       `X = slow% x (1 - min(slow reduction, ${c.resistCap}) / 100); duration x (1 - min(slow duration reduction, ${c.resistCap}) / 100).`),
     formula('stunned: the bar stops filling until the stun ends (progress is kept)',
@@ -524,8 +526,8 @@ function combatSection(cfg) {
     kv([
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
-      ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
-      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. Every estimate shows its margin of error (for example 62% ± 12: the simulation alone could be off by about 12 points, which holds about 9 times in 10 when every attribute is known; attributes you can't see add more uncertainty); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
+      ['Gear choice', `When the fight starts the adventurer tries the combinations of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best. An item that another packed item of the same type beats in every stat is skipped; if more than ${cfg.sim.maxExactCombos} combinations are left, it improves one gear type at a time instead.`],
+      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a risk you plan with. Every estimate shows its ± (for example 62% ± 14: the test fights alone could be off by about 14 points; hidden attributes can make the real chance higher or lower); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and your best Foresight smith ring adds more of each (only the best one counts). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -552,14 +554,9 @@ function enemySection(cfg) {
       LEVELS.map((lv) => d.levels[lv]).join(' / '), n(d.score, 0),
       Object.entries(ringPct).filter(([, v]) => v > 0).map(([g, v]) => `${g} ${p(v, 0)}`).join(', ')];
   });
-  const days = [1, 5, 10, 20, 30, 50];
-  const growthRows = days.map((day) => {
-    const gr = growth(day, cfg);
-    return [n(day, 0), { v: x(gr.hpDamage), cls: 'num' }, { v: x(gr.ratings), cls: 'num' },
-      ...TIERS.map((t) => ({ v: `${num(e.tiers[t].hp * gr.hpDamage, 0)} / ${num(e.tiers[t].damage * gr.hpDamage)}`, cls: 'num' }))];
-  });
-  // One row per pair: offense on the left, its matching defense on the right.
-  const lvCells = (a) => LEVELS.map((lv) => ({ v: num(a.values[lv], 2), cls: `num attr-${lv}` }));
+  // One row per pair: offense on the left, its matching defense on the right. A value of 0 (Low specials and
+  // resistances) reads "none": the enemy does not have it.
+  const lvCells = (a) => LEVELS.map((lv) => ({ v: a.values[lv] === 0 ? 'none' : num(a.values[lv], 2), cls: `num attr-${lv}` }));
   const attrRows = e.pairs.map(([o, d]) => {
     const ao = e.attributes[o];
     const ad = e.attributes[d];
@@ -571,13 +568,12 @@ function enemySection(cfg) {
       ['Roster', `${rosterN} enemies each day (${TIERS.map((t) => `${e.tiers[t].count} ${t}`).join(', ')}). You pick one for tomorrow.`],
       ['Attack bar', `fills in ${num(e.attackInterval, 2)}s at 0% speed (the Fast attribute changes speed)`],
       ['Stun / slow', `An enemy stun stops your attack bar for ${num(e.stunDuration, 2)}s; a Chilling hit makes your bar fill slower (by its Chilling %) for ${num(e.slowDuration, 2)}s. Both before your resistances; neither stacks.`],
-      ['Daily growth', formula(`HP & damage x (1 + ${e.growthPerDay.hpDamage}% x (day - 1)); accuracy & dodge x (1 + ${e.growthPerDay.ratings}% x (day - 1))`)],
+      ['Growth', 'Enemies get a little stronger every day.'],
       ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base).`],
+      ['Low', 'Low means the enemy does not have that ability at all (shown as none): a Low Magical enemy deals no magic damage, a Low Chilling enemy never slows you, a Low resistance resists nothing. Accurate, Evasion, Fast and HP are core stats and only move a little between levels.'],
     ]),
-    sub('Tiers (base values on day 1)'),
+    sub('Tiers (base values on day 1; enemies grow stronger every day)'),
     tbl(['Tier', { v: 'Per roster', cls: 'num' }, { v: 'HP', cls: 'num' }, { v: 'Damage', cls: 'num' }, { v: 'Defense', cls: 'num' }, 'Low / Normal / High', { v: 'Score', cls: 'num' }, 'Ring grade odds'], tierRows),
-    sub('Growth by day (HP / damage per tier, before the HP attribute)'),
-    tbl([{ v: 'Day', cls: 'num' }, { v: 'HP & dmg', cls: 'num' }, { v: 'Acc & dodge', cls: 'num' }, ...TIERS.map((t) => ({ v: cap(t), cls: 'num' }))], growthRows),
     sub('Attributes (shown in pairs: offense | defense)'),
     tbl(['Offense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning', 'Defense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning'], attrRows),
   ];
@@ -597,8 +593,8 @@ function ringSection(cfg) {
     kv([
       ['Source', `Each defeated enemy drops 1 ring. Type: uniform over all ${types.length} types (${p(100 / types.length)} each). Grade: by tier (below).`],
       ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once and can be swapped at the start of a day (before your first action) or while planning at night; adventurer rings are chosen in each night's plan.`],
-      ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).`],
-      r.types.foresight ? [r.types.foresight.name, `A smith ring: every point of the stacked total adds one guess AND one test fight per enemy to the plan screen's win-chance estimate (the total is rounded down: ${r.types.foresight.values.map((v) => v).join(' / ')} for ${GRADES.join(' / ')} rings). It does nothing in the fight itself.`] : null,
+      ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).${types.some(([, d]) => d.stack === false) ? ` Exception: ${types.filter(([, d]) => d.stack === false).map(([, d]) => d.name).join(', ')} counts only your best ring.` : ''}`],
+      r.types.foresight ? [r.types.foresight.name, `A smith ring: your best Foresight ring adds ${r.types.foresight.values.map((v) => `+${v}`).join(' / ')} (${GRADES.join(' / ')}) guesses AND test fights per enemy to the plan screen's win-chance estimate.${r.types.foresight.stack === false ? ' Only your best Foresight ring counts; more of them add nothing.' : ''} It does nothing in the fight itself.`] : null,
     ]),
     tbl(['Ring', 'Wearer', ...gradeHead(), 'Effect'], typeRows),
     sub('Ring grade odds by enemy tier'),
@@ -695,13 +691,13 @@ function repairSection(cfg) {
     const m = tierMult[t] || 1;
     const lo = wearLoss(loss.min, m);
     const hi = wearLoss(loss.max, m);
-    return [h('span', { class: `tier-${t}` }, cap(t)), { v: `x${num(m, 2)}`, cls: 'num' }, { v: `${num(lo, 1)}-${num(hi, 1)}%`, cls: 'num' }, { v: p(avgLoss * m, 1), cls: 'num' }];
+    return [h('span', { class: `tier-${t}` }, cap(t)), { v: `x${num(m, 2)}`, cls: 'num' }, { v: `${Math.floor(lo + 1e-9)}-${Math.ceil(hi - 1e-9)}%`, cls: 'num' }, { v: p(avgLoss * m, 0), cls: 'num' }];
   });
   const gemFull = repairInfo({ slot: 'chest', material: 'x', grade: GRADES[0], gem: { type: 'gem', grade: GRADES[0] }, durability: 0 }, cfg);
   const gemExtra = Object.values(gemFull.gems)[0] || 0;
   return [
     kv([
-      ['Wear', `Each fight, every item the adventurer actually used loses a durability roll of ${loss.min}-${loss.max}% (average ${num(avgLoss)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %). The result is kept to one decimal (for example 9.6%) so every Gear care level counts, and is at least 1%. Packed but unused items do not wear. At 0% the item is destroyed.`],
+      ['Wear', `Each fight, every item the adventurer actually used loses a durability roll of ${loss.min}-${loss.max}% (average ${num(avgLoss, 0)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %). The game keeps one decimal inside so every Gear care level counts, and the loss is at least 1%; durability is always shown as a whole number (rounded down, never 0% while the item exists). Packed but unused items do not wear. An item always lasts the whole fight it is used in; at 0% afterwards it is destroyed.`],
       cfg.skills.activity.gearCare ? [cfg.skills.activity.gearCare.name, `Skill: ${num(cfg.skills.activity.gearCare.effects.wear, 2)}% less wear per level. It earns ${cfg.skills.activity.gearCare.xp} XP for every fight the adventurer survives (win or draw), so it grows as you win.`] : null,
       ['Repair', 'Only back to 100%, only by day, at camp (Workshop), and only on gear the adventurer does not have: it is away when packed. It costs bars and time. Keep a spare of each item so you can leave one home to repair it.'],
       ['Cost', formula(`${g.repair.materialFraction}% x original bars (and ${g.repair.gemFraction}% x its gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],
@@ -712,6 +708,6 @@ function repairSection(cfg) {
     sub('Wear per fight by enemy tier (before Gear care)'),
     tbl(['Enemy tier', { v: 'Multiplier', cls: 'num' }, { v: 'Loss per used item', cls: 'num' }, { v: 'Average', cls: 'num' }], wearRows),
     sub('Repair cost and scrap return by slot (item without a gem; base times before the repair skills)'),
-    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time', cls: 'num' }, { v: `After an average fight (−${num(avgLoss)}%)`, cls: 'num' }, { v: 'Time', cls: 'num' }, { v: 'Scrap at 100%', cls: 'num' }, { v: 'Scrap at 50%', cls: 'num' }], rows),
+    tbl(['Slot', { v: 'Bars', cls: 'num' }, { v: 'Full repair (0→100%)', cls: 'num' }, { v: 'Time', cls: 'num' }, { v: `After an average fight (−${num(avgLoss, 0)}%)`, cls: 'num' }, { v: 'Time', cls: 'num' }, { v: 'Scrap at 100%', cls: 'num' }, { v: 'Scrap at 50%', cls: 'num' }], rows),
   ];
 }

@@ -128,6 +128,37 @@ test('guard: tips work on touch screens: index.html has the #tip holder and main
   assert.match(read(join(ROOT, 'css', 'style.css')), /#tip\b/);
 });
 
+// ------------------------------------------------------------ batch 3 guards ----
+test('guard: enemy growth is never shown (R8): no "Rating growth" in endday.js, Help does not read growthPerDay or growth()', () => {
+  const endday = read(join(ROOT, 'js', 'ui', 'endday.js'));
+  assert.doesNotMatch(endday, /Rating growth/);
+  assert.doesNotMatch(endday, /ratingMult/, 'the enemy card and roster no longer show the rating multiplier');
+  const help = read(join(ROOT, 'js', 'ui', 'help.js'));
+  assert.doesNotMatch(help, /growthPerDay/);
+  assert.doesNotMatch(help, /\bgrowth\(/);
+  assert.doesNotMatch(help, /Growth by day|Daily growth/);
+  // no UI file prints the growth config either
+  assert.deepEqual(hits(filesUnder(join(ROOT, 'js', 'ui')), /growthPerDay/), []);
+});
+
+test('guard: durability is shown through durText / shownDurability, never as a raw decimal', () => {
+  // the screens that list gear take their durability text from present.js
+  for (const f of ['endday.js', 'adventurer.js', 'workshop.js', 'repairui.js']) {
+    const src = read(join(ROOT, 'js', 'ui', f));
+    assert.doesNotMatch(src, /\$\{(f1|num)\((d|g\.durability|item\.durability|w\.left|w\.loss)[,)]/, `${f} prints a durability with decimals`);
+  }
+  assert.match(read(join(ROOT, 'js', 'ui', 'present.js')), /shownDurability/);
+});
+
+test('guard: the old estimate margin and the 1.2 gear search are gone (marginPts, one bestLoadout over every combination in resolveBattle)', () => {
+  assert.deepEqual(hits([...JS_FILES, ...TOOL_FILES], /\bmarginPts\b/), []);
+  const game = read(join(ROOT, 'js', 'core', 'game.js'));
+  assert.doesNotMatch(game, /bestLoadout/);
+  assert.match(game, /searchLoadout/);
+  // the one place gearPower is defined
+  assert.deepEqual(hits(JS_FILES, /(const|function) gearPower\b/).length, 1);
+});
+
 // ---------------------------------------------------------------- request pins ----
 // The numbers the user asked for in their own words (R2 7x7 world map and 9x9 fields, R3 boulders 2 to 4, R14 20% base
 // banner chance, R29 gem share 15% to 25%, R31 no sight on day 1, R37 about 4 searches per cell). This is the one place
@@ -170,4 +201,25 @@ test('request pins (batch 2): travel 0.6% / 15 XP, carrying 5% / 2 XP, smithing 
   assert.equal(scrapReturn(sword(59.6)).qty, 0.41);
   assert.equal(scrapReturn(sword(0)).qty, 0);
   assert.equal(skillDefs().length, 35);
+});
+
+test('request pins (batch 3): R6 tiers rise, R40 and R41 Low = none, R21 S sits between D and C, A2 5 x 5 with at most +5', () => {
+  const T = CONFIG.enemies.tiers;
+  assert.ok(T.elite.hp > T.normal.hp || T.elite.damage > T.normal.damage || T.elite.defense > T.normal.defense, 'R6: elites are above normals');
+  assert.ok(T.champion.hp > T.elite.hp || T.champion.damage > T.elite.damage || T.champion.defense > T.elite.defense, 'R6: champions are above elites');
+  assert.equal(CONFIG.enemies.attributes.chilling.values.low, 0, 'R40: Low Chilling = no slowing at all');
+  assert.equal(CONFIG.enemies.attributes.magical.values.low, 0, 'R41: Low Magical = no magic at all');
+  assert.equal(CONFIG.combat.startFillMax, 50, 'both attack bars start 0-50% full');
+  assert.equal(CONFIG.sim.samples, 5, 'A2: 5 guesses ...');
+  assert.equal(CONFIG.sim.evalFights, 5, 'A2: ... x 5 test fights');
+  const sd = CONFIG.intel.tracks.simDepth;
+  assert.equal(sd.gains[0], 1, 'A2: +1 per Battle simulation point');
+  assert.equal(sd.max, 3, 'A2: up to +3');
+  const fs = CONFIG.rings.types.foresight;
+  assert.equal(fs.stack, false, 'A2: only the best Foresight ring counts');
+  assert.equal(Math.max(...fs.values), 2, 'A2: Foresight adds at most +2');
+  assert.equal(CONFIG.sim.samples + sd.max + Math.max(...fs.values), 10, 'A2: at most 10 x 10 in total');
+  // R21 in the config's own terms: copper S (1.55) is between iron D (1.45) and iron C (1.595)
+  const { materialMult: M, gradeMult: G } = CONFIG.gear;
+  assert.ok(M.copper * G.S > M.iron * G.D && M.copper * G.S < M.iron * G.C);
 });

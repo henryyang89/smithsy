@@ -14,15 +14,23 @@ export function ringLabel(ring, cfg = CONFIG) {
   return `${d.name} ${ring.grade} (${d.desc.startsWith('%') ? `${v}${d.desc}` : `${v} ${d.desc}`})`;
 }
 
+// How much the n-th best ring (0-based) of a type counts: duplicateFactor^n, or only the best one (1, 0, 0, ...) for a
+// type with `stack: false` (config rings.types).
+export function ringFactor(type, n, cfg = CONFIG) {
+  if (ringDef(type, cfg).stack === false) return n === 0 ? 1 : 0;
+  return cfg.rings.duplicateFactor ** n;
+}
+
 // Sum ring bonuses with duplicate penalties.
-// Same type sorted high->low: 1st x1, 2nd x0.5, 3rd x0.25, ... (duplicateFactor^n)
+// Same type sorted high->low: 1st x1, 2nd x0.5, 3rd x0.25, ... (duplicateFactor^n); a type with stack: false counts
+// only its best ring.
 export function ringTotals(rings, cfg = CONFIG) {
   const byType = {};
   for (const r of rings) (byType[r.type] = byType[r.type] || []).push(ringValue(r, cfg));
   const out = {};
   for (const [type, vals] of Object.entries(byType)) {
     vals.sort((a, b) => b - a);
-    out[type] = vals.reduce((acc, v, i) => acc + v * cfg.rings.duplicateFactor ** i, 0);
+    out[type] = vals.reduce((acc, v, i) => acc + v * ringFactor(type, i, cfg), 0);
   }
   return out;
 }
@@ -32,12 +40,13 @@ export function ringContributions(rings, cfg = CONFIG) {
   const byType = {};
   for (const r of rings) (byType[r.type] = byType[r.type] || []).push(r);
   const out = {};
-  for (const list of Object.values(byType)) {
+  for (const [type, list] of Object.entries(byType)) {
     list
       .slice()
       .sort((a, b) => ringValue(b, cfg) - ringValue(a, cfg))
       .forEach((r, i) => {
-        out[r.id] = { value: ringValue(r, cfg), factor: cfg.rings.duplicateFactor ** i, effective: ringValue(r, cfg) * cfg.rings.duplicateFactor ** i };
+        const factor = ringFactor(type, i, cfg);
+        out[r.id] = { value: ringValue(r, cfg), factor, effective: ringValue(r, cfg) * factor };
       });
   }
   return out;

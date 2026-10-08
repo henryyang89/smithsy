@@ -90,12 +90,19 @@ function nextChange(f, t) {
 
 // Simulate one fight. rand() -> [0,1). Returns { win, draw, time, advHp, enemyHp, log?, summary }.
 // Each side has an attack bar that fills in interval / (1 + speed%) seconds and attacks when full.
-// Slowed by X%: the bar fills X% slower. Stunned: the bar stops filling. Ties: adventurer first.
+// Slowed by X%: the bar fills X% slower. Stunned: the bar stops filling. Head start: each bar starts 0..startFillMax%
+// full (two rand() calls, adventurer first; none when startFillMax is 0, which keeps the old timing). A real tie
+// (both bars full in the same instant) still lets the adventurer strike first.
 export function fight(adv, enemy, rand, withLog = false, cfg = CONFIG) {
   const capR = cfg.combat.resistCap;
   const [rollLo, rollHi] = cfg.combat.damageRoll;
   const A = fighter(adv, 'A');
   const E = fighter(enemy, 'E');
+  const startFill = (cfg.combat.startFillMax || 0) / 100;
+  if (startFill > 0) {
+    A.meter = rand() * startFill;
+    E.meter = rand() * startFill;
+  }
   const hitAE = hitChance(adv.accuracy, enemy.dodge, cfg);
   const hitEA = hitChance(enemy.accuracy, adv.dodge, cfg);
   const dmgAE = hitDamage(adv, enemy, cfg);

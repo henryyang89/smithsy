@@ -169,22 +169,60 @@ test('toggleRing: max worn per owner, independently for smith and adventurer', (
   }
 });
 
-test('Foresight: a smith ring (more guesses and test fights in the win-chance estimate), 5 whole-number values', () => {
+test('Foresight: a smith ring (extra guesses and test fights in the win estimate), 5 whole-number values, only the best counts', () => {
   const d = CONFIG.rings.types.foresight;
   assert.equal(d.owner, 'smith');
   assert.equal(d.values.length, 5);
+  for (const v of d.values) assert.ok(Number.isInteger(v) && v >= 1, `whole number: ${v}`);
+  for (let i = 1; i < 5; i++) assert.ok(d.values[i] >= d.values[i - 1], 'not decreasing with grade');
+  assert.equal(d.stack, false, 'Foresight does not stack');
   assert.ok(d.name && d.desc);
   assert.match(ringLabel({ type: 'foresight', grade: 'S' }), new RegExp(`^${d.name} S \\(${d.values[4]} `));
-  // worn smith rings: it shows up in the smith totals, stacking like any smith ring
+  // worn smith rings: it shows up in the smith totals, but only the best Foresight ring counts
   const s = game(1);
   addRing(s, 'foresight', 'S', true);
   addRing(s, 'foresight', 'D', true);
   addRing(s, 'health', 'S', true); // adventurer ring: not in the smith totals
-  assert.ok(Math.abs(smithRingTotals(s).foresight - (d.values[4] + d.values[0] * CONFIG.rings.duplicateFactor)) < 1e-9);
+  assert.equal(smithRingTotals(s).foresight, d.values[4]);
   assert.equal(smithRingTotals(s).health, undefined);
   // enemies can drop it
   const rng = seededRng(11);
   const seen = new Set();
   for (let i = 0; i < 3000; i++) seen.add(rollRing(rng, 'normal').type);
   assert.deepEqual([...seen].sort(), Object.keys(CONFIG.rings.types).sort());
+});
+
+// ------------------------------------------------------- non-stacking types ----
+const FS = cfgWith({ rings: { duplicateFactor: 0.5, types: { foresight: { values: [1, 1, 2, 2, 2], stack: false } } } });
+
+test('a type with stack: false counts only its best ring: D + C Foresight -> 1, B + A -> 2, no halved extras', () => {
+  assert.equal(ringTotals([r('foresight', 'D'), r('foresight', 'C')], FS).foresight, 1);
+  assert.equal(ringTotals([r('foresight', 'B'), r('foresight', 'A')], FS).foresight, 2);
+  assert.equal(ringTotals([r('foresight', 'D'), r('foresight', 'B'), r('foresight', 'S')], FS).foresight, 2, 'a lower ring adds nothing');
+  assert.equal(ringTotals([r('foresight', 'B')], FS).foresight, 2);
+  // the other types still stack with the duplicate factor, in the same call
+  const t = ringTotals([r('foresight', 'B'), r('foresight', 'B'), r('accuracy', 'S'), r('accuracy', 'S')], cfgWith(RC, FS));
+  assert.deepEqual(t, { foresight: 2, accuracy: 15 });
+  // smith ring totals use the same rule
+  const s = game(1);
+  addRing(s, 'foresight', 'B', true);
+  addRing(s, 'foresight', 'A', true);
+  addRing(s, 'foresight', 'D', true);
+  assert.equal(smithRingTotals(s, FS).foresight, 2);
+});
+
+test('ringContributions: for a stack: false type the best ring has factor 1 and every other one factor 0', () => {
+  const rings = [r('foresight', 'D', 1), r('foresight', 'B', 2), r('foresight', 'A', 3), r('accuracy', 'S', 4), r('accuracy', 'S', 5)];
+  const c = ringContributions(rings, cfgWith(RC, FS));
+  const best = [2, 3].find((id) => c[id].factor === 1); // B and A are both worth 2: either may be first
+  assert.ok(best);
+  const others = [1, 2, 3].filter((id) => id !== best);
+  for (const id of others) assert.deepEqual(c[id], { value: c[id].value, factor: 0, effective: 0 });
+  assert.equal(c[best].effective, 2);
+  assert.equal([1, 2, 3].reduce((a, id) => a + c[id].effective, 0), ringTotals(rings, cfgWith(RC, FS)).foresight);
+  // stacking types are unaffected
+  assert.deepEqual(c[4], { value: 10, factor: 1, effective: 10 });
+  assert.deepEqual(c[5], { value: 10, factor: 0.5, effective: 5 });
+  // the default config marks Foresight as non-stacking, nothing else
+  assert.deepEqual(Object.entries(CONFIG.rings.types).filter(([, d]) => d.stack === false).map(([k]) => k), ['foresight']);
 });

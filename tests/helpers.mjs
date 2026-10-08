@@ -44,6 +44,10 @@ export function scriptRand(values, rest = 0.99) {
 // with WEAK_ENEMIES the adventurer always wins (even unarmed), with DEADLY_ENEMIES it always loses.
 const tiersWith = (stats) => Object.fromEntries(Object.keys(CONFIG.enemies.tiers).map((t) => [t, { ...stats }]));
 export const WEAK_ENEMIES = { enemies: { tiers: tiersWith({ hp: 0.01, damage: 1e-6 }) } };
+
+// Both attack bars start the fight empty (no random head start): for hand-timed fights, where the first attack of
+// every side happens exactly one interval in.
+export const NO_HEAD_START = { combat: { startFillMax: 0 } };
 export const DEADLY_ENEMIES = { enemies: { tiers: tiersWith({ hp: 1e9, damage: 1e6 }) } };
 
 export function game(seed = 12345, cfg = CONFIG) {

@@ -22,6 +22,9 @@ export function gearStats(item, cfg = CONFIG) {
   return stats;
 }
 
+// Rough strength of an item: material multiplier x grade multiplier (ignores gems).
+export const gearPower = (item, cfg = CONFIG) => cfg.gear.materialMult[item.material] * cfg.gear.gradeMult[item.grade];
+
 export const STAT_LABELS = {
   damage: 'Damage',
   accuracy: 'Accuracy',
@@ -159,6 +162,55 @@ export function wearLoss(base, tierMult = 1, carePct = 0) {
 // Durability after losing `loss`, kept to one decimal (no float drift) and never below 0.
 export function wornDurability(durability, loss) {
   return Math.max(0, Math.round((durability - loss) * 10) / 10);
+}
+
+// Durability as the player sees it: a whole number, rounded down, at least 1 while the item exists, and 100 only when
+// it is full. The game keeps one decimal inside; costs and times always use that value, never this one.
+export function shownDurability(d) {
+  return d >= 100 ? 100 : d <= 0 ? 0 : Math.max(1, Math.floor(d + 1e-9));
+}
+
+// The most durability one fight can take from a used item against `tier` (null = the toughest tier): the highest
+// roll through the same wearLoss() the fight uses, with the Gear care skill.
+export function worstWear(state, tier, cfg = CONFIG) {
+  const dl = cfg.gear.durabilityLoss;
+  const tm = dl.tierMult || {};
+  const all = Object.values(tm);
+  const mult = tier ? tm[tier] || 1 : all.length ? Math.max(...all) : 1;
+  return wearLoss(dl.max, mult, smithBonuses(state, cfg).gearCarePct);
+}
+
+// True when a fight against `tier` (null = the toughest) could take the item to 0%, so it is destroyed after the
+// fight. It always lasts the whole fight: wear is applied afterwards.
+export function couldBreak(item, state, tier, cfg = CONFIG) {
+  return worstWear(state, tier, cfg) >= item.durability - 1e-9;
+}
+
+// Which enemy attributes a gem is about: [the offensive special its ARMOR answers, the resistance that blunts its
+// SWORD]. Structural (a rule of the game, not a number), so it lives in code.
+export const GEM_MATCH = {
+  ruby: ['magical', 'magicRes'],
+  diamond: ['piercing', 'pierceRes'],
+  topaz: ['stunning', 'stunRes'],
+  sapphire: ['chilling', 'slowRes'],
+  emerald: ['accurate', 'evasion'],
+};
+
+// Short notes about how an item's gem fits an enemy, from the attributes the player can see only (`known` = visible
+// attribute -> level; `enemy` is the enemy being looked at and is not read, so nothing hidden can leak):
+//   armor whose gem answers a visible High special: { kind: 'ok', text: 'answers High Magical' }
+//   sword whose gem is blunted by a visible High resistance: { kind: 'warn', text: 'blunted by High Magic resistance' }
+export function gearMatchNotes(item, enemy, known = {}, cfg = CONFIG) {
+  const notes = [];
+  if (!item.gem || !GEM_MATCH[item.gem.type]) return notes;
+  const [special, resist] = GEM_MATCH[item.gem.type];
+  const A = cfg.enemies.attributes;
+  if (item.slot === 'sword') {
+    if (known[resist] === 'high') notes.push({ kind: 'warn', text: `blunted by High ${A[resist].name}` });
+  } else if (known[special] === 'high') {
+    notes.push({ kind: 'ok', text: `answers High ${A[special].name}` });
+  }
+  return notes;
 }
 
 // Round up to 0.01 (tiny tolerance for float noise). Math.max avoids returning -0 for a 0 amount.

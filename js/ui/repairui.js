@@ -5,6 +5,7 @@ import { h, num, tip } from './dom.js';
 import { repairPlan, repairInfo, repair, gearName } from '../core/gear.js';
 import { atCamp } from '../core/map.js';
 import { cap, qtyText, EPS } from '../core/util.js';
+import { repairGainShown } from './present.js';
 
 // Quantities: whole numbers as-is, fractional ones (repairs use 0.01 bars) to 2 decimals.
 export const qty = qtyText;
@@ -64,15 +65,15 @@ function doRepair(ctx, item) {
 }
 
 export function repairButton(ctx, item, check, cls = 'small') {
-  const { plan, info, why } = check;
+  const { plan, why } = check;
   const warn = substituteText(plan);
   return h('button', {
     class: cls,
     disabled: !!why,
     'data-repair': item.id,
-    ...tip(why || `Repair ${gearName(item)} +${num(info.missing)}% to 100% (${num(plan.minutes)}m)${warn ? `. ${warn}` : ''}`),
+    ...tip(why || `Repair ${gearName(item)} +${repairGainShown(item.durability)}% to 100% (${num(plan.minutes)}m)${warn ? `. ${warn}` : ''}`),
     onclick: () => doRepair(ctx, item),
-  }, `Repair +${num(info.missing)}%`);
+  }, `Repair +${repairGainShown(item.durability)}%`);
 }
 
 // One compact block: [Repair +7%] 0.07 Iron C bars · 12m

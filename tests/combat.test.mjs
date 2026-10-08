@@ -6,12 +6,13 @@ import { clamp } from '../js/core/util.js';
 import { gearStats } from '../js/core/gear.js';
 import { adventurerCombatant, hitChance, attackInterval, hitDamage, fight } from '../js/core/combat.js';
 import { enemyCombatant } from '../js/core/enemies.js';
-import { cfgWith, combatant, approx, allLevels, scriptRand } from './helpers.mjs';
+import { cfgWith, combatant, approx, allLevels, scriptRand, NO_HEAD_START } from './helpers.mjs';
 
 // Pinned combat numbers: the hand-computed expectations below hold whatever CONFIG says.
 const PIN = { combat: { hitK: 0.25, minHitPct: 5, maxHitPct: 95, damageRoll: [90, 110], defenseCap: 75, resistCap: 75, safetyCapSeconds: 36000 } };
-const CFG = cfgWith(PIN);
-const capAt = (seconds, extra = {}) => cfgWith(PIN, { combat: { safetyCapSeconds: seconds, ...extra } });
+// The hand-timed fights below have no random head start (each bar starts empty); head start has its own tests.
+const CFG = cfgWith(PIN, NO_HEAD_START);
+const capAt = (seconds, extra = {}) => cfgWith(PIN, NO_HEAD_START, { combat: { safetyCapSeconds: seconds, ...extra } });
 
 const item = (slot, material = 'copper', grade = 'D', gem = null) => ({ id: Math.random(), slot, material, grade, gem, durability: 100, packed: false });
 const close = (a, b, epsOrMsg) => {
@@ -405,4 +406,84 @@ test('fight: health ring HP shows up as a higher max HP', () => {
   const r = fight(adventurerCombatant([], { health: 7 }), combatant({ hp: 1, damage: 0 }), always(0), true);
   assert.equal(r.win, true);
   close(r.advHp, CONFIG.adventurer.hp * 1.07);
+});
+
+// ------------------------------------------------- Low = none, head start ----
+test('a Low special is none at all: Low Chilling never slows, Low Magical deals no magic, Low Stunning never stuns', () => {
+  const A = CONFIG.enemies.attributes;
+  const lv = allLevels('normal');
+  const adv = combatant({ hp: 1e6, damage: 0, accuracy: 100, dodge: 1 });
+  // an enemy with every offensive special Low: rand() = 0 makes every possible roll succeed
+  const low = enemyCombatant('elite', 1, { ...lv, chilling: 'low', magical: 'low', stunning: 'low', piercing: 'low' });
+  assert.equal(low.slowPct, A.chilling.values.low);
+  assert.equal(low.magicPct, A.magical.values.low);
+  assert.equal(low.stunChance, A.stunning.values.low);
+  assert.equal(low.pierce, A.piercing.values.low);
+  const r = fight(adv, { ...low, hp: 1e6 }, always(0), true, capAt(60));
+  assert.equal(r.summary.E.slows, 0, 'Low Chilling never slows');
+  assert.equal(r.summary.E.stuns, 0, 'Low Stunning never stuns');
+  const hits = attacks(r.log, 'E').filter((e) => e.hit);
+  assert.ok(hits.length > 5);
+  for (const e of hits) {
+    assert.equal(e.magic, 0, 'Low Magical deals no magic');
+    assert.equal(e.slow, undefined);
+    assert.equal(e.stun, undefined);
+  }
+  assert.equal(hitDamage(low, adv, CFG).magic, 0);
+  // the same enemy with the special at Normal does have it
+  const normal = enemyCombatant('elite', 1, lv);
+  assert.ok(normal.slowPct > 0 && normal.magicPct > 0 && normal.stunChance > 0);
+  const r2 = fight(adv, { ...normal, hp: 1e6 }, always(0), true, capAt(60));
+  assert.ok(r2.summary.E.slows > 0 && r2.summary.E.stuns > 0);
+  assert.ok(attacks(r2.log, 'E').some((e) => e.hit && e.magic > 0));
+});
+
+test('head start: startFillMax 0 keeps the old timing (first attack one full interval in, no rand() used for it)', () => {
+  const noHead = capAt(5);
+  const r = fight(dummy(), dummy(), always(0.99), true, noHead);
+  assert.deepEqual(times(r.log, 'A').slice(0, 2), [2, 4]);
+  assert.deepEqual(times(r.log, 'E').slice(0, 2), [2, 4]);
+  // the first rand() value is the first attack's hit roll: the adventurer's 0 hits at once
+  const hit = fight(dummy({ damage: 10 }), dummy({ hp: 1000 }), scriptRand([0, 0.5]), true, noHead);
+  assert.equal(hit.log[0].side, 'A');
+  assert.equal(hit.log[0].hit, true);
+});
+
+test('head start: each bar starts a random 0..startFillMax% full; two rand() calls, adventurer first', () => {
+  const cfg = capAt(10, { startFillMax: 50 });
+  const sf = cfg.combat.startFillMax / 100;
+  // rand(): 0.4 then 0.8 -> adventurer bar 0.4 x sf, enemy bar 0.8 x sf; every later attack misses
+  const r = fight(dummy(), dummy(), scriptRand([0.4, 0.8]), true, cfg);
+  close(times(r.log, 'A')[0], (1 - 0.4 * sf) * 2);
+  close(times(r.log, 'E')[0], (1 - 0.8 * sf) * 2);
+  close(times(r.log, 'A')[1] - times(r.log, 'A')[0], 2, 'after the first attack the bar fills from empty as usual');
+  // always inside [0, startFillMax): the first attack comes between (1 - sf) x interval and one interval in
+  for (let seed = 1; seed <= 40; seed++) {
+    const q = fight(dummy(), dummy(), seededRng(seed).next, true, cfg);
+    for (const side of ['A', 'E']) {
+      const t0 = times(q.log, side)[0];
+      assert.ok(t0 > (1 - sf) * 2 - 1e-9 && t0 <= 2 + 1e-9, `seed ${seed} ${side}: ${t0}`);
+    }
+  }
+  // a head start of 100% would be a full bar: the first attack happens at t = 0
+  const full = fight(dummy(), dummy(), always(1), true, capAt(3, { startFillMax: 100 }));
+  assert.equal(times(full.log, 'A')[0], 0);
+  // deterministic per rand source, different for another one
+  const a = fight(dummy({ damage: 5 }), dummy({ damage: 5 }), seededRng(9).next, true, cfg);
+  const b = fight(dummy({ damage: 5 }), dummy({ damage: 5 }), seededRng(9).next, true, cfg);
+  assert.deepEqual(a, b);
+  const c = fight(dummy({ damage: 5 }), dummy({ damage: 5 }), seededRng(10).next, true, cfg);
+  assert.notDeepEqual(a.log, c.log);
+});
+
+test('head start: the default config starts the bars partly filled, so the adventurer does not always strike first', () => {
+  assert.ok(CONFIG.combat.startFillMax > 0 && CONFIG.combat.startFillMax <= 100);
+  let enemyFirst = 0;
+  let advFirst = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const r = fight(dummy(), dummy(), seededRng(seed).next, true, cfgWith({ combat: { safetyCapSeconds: 5 } }));
+    if (r.log[0].side === 'E') enemyFirst++;
+    else advFirst++;
+  }
+  assert.ok(enemyFirst > 5 && advFirst > 5, `adventurer first ${advFirst}, enemy first ${enemyFirst}`);
 });

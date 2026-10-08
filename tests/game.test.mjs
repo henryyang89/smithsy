@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIG, ORES, GEMS, BARS, GRADES } from '../js/config.js';
+import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../js/config.js';
 import * as GameModule from '../js/core/game.js';
 import {
   newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, rosterView, serialize, deserialize,
@@ -181,6 +181,10 @@ test('day 2 win: report phase, ring + score, durability lost only on used items'
   assert.equal(rep.draw, false);
   assert.deepEqual(rep.packedIds, packedIds, 'report lists everything that was packed');
   assert.ok(rep.packedIds.includes(spareSword.id) && !rep.usedIds.includes(spareSword.id), 'packed but unused');
+  // snapshots: what was used, and what was packed but not used (the spare sword); the home boots are in neither
+  assert.deepEqual(rep.used.map((g) => g.id), rep.usedIds);
+  assert.deepEqual(rep.notUsed.map((g) => g.id), [spareSword.id]);
+  assert.ok(![...rep.used, ...rep.notUsed].some((g) => g.id === unpacked.id), 'gear left at home is never listed');
   for (const id of rep.usedIds) assert.ok(rep.packedIds.includes(id));
   assert.equal(rep.logTrimmed, 0);
   assert.equal(rep.log.length, rep.summary.A.attacks + rep.summary.E.attacks, 'short fights keep the whole log');
@@ -229,6 +233,92 @@ test('gear at 0% durability is destroyed after the fight', () => {
   assert.ok(s.gear.includes(spare), 'unused item survives');
   assert.equal(spare.durability, 1);
   for (const w of rep.wear) assert.equal(w.left, 0);
+});
+
+test('the report keeps snapshots of the gear used and not used: SLOTS order, durability before the fight, own copies', () => {
+  const s = game(11);
+  // added out of slot order on purpose; every item has a distinct durability and some have gems
+  const boots = addGear(s, 'boots', 'mythril', 'S', null, { durability: 91.3 });
+  const chest = addGear(s, 'chest', 'mythril', 'S', { type: 'ruby', grade: 'B' }, { durability: 77.7 });
+  const sword = addGear(s, 'sword', 'mythril', 'S', { type: 'diamond', grade: 'A' }, { durability: 64.2 });
+  const spareChest = addGear(s, 'chest', 'copper', 'D', null, { durability: 55.5 });
+  const spareBoots = addGear(s, 'boots', 'copper', 'D', null, { durability: 33.3 });
+  const home = addGear(s, 'helmet', 'copper', 'D', null, { durability: 22.2 });
+  const packedIds = [boots.id, chest.id, sword.id, spareChest.id, spareBoots.id];
+  const rings = [addRing(s, 'health', 'B', false), addRing(s, 'dodge', 'C', false)];
+  const before = new Map(s.gear.map((g) => [g.id, g.durability]));
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), packedIds, rings.map((r) => r.id)), WIN);
+  const rep = endDay(s, WIN).report;
+  assert.equal(rep.win, true);
+  const slotRank = (g) => ['sword', 'chest', 'helmet', 'gloves', 'boots'].indexOf(g.slot);
+  // used: the best item per slot, in SLOTS order, ids = usedIds
+  assert.deepEqual(rep.used.map((g) => g.id), rep.usedIds);
+  assert.deepEqual(rep.used.map((g) => g.id), [sword.id, chest.id, boots.id]);
+  assert.deepEqual(rep.used.map(slotRank), [...rep.used.map(slotRank)].sort((a, b) => a - b));
+  // notUsed = packed - used, also in SLOTS order; home gear is in neither
+  assert.deepEqual(rep.notUsed.map((g) => g.id), [spareChest.id, spareBoots.id]);
+  assert.deepEqual([...rep.used, ...rep.notUsed].map((g) => g.id).sort((a, b) => a - b), [...packedIds].sort((a, b) => a - b));
+  assert.deepEqual([...rep.used.map((g) => g.id), ...rep.notUsed.map((g) => g.id)].filter((id) => id === home.id), []);
+  // a snapshot is a full description with the durability BEFORE the fight
+  for (const snap of [...rep.used, ...rep.notUsed]) {
+    assert.deepEqual(Object.keys(snap).sort(), ['durability', 'gem', 'grade', 'id', 'material', 'slot']);
+    assert.equal(snap.durability, before.get(snap.id), `#${snap.id} before the fight`);
+    const live = s.gear.find((g) => g.id === snap.id);
+    if (live) {
+      assert.equal(snap.slot, live.slot);
+      assert.equal(snap.material, live.material);
+      assert.equal(snap.grade, live.grade);
+      assert.deepEqual(snap.gem, live.gem);
+      if (live.gem) assert.notEqual(snap.gem, live.gem, 'the gem is copied, not shared');
+    }
+  }
+  // the used items wore, the snapshots did not change with them
+  assert.ok(s.gear.find((g) => g.id === sword.id).durability < before.get(sword.id));
+  assert.equal(rep.used[0].durability, before.get(sword.id));
+  assert.equal(rep.used.find((g) => g.id === chest.id).gem.type, 'ruby');
+  // the other new report fields start out empty/filled as planned
+  assert.equal(rep.analysis, null);
+  assert.equal(rep.planEstimate, null);
+  assert.deepEqual(rep.ringTotals, adventurerRingTotals(s, rings.map((r) => r.id)));
+  assert.ok(rep.ringTotals.health > 0 && rep.ringTotals.dodge > 0);
+  assert.equal(JSON.parse(JSON.stringify(rep)).used.length, 3, 'snapshots survive a save');
+  assert.equal(s.battles.at(-1), rep);
+});
+
+test('the report says "no gear used" with empty snapshots when the adventurer fights unarmed (and lists nothing from home)', () => {
+  const s = game(11);
+  const home = addGear(s, 'sword', 'mythril', 'S');
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), []), WIN);
+  const rep = endDay(s, WIN).report;
+  assert.deepEqual(rep.used, []);
+  assert.deepEqual(rep.notUsed, []);
+  assert.equal(home.durability, 100);
+});
+
+test('resolveBattle with 3 items per gear type stays bounded: the adventurer thinks through at most searchPasses x items + 1 gear combinations', () => {
+  const s = game(11);
+  // 3 non-dominated items in each of the 5 gear types (the same base with a different gem): 243 combinations
+  const gems = ['ruby', 'topaz', 'sapphire'];
+  const items = SLOTS.flatMap((slot) => gems.map((t) => addGear(s, slot, 'iron', 'C', { type: t, grade: 'C' })));
+  assert.equal(items.length, 15);
+  assert.ok(3 ** 5 > CONFIG.sim.maxExactCombos);
+  toDay2(s, (st) => plan(tierIndex(st, 'normal'), []), WIN);
+  // the plan screen allows 2 per type until banners; the battle itself must cope with any packed set
+  s.plan.gearIds = items.map((g) => g.id);
+  for (const g of items) g.packed = true;
+  const rep = endDay(s, WIN).report;
+  assert.equal(rep.usedIds.length, 5, 'one item per type');
+  assert.equal(rep.used.length + rep.notUsed.length, 15);
+  assert.equal(rep.notUsed.length, 10);
+  const cap = CONFIG.sim.searchPasses * items.length + 1;
+  assert.ok(rep.loadoutsTried >= 1 && rep.loadoutsTried <= cap, `${rep.loadoutsTried} combinations tried (at most ${cap})`);
+  // that is at most (maxExactCombos + searchPasses x 15) x bestGearFights simulated fights
+  assert.ok(rep.loadoutsTried * CONFIG.combat.bestGearFights <= (CONFIG.sim.maxExactCombos + CONFIG.sim.searchPasses * items.length) * CONFIG.combat.bestGearFights);
+  // with 2 per type (32 combinations) every combination is tried
+  const t = game(11);
+  const two = SLOTS.flatMap((slot) => gems.slice(0, 2).map((g) => addGear(t, slot, 'iron', 'C', { type: g, grade: 'C' })));
+  toDay2(t, (st) => plan(tierIndex(st, 'normal'), two.map((g) => g.id)), WIN);
+  assert.equal(endDay(t, WIN).report.loadoutsTried, 2 ** 5);
 });
 
 test('a lost fight is game over: no ring, no score', () => {

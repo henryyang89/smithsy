@@ -134,7 +134,7 @@ function ownerPanel(ctx, owner) {
     let counts;
     if (r.worn) {
       const c = contrib[r.id];
-      counts = h('span', {}, h('b', {}, num(c.effective, 2)), ' ', h('span', { class: 'muted' }, `(${fmtPct(c.factor * 100)})`));
+      counts = h('span', {}, h('b', {}, num(c.effective, 2)), ' ', h('span', { class: 'muted' }, def.stack === false && c.factor === 0 ? `(only your best ${def.name} ring counts)` : `(${fmtPct(c.factor * 100)})`));
     } else {
       const gain = ringTotals([...worn, r], cfg)[r.type] - (totals[r.type] || 0);
       counts = h('span', { class: 'muted', title: 'How much the total for this type would rise if you wore it now' }, `+${num(gain, 2)} if worn`);
@@ -180,8 +180,8 @@ function ownerPanel(ctx, owner) {
   const totalRows = typeKeys.map((type) => {
     const def = ringDef(type, cfg);
     const parts = worn.filter((r) => r.type === type).map((r) => contrib[r.id]).sort((a, b) => b.effective - a.effective);
-    // Foresight counts whole guesses / test fights: the total is rounded down
-    const rounded = type === 'foresight' ? h('div', { class: 'mi-note ok' }, `counts as +${Math.floor(totals[type] + 1e-9)} in the estimate (rounded down)`) : null;
+    // Foresight counts whole guesses / test fights, and only your best Foresight ring counts
+    const rounded = type === 'foresight' ? h('div', { class: 'mi-note ok' }, `only your best Foresight ring counts: +${Math.floor(totals[type] + 1e-9)} in the estimate`) : null;
     return [
       h('span', {}, def.name, h('div', { class: 'mi-note' }, parts.map((p) => num(p.effective, 2)).join(' + '))),
       { v: String(parts.length), cls: 'num' },
