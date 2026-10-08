@@ -1,6 +1,6 @@
 // Adventurer tab: today's fight, owned gear, adventurer stats and rings, tomorrow's roster.
 // Read-only screen (no game actions); shared widgets come from endday.js.
-import { h, section } from './dom.js';
+import { h, section, num } from './dom.js';
 import { SLOTS } from '../config.js';
 import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
@@ -29,7 +29,7 @@ function todayPanel(ctx) {
       const items = packed.filter((g) => g.slot === slot);
       return h('tr', {},
         h('td', {}, cap(slot)),
-        h('td', {}, items.length ? items.map((g, i) => [i ? ', ' : '', gearNameNode(g), h('span', { class: 'muted' }, ` (${Math.round(g.durability)}%)`)]) : h('span', { class: 'muted' }, slot === 'sword' ? 'none (unarmed)' : 'none')));
+        h('td', {}, items.length ? items.map((g, i) => [i ? ', ' : '', gearNameNode(g), h('span', { class: 'muted' }, ` (${num(g.durability, 1)}%)`)]) : h('span', { class: 'muted' }, slot === 'sword' ? 'none (unarmed)' : 'none')));
     });
     return section(`Today (day ${s.day}): fighting ${e.name}`,
       h('p', { class: 'adv-tight' }, 'The adventurer is away fighting ', h('b', {}, e.name), ' ', h('span', { class: `tier-${e.tier}` }, `(${e.tier}, +${cfg.enemies.tiers[e.tier].score} pts)`),
@@ -74,7 +74,7 @@ function gearPanel(ctx) {
   }
   const packed = s.gear.filter((g) => g.packed).length;
   return section(`Gear (${s.gear.length} items${packed ? `, ${packed} packed` : ''})`,
-    h('p', { class: 'adv-tight muted adv-small' }, `Wear: each item the adventurer uses loses ${wearText(s, cfg)}. The Gear care skill reduces it.`),
+    h('p', { class: 'adv-tight muted adv-small' }, `Wear: each item the adventurer uses loses ${wearText(s, cfg)}.${wear.red > 0 ? '' : ' The Gear care skill reduces it.'}`),
     h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-geartable' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Item and stats'), h('th', {}, 'Durability'), h('th', {}, 'Where'))),
       h('tbody', {}, rows))));

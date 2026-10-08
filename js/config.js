@@ -103,7 +103,8 @@ export const CONFIG = {
     infuseMin: 10, // extra minutes to infuse a cut gem
     gemArmorMult: { chest: 1.25, helmet: 1.1, gloves: 1.0, boots: 1.0 }, // armor gem effect multiplier
     // % durability each USED item loses per fight: a whole-number roll min..max (avg 10), x the enemy tier's
-    // multiplier, x (1 - Gear care skill %), rounded, at least 1. Packed-but-unused gear does not wear.
+    // multiplier, x (1 - Gear care skill %), kept to one decimal (so every Gear care level counts), at least 1.
+    // Packed-but-unused gear does not wear.
     durabilityLoss: { min: 8, max: 12, tierMult: { normal: 1.0, elite: 1.1, champion: 1.2 } },
     repair: {
       materialFraction: 35, // full 0->100% repair costs 35% of the original bars (+ gem); scales with % repaired
@@ -113,13 +114,14 @@ export const CONFIG = {
 
   // Gem infusion effects, indexed by gem grade [D, C, B, A, S].
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
-  // Balance (1.2): an S sword gem is a little weaker than the matching enemy special at High (ruby 15 vs
-  // Magical 30, diamond 55 vs Piercing 60, topaz 30% / 1.5s vs Stunning 35% / 1.5s, sapphire 30% / 2s vs
-  // Chilling 40% / 2.5s) and every sword gem is worth about the same in win points (C ~ +6, S ~ +15 for a
-  // steel set vs an elite). Armor gems (3 pieces at C + a B ring) win back most of what a High special costs.
+  // Balance (1.2): an S sword gem is a little weaker than the matching enemy special at High (ruby 18 vs
+  // Magical 25, diamond 55 vs Piercing 60, topaz 30% / 1.5s vs Stunning 35% / 1.5s, sapphire 30% / 2s vs
+  // Chilling 40% / 2.5s) and every sword gem is worth about the same in win points (C ~ +6 to +10, S ~ +14
+  // to +20 for a steel set vs an elite; ruby is on top because magic ignores defense). Armor gems (3 pieces
+  // at C + a B ring) win back about half to all of what a High special costs (magic ~50-70%).
   gemEffects: {
     ruby: {
-      weapon: { magicPct: [5, 8, 10, 12, 15] }, // + magic damage as % of weapon damage (ignores defense)
+      weapon: { magicPct: [6, 9, 12, 15, 18] }, // + magic damage as % of weapon damage (ignores defense)
       armor: { magicRes: [4, 6, 8, 10, 12] }, // % magic damage reduction
     },
     topaz: {
@@ -181,7 +183,7 @@ export const CONFIG = {
     attributes: {
       piercing: { name: 'Piercing', side: 'O', values: { low: 10, normal: 25, high: 60 }, desc: '% of your defense ignored' },
       pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% of your piercing ignored' },
-      magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 20, high: 30 }, desc: 'extra magic damage, % of its damage' },
+      magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 15, high: 25 }, desc: 'extra magic damage, % of its damage' },
       magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% magic damage reduction' },
       stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 15, high: 35 }, desc: '% stun chance per hit' },
       stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less stun chance and duration' },

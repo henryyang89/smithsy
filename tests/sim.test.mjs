@@ -309,3 +309,106 @@ test('the real fight is unaffected by Battle simulation intel and Foresight ring
   };
   assert.deepEqual(run(true), run(false));
 });
+
+// ---------------------------------------------- margin of error (v1.2) ----
+// se = spread of the per-guess win fractions / sqrt(guesses), in percentage points: more guesses and more
+// test fights tighten it, so Battle simulation intel and Foresight rings visibly pay off.
+const sd = (xs) => {
+  const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / (xs.length - 1));
+};
+
+// A matchup that is neither a sure win nor a sure loss on the current balance: scan the days for one where
+// a full iron C set wins roughly half of its fights (so the test does not depend on a particular day).
+function midMatchup() {
+  const gearItems = set('iron', 'C');
+  let best = null;
+  for (let day = 2; day <= 120; day++) {
+    const p = { gearItems, ringTotals: {}, tier: 'elite', day, known: {}, seed: 11 };
+    const w = estimateWinChanceSync(p, { samples: 12, evalFights: 20, fightsPerLoadout: 10 }).winPct;
+    const dist = Math.abs(w - 50);
+    if (!best || dist < best.dist) best = { dist, p };
+    if (dist < 8) break;
+  }
+  return best.p;
+}
+
+test('estimateWinChanceSync returns se and the per-guess win %, se = sd(per-guess fractions) / sqrt(guesses) x 100', () => {
+  const p = midMatchup();
+  const r = estimateWinChanceSync(p, FAST);
+  assert.equal(r.perGuess.length, FAST.samples);
+  for (const g of r.perGuess) assert.ok(g >= 0 && g <= 100);
+  assert.ok(r.perGuess.some((g) => g > 0 && g < 100), 'a matchup with some spread');
+  const mean = r.perGuess.reduce((a, b) => a + b, 0) / r.perGuess.length;
+  assert.ok(Math.abs(mean - r.winPct) < 1e-9, 'the win % is the mean of the guesses');
+  const expected = (sd(r.perGuess.map((g) => g / 100)) / Math.sqrt(FAST.samples)) * 100;
+  assert.ok(Math.abs(r.se - expected) < 1e-9, `${r.se} vs ${expected}`);
+  assert.ok(r.se > 0);
+  // the async estimate reports the same numbers
+  return estimateWinChance(p, FAST).then((a) => {
+    assert.equal(a.se, r.se);
+    assert.deepEqual(a.perGuess, r.perGuess);
+    assert.equal(a.winPct, r.winPct);
+  });
+});
+
+test('se is 0 when every guess agrees (sure win, sure loss)', () => {
+  const win = estimateWinChanceSync({ gearItems: set('copper', 'D'), ringTotals: {}, tier: 'normal', day: 1, known: {}, seed: 1 }, FAST, cfgWith(WEAK_ENEMIES));
+  assert.equal(win.winPct, 100);
+  assert.equal(win.se, 0);
+  const lose = estimateWinChanceSync({ gearItems: [], ringTotals: {}, tier: 'champion', day: 9, known: {}, seed: 1 }, FAST, cfgWith(DEADLY_ENEMIES));
+  assert.equal(lose.winPct, 0);
+  assert.equal(lose.se, 0);
+});
+
+test('se shrinks as guesses are added (Battle simulation intel / Foresight rings make the estimate steadier)', () => {
+  const p = midMatchup();
+  const base = { samples: CONFIG.sim.samples, evalFights: CONFIG.sim.evalFights, fightsPerLoadout: CONFIG.sim.fightsPerLoadout };
+  const more = { ...base, samples: base.samples * 16 };
+  const seeds = [1, 2, 3, 4, 5, 6];
+  const mean = (opts) => seeds.reduce((a, seed) => a + estimateWinChanceSync({ ...p, seed }, opts).se, 0) / seeds.length;
+  const small = mean(base);
+  const big = mean(more);
+  assert.ok(small > 0 && big > 0);
+  assert.ok(big < small * 0.6, `16x the guesses should roughly quarter the margin: ${small} -> ${big}`);
+  // and through simCounts: a game with Battle simulation intel and a Foresight ring gets a smaller margin than one without
+  const s0 = game(3);
+  const s1 = game(3);
+  s1.intel.spent.simDepth = 6;
+  addRing(s1, 'foresight', 'S', true);
+  const c0 = simCounts(s0);
+  const c1 = simCounts(s1);
+  assert.ok(c1.samples > c0.samples);
+  const seMean = (counts) => seeds.reduce((a, seed) => a + estimateWinChanceSync({ ...p, seed }, counts).se, 0) / seeds.length;
+  assert.ok(seMean(c1) < seMean(c0), 'a bigger estimate has a smaller margin');
+});
+
+test('se with a single guess falls back to the binomial error of its fights; no fights gives 0', () => {
+  const p = midMatchup();
+  const one = estimateWinChanceSync(p, { samples: 1, evalFights: 40, fightsPerLoadout: 10 });
+  const q = one.winPct / 100;
+  assert.ok(Math.abs(one.se - Math.sqrt((q * (1 - q)) / 40) * 100) < 1e-9);
+  const none = estimateWinChanceSync(p, { samples: 3, evalFights: 0, fightsPerLoadout: 10 });
+  assert.equal(none.fights, 0);
+  assert.equal(none.se, 0);
+});
+
+test('estimateWinChance (async): a progress callback that returns false cancels the run (no result, no more progress calls)', async () => {
+  const p = midMatchup();
+  const calls = [];
+  const r = await estimateWinChance(p, FAST, (f) => {
+    calls.push(f);
+    return calls.length < 3;
+  });
+  assert.equal(r, null, 'a cancelled run has no result');
+  assert.equal(calls.length, 3, 'stopped right after the callback said so');
+  assert.deepEqual(calls, [1 / FAST.samples, 2 / FAST.samples, 3 / FAST.samples]);
+  // returning nothing (or true) keeps going: existing callers are unaffected
+  const progress = [];
+  const done = await estimateWinChance(p, FAST, (f) => { progress.push(f); });
+  assert.equal(progress.length, FAST.samples);
+  assert.ok(done && done.fights === FAST.samples * FAST.evalFights);
+  assert.equal(done.winPct, estimateWinChanceSync(p, FAST).winPct);
+  // cancelling at the very first callback
+  assert.equal(await estimateWinChance(p, FAST, () => false), null);
+});

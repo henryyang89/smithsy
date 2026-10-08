@@ -5,7 +5,7 @@
 import { h, num } from './dom.js';
 import { GRADES, BARS, GEMS, SLOTS, ARMOR_SLOTS, TIERS, LEVELS } from '../config.js';
 import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../core/combat.js';
-import { STAT_LABELS, fmtStat, craftMinutes, repairInfo } from '../core/gear.js';
+import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, wearLoss } from '../core/gear.js';
 import { enemyCombatant, growth } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp } from '../core/skills.js';
 import { gainForPoint } from '../core/intel.js';
@@ -528,7 +528,7 @@ function combatSection(cfg) {
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries every combination of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best.`],
-      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.gainsPerPoint[0]} for the first point, then +${cfg.intel.gainsPerPoint[1]}, ...), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
+      ['Win-chance estimate', `Plan screen, one button (Estimate all) for the whole roster. For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a little risk you plan with. Every estimate shows its margin of error (for example 62% ± 12: about 19 times in 20 the true chance is within 12 points); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.gainsPerPoint[0]} for the first point, then +${cfg.intel.gainsPerPoint[1]}, ...), and each point of Foresight smith ring adds one more of each (rounded down). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -698,15 +698,15 @@ function repairSection(cfg) {
   const tierMult = loss.tierMult || {};
   const wearRows = TIERS.map((t) => {
     const m = tierMult[t] || 1;
-    const lo = Math.max(1, Math.round(loss.min * m));
-    const hi = Math.max(1, Math.round(loss.max * m));
-    return [h('span', { class: `tier-${t}` }, cap(t)), { v: `x${num(m, 2)}`, cls: 'num' }, { v: `${lo}-${hi}%`, cls: 'num' }, { v: p(avgLoss * m, 1), cls: 'num' }];
+    const lo = wearLoss(loss.min, m);
+    const hi = wearLoss(loss.max, m);
+    return [h('span', { class: `tier-${t}` }, cap(t)), { v: `x${num(m, 2)}`, cls: 'num' }, { v: `${num(lo, 1)}-${num(hi, 1)}%`, cls: 'num' }, { v: p(avgLoss * m, 1), cls: 'num' }];
   });
   const gemFull = repairInfo({ slot: 'chest', material: 'x', grade: GRADES[0], gem: { type: 'gem', grade: GRADES[0] }, durability: 0 }, cfg);
   const gemExtra = Object.values(gemFull.gems)[0] || 0;
   return [
     kv([
-      ['Wear', `Each fight, every item the adventurer actually used loses a whole-number ${loss.min}-${loss.max}% durability (average ${num(avgLoss)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %), rounded, at least 1%. Packed but unused items do not wear. At 0% the item is destroyed.`],
+      ['Wear', `Each fight, every item the adventurer actually used loses a durability roll of ${loss.min}-${loss.max}% (average ${num(avgLoss)}%), times the enemy tier's multiplier (${TIERS.map((t) => `${t} x${(loss.tierMult && loss.tierMult[t]) || 1}`).join(', ')}), times (1 - Gear care %). The result is kept to one decimal (for example 9.6%) so every Gear care level counts, and is at least 1%. Packed but unused items do not wear. At 0% the item is destroyed.`],
       cfg.skills.activity.gearCare ? [cfg.skills.activity.gearCare.name, `Skill: ${num(cfg.skills.activity.gearCare.perLevel, 2)}% less wear per level (${num(cfg.skills.activity.gearCare.perLevel * cfg.skills.maxLevel, 2)}% at level ${cfg.skills.maxLevel}). It earns ${cfg.skills.gearCareXpPerFight} XP for every fight the adventurer survives (win or draw), so it grows as you win.`] : null,
       ['Repair', 'Only back to 100%, and not while the item is packed for today\'s fight. By day: at camp (Workshop), costs time. At night (battle report or plan screen): any gear at home, no time, materials only.'],
       ['Cost', formula(`${g.repair.materialFraction}% x original bars (and gem) x fraction repaired`, 'Same material and grade as the item; rounded up to 0.01. If you do not have enough of that grade, the lowest higher grade you have enough of is used instead, with a warning: no extra benefit, the item keeps its own grade.')],

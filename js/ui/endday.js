@@ -10,7 +10,7 @@ import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisib
 import { estimateWinChance, loadouts, simCounts } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
-import { gearStats, isNight } from '../core/gear.js';
+import { gearStats, isNight, wearLoss } from '../core/gear.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { intelChance, nextIntelGain } from '../core/intel.js';
 import { mixSeed } from '../core/rng.js';
@@ -89,27 +89,36 @@ export function gearNameNode(g) {
     g.gem ? h('span', { class: 'adv-gem' }, ` +${cap(g.gem.type)} `, h('span', { class: `grade-${g.gem.grade}` }, g.gem.grade)) : null);
 }
 
-// What one fight can cost a used item, mirroring resolveBattle in core/game.js:
-// round(roll min..max x the enemy tier's multiplier x (1 - Gear care %)), at least 1.
-// With tier = null the range covers every tier (lowest multiplier .. highest).
+// What one fight can cost a used item, using the same wearLoss() as resolveBattle in core/game.js:
+// roll x the enemy tier's multiplier x (1 - Gear care %), to one decimal, at least 1.
+// With tier = null the range covers every tier (lowest multiplier .. highest) and avg is null; with a tier,
+// avg is the mean loss over the possible rolls.
 export function wearRange(state, cfg, tier = null) {
   const dl = cfg.gear.durabilityLoss;
   const tm = dl.tierMult || {};
   const mults = tier ? [tm[tier] || 1] : TIERS.map((t) => tm[t] || 1);
   const red = Math.min(100, smithBonuses(state, cfg).gearCarePct || 0);
-  const at = (roll, m) => Math.max(1, Math.round(roll * m * (1 - red / 100)));
-  return { min: at(dl.min, Math.min(...mults)), max: at(dl.max, Math.max(...mults)), red };
+  const at = (roll, m) => wearLoss(roll, m, red);
+  let avg = null;
+  if (tier) {
+    let sum = 0;
+    let n = 0;
+    for (let roll = dl.min; roll <= dl.max; roll++, n++) sum += at(roll, mults[0]);
+    avg = n ? sum / n : at(dl.min, mults[0]);
+  }
+  return { min: at(dl.min, Math.min(...mults)), max: at(dl.max, Math.max(...mults)), red, avg };
 }
 
-// "8-14% per fight (more against tougher enemies: x1 / x1.1 / x1.2 ...; 5% less from Gear care)" for notes and tooltips.
+// "8.8-13.2% per fight (avg 10.6%; more against tougher enemies: x1 / x1.1 / x1.2 ...; 5% less from Gear care)" for notes and tooltips.
 export function wearText(state, cfg, tier = null) {
   const w = wearRange(state, cfg, tier);
   const dl = cfg.gear.durabilityLoss;
   const extra = [];
+  if (w.avg != null) extra.push(`avg ${num(w.avg, 1)}%`);
   if (!tier && dl.tierMult) extra.push(`more against tougher enemies: x${TIERS.map((t) => dl.tierMult[t] || 1).join(' / x')} for ${TIERS.join(' / ')}`);
-  if (tier && dl.tierMult && (dl.tierMult[tier] || 1) !== 1) extra.push(`x${dl.tierMult[tier]} against a ${tier} enemy`);
+  if (tier && dl.tierMult && (dl.tierMult[tier] || 1) !== 1) extra.push(`x${dl.tierMult[tier]} against ${/^[aeiou]/i.test(tier) ? 'an' : 'a'} ${tier} enemy`);
   if (w.red > 0) extra.push(`${num(w.red, 1)}% less from Gear care`);
-  return `${w.min}-${w.max}% per fight${extra.length ? ` (${extra.join('; ')})` : ''}`;
+  return `${num(w.min, 1)}-${num(w.max, 1)}% per fight${extra.length ? ` (${extra.join('; ')})` : ''}`;
 }
 
 // wear: { min, max } from wearRange (defaults to the raw config range).
@@ -118,7 +127,7 @@ export function durabilityNode(g, cfg, wear) {
   const { min, max } = wear || cfg.gear.durabilityLoss;
   const risky = d <= max;
   const cls = risky ? 'adv-dur-low' : d < 50 ? 'adv-dur-mid' : '';
-  return h('div', { class: 'adv-dur', title: risky ? `Could break in its next fight (a used item loses ${min}-${max}% per fight; 0% = destroyed)` : `A used item loses ${min}-${max}% durability per fight` },
+  return h('div', { class: 'adv-dur', title: risky ? `Could break in its next fight (a used item loses ${num(min, 1)}-${num(max, 1)}% per fight; 0% = destroyed)` : `A used item loses ${num(min, 1)}-${num(max, 1)}% durability per fight` },
     bar(d, cls), h('span', { class: risky ? 'err' : '' }, `${f1(d)}%`));
 }
 
@@ -317,6 +326,11 @@ export function rosterTable(ctx, enemies, opts = {}) {
   }
 
   const sectionRow = (label, sub) => h('tr', { class: 'rt-sect' }, h('th', { class: 'rt-row', scope: 'rowgroup' }, label), h('td', { colspan: nCols }, h('span', { class: 'rt-sect-sub' }, sub)));
+  // The Defense divider repeats the enemy names (one small muted name per column; clicking or highlighting works
+  // like the column's other cells), so the names stay in view while comparing the defensive rows far below the header.
+  const namesRow = (label, sub) => h('tr', { class: 'rt-sect rt-sect-names' },
+    h('th', { class: 'rt-row', scope: 'rowgroup', title: sub }, label),
+    enemies.map((e, i) => h('td', { ...colAttrs(i, 'rt-nm'), title: `${e.name}: ${sub}` }, e.name)));
   const attrRow = (key, last) => row(A[key].name, attrTitle(cfg, key), (e, v) => {
     const chip = levelChip(cfg, key, v.known[key]);
     if (key !== 'hp') return chip;
@@ -331,7 +345,7 @@ export function rosterTable(ctx, enemies, opts = {}) {
       rows,
       sectionRow('Offense', 'what it does to you'),
       offense.map((k) => attrRow(k)),
-      sectionRow('Defense', 'against your attacks'),
+      namesRow('Defense', 'how well it resists your attacks'),
       defense.map((k, i) => attrRow(k, i === defense.length - 1))));
   return h('div', { class: 'adv-scroll rt-scroll', 'data-rt': '1' }, table);
 }
@@ -360,15 +374,27 @@ function ringRewardCell(ctx, enemy) {
     tv ? h('div', { class: 'muted rt-sm' }, `${def.owner} ring`) : null);
 }
 
-// A cell of the "Win estimate" row: the win % (colour by chance), "…" while that estimate runs, "—" if none.
+// A cell of the "Win estimate" row: the win % (colour by chance) with its margin, "…" while that estimate runs, "—" if none.
 function estimateCell(res, running) {
-  if (res) return h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${res.fights} simulated fights` }, winText(res.winPct));
+  if (res) {
+    const m = marginPts(res);
+    return h('div', { class: 'rt-ec' },
+      h('span', { class: `adv-badge ${winClass(res.winPct)}`, title: `${winWithMargin(res)}${m != null ? ` point${m === 1 ? '' : 's'}` : ''} from ${res.fights} simulated fights${m != null ? ` (about 19 times in 20 the true chance is within ${pointsText(m)})` : ''}` }, winText(res.winPct)),
+      m != null ? h('div', { class: 'muted rt-sm rt-pm' }, `± ${m}`) : null);
+  }
   if (running) return h('span', { class: 'muted', title: 'Simulating…' }, '…');
   return h('span', { class: 'muted', title: 'Not estimated yet for this selection: press Estimate all' }, '—');
 }
 
 const winClass = (p) => (p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'err');
 const winText = (v) => `${Math.round(v)}%`;
+
+// Margin of an estimate in points: twice the standard error (about 19 times in 20 the true chance is within
+// it), shown in whole points and never below 1. null for results without one (nothing simulated).
+export const marginPts = (res) => (res && Number.isFinite(res.se) ? Math.max(1, Math.round(2 * res.se)) : null);
+// "62% ± 12" (or just "62%" without a margin)
+const winWithMargin = (res) => (marginPts(res) != null ? `${winText(res.winPct)} ± ${marginPts(res)}` : winText(res.winPct));
+const pointsText = (n) => `${n} point${n === 1 ? '' : 's'}`;
 
 // -------------------------------------------------------------- combat log ----
 // Backpack-Battles style log lines. Returns a DOM node.
@@ -473,7 +499,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
   };
   const wearRows = (report.wear || []).map((w) => h('tr', {},
     h('td', {}, w.name, wearDetail(w) ? h('div', { class: 'muted adv-small' }, wearDetail(w)) : null),
-    h('td', { class: 'num err' }, `-${w.loss}%`),
+    h('td', { class: 'num err' }, `-${f1(w.loss)}%`),
     h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${f1(w.left)}% left`)));
   const survived = report.win || report.draw;
   const gearCareNode = survived && Array.isArray(report.notes) && cfg.skills.gearCareXpPerFight && cfg.skills.activity.gearCare
@@ -609,6 +635,7 @@ function planSel(ctx) {
   let p = ctx.ui.plan;
   const wornNow = defaultRingIds(s, cfg);
   if (!p || p.rosterDay !== s.roster.day || p.seed !== s.seed) {
+    cancelRun(ctx); // a run for the previous roster / game must not paint or block this one
     const ringIds = [...wornNow];
     // a ring won today is pre-selected when there is room (the player can untick it)
     const won = s.report && s.report.ring;
@@ -622,6 +649,7 @@ function planSel(ctx) {
     p.ringIds = p.ringIds.filter((id) => !(before.has(id) && !now.has(id)));
     for (const id of wornNow) if (!before.has(id) && !p.ringIds.includes(id) && p.ringIds.length < cfg.rings.maxWorn) p.ringIds.push(id);
     p.wornKey = sortedIds(wornNow);
+    cancelRun(ctx); // the ring selection changed under a running estimate
   }
   ctx.ui.plan_est = ctx.ui.plan_est || {};
   p.gearIds = p.gearIds.filter((id) => s.gear.some((g) => g.id === id));
@@ -639,10 +667,27 @@ function estKey(ctx, p, enemyIndex, counts = simCounts(ctx.state, ctx.cfg)) {
     counts.samples, counts.evalFights, counts.fightsPerLoadout].join('|');
 }
 
+// Stop the running "Estimate all" (if any): its remaining work is for a selection / roster / game that is
+// gone. The run loop and the estimator's progress callback both check run.cancelled and bail out, so nothing
+// more is simulated or painted. Exported for main.js (new game).
+export function cancelRun(ctx) {
+  const r = ctx.ui.plan_run;
+  if (r) {
+    r.cancelled = true;
+    ctx.ui.plan_run = null;
+  }
+}
+
+// The part of the selection an estimate depends on (gear + rings): picking another enemy column does not change it.
+const selKey = (p) => `${sortedIds(p.gearIds)}|${sortedIds(p.ringIds)}`;
+
 // UI-only selection change. Cached estimates are keyed by the full selection, so a changed
-// selection never shows a stale result.
+// selection never shows a stale result; a run that was started for the old gear / rings is cancelled
+// (choosing another enemy column keeps it going).
 function changeSel(ctx, fn) {
+  const before = selKey(ctx.ui.plan);
   fn(ctx.ui.plan);
+  if (selKey(ctx.ui.plan) !== before) cancelRun(ctx);
   ctx.rerender();
 }
 
@@ -664,6 +709,7 @@ function estimateParams(ctx, enemyIndex) {
 
 // Update the progress widgets in place (the run can outlive several re-renders).
 function setProgress(run) {
+  if (run.cancelled) return;
   const pct = Math.round(run.progress * 100);
   const text = `Simulating ${run.name} (${Math.min(run.index + 1, run.total)} of ${run.total})… ${pct}%`;
   for (const fill of document.querySelectorAll('.adv-est-fill')) fill.style.width = `${pct}%`;
@@ -680,6 +726,9 @@ function paintEstimate(i, res, running) {
 
 // ONE button for the whole roster: estimate every enemy, one after the other, with the current gear and
 // ring selection (snapshotted now, so changing the selection mid-run cannot mix up the results).
+// Hygiene: results are stored under their own key whatever happens, but painted only if that key is still the
+// current selection's; cancelRun (gear / ring change, confirming, a new roster or game) stops the loop and
+// the simulation at the next guess.
 function startEstimateAll(ctx) {
   const p = ctx.ui.plan;
   if (ctx.ui.plan_run || !p) return;
@@ -689,28 +738,35 @@ function startEstimateAll(ctx) {
   const est = ctx.ui.plan_est;
   const jobs = enemies.map((e, i) => ({ i, name: e.name, key: estKey(ctx, p, i, counts), params: estimateParams(ctx, i) })).filter((j) => !est[j.key]);
   if (!jobs.length) return;
-  const run = { jobs, total: jobs.length, index: 0, progress: 0, name: jobs[0].name };
+  const run = { jobs, total: jobs.length, index: 0, progress: 0, name: jobs[0].name, cancelled: false, sig: estKey(ctx, p, 0, counts) };
   ctx.ui.plan_run = run;
   ctx.rerender();
   (async () => {
     try {
       for (let n = 0; n < jobs.length; n++) {
+        if (run.cancelled) return;
         const job = jobs[n];
         run.index = n;
         run.name = job.name;
         const res = await estimateWinChance(job.params, opts, (f) => {
+          if (run.cancelled) return false; // stops the simulation at the next guess
           run.progress = (n + f) / jobs.length;
           setProgress(run);
+          return true;
         });
+        if (run.cancelled || !res) return; // cancelled mid-job: no result
         est[job.key] = { ...res, counts };
-        paintEstimate(job.i, est[job.key], true);
+        const cur = ctx.ui.plan;
+        if (cur && job.key === estKey(ctx, cur, job.i)) paintEstimate(job.i, est[job.key], true);
       }
     } catch (e) {
       console.error(e);
       ctx.toast(`Estimate failed: ${e.message}`, 'err');
     } finally {
-      if (ctx.ui.plan_run === run) ctx.ui.plan_run = null;
-      ctx.rerender();
+      if (!run.cancelled) {
+        if (ctx.ui.plan_run === run) ctx.ui.plan_run = null;
+        ctx.rerender();
+      }
     }
   })();
 }
@@ -719,6 +775,8 @@ export function renderPlan(root, ctx) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   const p = planSel(ctx);
+  // anything that changed what a running estimate is for (rings worn on the Rings tab, spent intel, ...)
+  if (ctx.ui.plan_run && ctx.ui.plan_run.sig !== estKey(ctx, p, 0)) cancelRun(ctx);
   const sel = p.enemyIndex != null ? s.roster.enemies[p.enemyIndex] : null;
   const selGear = s.gear.filter((g) => p.gearIds.includes(g.id));
   const advRings = s.rings.filter((r) => isAdvRing(r, cfg));
@@ -982,22 +1040,27 @@ function matchupTable(ctx, sel, preview) {
     h('p', { class: 'adv-tight muted adv-small' }, 'Uses the preview gear above. Ranges cover the levels hidden attributes could still have. Ignores stuns, slows and damage rolls — run the estimate for the full picture.'));
 }
 
-// "10 guesses x 10 test fights per enemy" and how to raise it. counts = simCounts(state).
-function estimateHow(ctx, sel, counts) {
+// "10 guesses x 10 test fights per enemy" and how to raise it. counts = simCounts(state); est = the chosen
+// enemy's finished estimate (or null): the caveat then states its actual margin.
+function estimateHow(ctx, sel, counts, est = null) {
   const { state, cfg } = ctx;
   const known = sel ? knownLevels(state, sel, cfg) : null;
   const nHidden = known ? Object.keys(cfg.enemies.attributes).length - Object.keys(known).length : null;
   const intelPart = intelChance(state, 'simDepth', cfg);
   const ringPart = counts.extra - intelPart;
   const o = cfg.sim;
+  const m = marginPts(est);
   return h('div', { class: 'adv-how' },
     h('p', { class: 'muted adv-small' },
       h('b', {}, `${counts.samples} guesses x ${counts.evalFights} test fights per enemy`),
       ` (base ${o.samples} x ${o.evalFights}${counts.extra ? `, +${intelPart} from Battle simulation intel${ringPart ? ` and +${ringPart} from Foresight rings` : ''}` : ''}). `,
       `For each guess of the hidden attributes${nHidden != null ? ` (${nHidden} hidden for ${sel.name})` : ''}, consistent with the tier mix, the adventurer picks the best packed gear (${counts.fightsPerLoadout} test fights per combination), then fights ${counts.evalFights} fresh fights: ${counts.samples * counts.evalFights} fights per enemy. A draw (safety time cap) counts as survival.`),
-    h('p', { class: 'muted adv-small' },
-      'A small simulation is noisy: treat the number as a rough guide (it can be off by several points), and a risk you take on. To make it steadier, spend intel on ',
-      h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear ', h('b', {}, cfg.rings.types.foresight.name), ' smith rings (Rings tab). Both add guesses and test fights, and make the run slower.'));
+    h('p', { class: 'muted adv-small', 'data-margin-note': m != null ? m : null },
+      m != null
+        ? ['A small simulation is noisy: this estimate is ', h('b', {}, winWithMargin(est)), ` point${m === 1 ? '' : 's'} (about 19 times in 20 the true chance is within ${pointsText(m)} of ${winText(est.winPct)}). It is a rough guide, and a risk you take on. `]
+        : 'A small simulation is noisy: every estimate shows its margin of error (± points), and it is a rough guide, a risk you take on. ',
+      'To make it steadier, spend intel on ',
+      h('b', {}, cfg.intel.tracks.simDepth.name), ' (Skills & Intel) or wear ', h('b', {}, cfg.rings.types.foresight.name), ' smith rings (Rings tab). Both add guesses and test fights, which tightens the margin (about 4 times as many guesses halve it) and makes the run slower.'));
 }
 
 function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
@@ -1011,7 +1074,7 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
     sel ? matchupTable(ctx, sel, preview) : null);
 
   let right;
-  const how = estimateHow(ctx, sel, counts);
+  const how = estimateHow(ctx, sel, counts, est && !running ? est : null);
   if (!sel) {
     right = h('div', {}, h('p', { class: 'muted' }, 'Pick an enemy to see the details of its estimate. ', h('b', {}, 'Estimate all'), ' (bottom bar) simulates every enemy of the roster at once.'), how);
   } else if (running) {
@@ -1024,7 +1087,8 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, running, counts) {
     };
     right = h('div', {},
       h('div', { class: 'adv-bignums' },
-        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}` }, winText(est.winPct)), h('div', { class: 'muted' }, 'win chance')),
+        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, title: marginPts(est) != null ? `Margin of error: about 19 times in 20 the true win chance is within ${pointsText(marginPts(est))} of ${winText(est.winPct)}` : null },
+          winText(est.winPct), marginPts(est) != null ? h('span', { class: 'adv-pm' }, ` ± ${marginPts(est)}`) : null), h('div', { class: 'muted' }, marginPts(est) != null ? 'win chance (± points)' : 'win chance')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),
       h('p', { class: 'adv-small muted' }, `${est.fights} simulated fights vs ${sel.name} (${c.samples} guesses x ${c.evalFights}).`),
@@ -1053,7 +1117,7 @@ function confirmBar(ctx, p, sel, selGear, selRings, est, running, err, estimates
     h('div', { class: 'adv-bar-info' },
       sel ? [h('b', {}, sel.name), ' ', h('span', { class: `tier-${sel.tier}` }, `(${sel.tier}, +${cfg.enemies.tiers[sel.tier].score} pts)`)] : h('span', { class: 'warn' }, 'No enemy chosen'),
       h('span', { class: 'muted' }, ` · ${selGear.length} gear packed · ${selRings.length}/${cfg.rings.maxWorn} rings`),
-      est ? h('span', {}, ' · win ≈ ', h('b', { class: winClass(est.winPct) }, winText(est.winPct))) : sel ? h('span', { class: 'muted' }, ' · not estimated') : null,
+      est ? h('span', {}, ' · win ≈ ', h('b', { class: winClass(est.winPct) }, winWithMargin(est))) : sel ? h('span', { class: 'muted' }, ' · not estimated') : null,
       err ? h('div', { class: 'warn adv-small' }, err) : null,
       running ? progressBlock(running) : null),
     h('button', {
@@ -1080,10 +1144,11 @@ function confirmBar(ctx, p, sel, selGear, selRings, est, running, err, estimates
           if (st.gear.some((g) => g.slot === slot) && !plan.gearIds.some((id) => st.gear.find((g) => g.id === id)?.slot === slot)) warn.push(`No ${slot} packed, though you own one.`);
         }
         const chosen = ctx.ui.plan_est && ctx.ui.plan_est[estKey(ctx, p, p.enemyIndex)];
-        if (chosen && chosen.winPct < 50) warn.push(`Estimated win chance is only ${winText(chosen.winPct)}.`);
+        if (chosen && chosen.winPct < 50) warn.push(`Estimated win chance is only ${winWithMargin(chosen)}.`);
         if (warn.length && !confirm(`${warn.join('\n')}\n\nA lost fight ends the game. Confirm anyway?`)) return;
         const res = ctx.act(() => Game.confirmPlan(ctx.state, plan, ctx.cfg));
         if (res && res.ok) {
+          cancelRun(ctx);
           ctx.ui.plan = null;
           ctx.ui.plan_est = {};
         }

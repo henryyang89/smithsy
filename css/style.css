@@ -46,9 +46,9 @@ body {
 }
 #topbar .brand { font-weight: 700; color: var(--accent); font-size: 16px; }
 #topbar .spacer { flex: 1; }
-#topbar .timestat { display: inline-flex; align-items: center; gap: 4px; }
-.timebar { width: 84px; height: 8px; margin-left: 4px; border-radius: 4px; background: var(--cell); overflow: hidden; flex: none; }
-.timebar-fill { height: 100%; background: var(--accent-2); border-radius: 4px; transition: width 0.2s; }
+/* work-day bar: a thin strip on the bottom edge of the top bar (over its border line); no layout space */
+.timebar { position: absolute; left: 0; right: 0; bottom: -1px; height: 4px; background: var(--cell); }
+.timebar-fill { height: 100%; background: var(--accent-2); transition: width 0.2s; }
 .timebar.mid .timebar-fill { background: var(--warn); }
 .timebar.low .timebar-fill { background: var(--err); }
 #topbar .hl { color: var(--accent); font-weight: 600; }
