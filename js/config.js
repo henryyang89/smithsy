@@ -113,13 +113,17 @@ export const CONFIG = {
 
   // Gem infusion effects, indexed by gem grade [D, C, B, A, S].
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
+  // Balance (1.2): an S sword gem is a little weaker than the matching enemy special at High (ruby 15 vs
+  // Magical 30, diamond 55 vs Piercing 60, topaz 30% / 1.5s vs Stunning 35% / 1.5s, sapphire 30% / 2s vs
+  // Chilling 40% / 2.5s) and every sword gem is worth about the same in win points (C ~ +6, S ~ +15 for a
+  // steel set vs an elite). Armor gems (3 pieces at C + a B ring) win back most of what a High special costs.
   gemEffects: {
     ruby: {
       weapon: { magicPct: [5, 8, 10, 12, 15] }, // + magic damage as % of weapon damage (ignores defense)
       armor: { magicRes: [4, 6, 8, 10, 12] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [12, 15, 19, 23, 27], stunDur: [1, 1, 1.2, 1.4, 1.5] }, // % per hit, seconds
+      weapon: { stunChance: [10, 15, 20, 25, 30], stunDur: [1, 1, 1.5, 1.5, 1.5] }, // % per hit, seconds
       armor: { stunChanceRed: [4, 6, 8, 10, 12], stunDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     emerald: {
@@ -127,11 +131,11 @@ export const CONFIG = {
       armor: { dodge: [4, 6, 8, 10, 12] }, // dodge rating
     },
     sapphire: {
-      weapon: { slowPct: [10, 14, 19, 24, 28], slowDur: [1, 1.5, 1.5, 2, 2.5] }, // % slower attacks, seconds
+      weapon: { slowPct: [10, 15, 20, 25, 30], slowDur: [1.5, 1.5, 1.5, 1.5, 2] }, // % slower attacks, seconds
       armor: { slowRed: [4, 6, 8, 10, 12], slowDurRed: [4, 6, 8, 10, 12] }, // % reductions
     },
     diamond: {
-      weapon: { pierce: [12, 20, 30, 40, 50] }, // % of enemy defense ignored
+      weapon: { pierce: [15, 25, 35, 45, 55] }, // % of enemy defense ignored
       armor: { pierceRes: [6, 9, 12, 15, 18] }, // % of enemy piercing ignored
     },
   },
@@ -178,7 +182,7 @@ export const CONFIG = {
       piercing: { name: 'Piercing', side: 'O', values: { low: 10, normal: 25, high: 60 }, desc: '% of your defense ignored' },
       pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% of your piercing ignored' },
       magical: { name: 'Magical', side: 'O', values: { low: 10, normal: 20, high: 30 }, desc: 'extra magic damage, % of its damage' },
-      magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 15, high: 30 }, desc: '% magic damage reduction' },
+      magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% magic damage reduction' },
       stunning: { name: 'Stunning', side: 'O', values: { low: 5, normal: 15, high: 35 }, desc: '% stun chance per hit' },
       stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less stun chance and duration' },
       accurate: { name: 'Accurate', side: 'O', values: { low: 80, normal: 100, high: 120 }, desc: 'accuracy rating (before daily growth)' },
@@ -223,14 +227,14 @@ export const CONFIG = {
       oreGrade: { owner: 'smith', name: 'Bar luck', values: [2, 3, 4, 5, 6], desc: '% chance a bar is upgraded one grade' },
       gemGrade: { owner: 'smith', name: 'Gem luck', values: [2, 3, 4, 5, 6], desc: '% chance a gem is upgraded one grade' },
       foresight: { owner: 'smith', name: 'Foresight', values: [2, 3, 4, 5, 6], desc: 'more guesses and test fights in the win-chance estimate' },
-      pierce: { owner: 'adventurer', name: 'Piercing', values: [5, 8, 10, 12, 14], desc: '% of enemy defense ignored' },
+      pierce: { owner: 'adventurer', name: 'Piercing', values: [6, 8, 10, 12, 14], desc: '% of enemy defense ignored' },
       pierceRes: { owner: 'adventurer', name: 'Pierce resistance', values: [6, 9, 12, 15, 18], desc: '% of enemy piercing ignored' },
       magicDmg: { owner: 'adventurer', name: 'Magic damage', values: [3, 4, 5, 6, 7], desc: '% of weapon damage added as magic' },
       magicRes: { owner: 'adventurer', name: 'Magic resistance', values: [4, 6, 8, 10, 12], desc: '% magic damage reduction' },
-      stunRes: { owner: 'adventurer', name: 'Stun resistance', values: [5, 6, 7, 8, 10], desc: '% less stun chance and duration' },
+      stunRes: { owner: 'adventurer', name: 'Stun resistance', values: [4, 6, 8, 10, 12], desc: '% less stun chance and duration' },
       accuracy: { owner: 'adventurer', name: 'Accuracy', values: [6, 7, 8, 9, 10], desc: 'accuracy rating' },
       dodge: { owner: 'adventurer', name: 'Dodge', values: [6, 7, 8, 9, 10], desc: 'dodge rating' },
-      slowRes: { owner: 'adventurer', name: 'Slow resistance', values: [6, 8, 10, 12, 15], desc: '% less slow strength and duration' },
+      slowRes: { owner: 'adventurer', name: 'Slow resistance', values: [6, 9, 12, 15, 18], desc: '% less slow strength and duration' },
       speed: { owner: 'adventurer', name: 'Speed', values: [2, 2.5, 3, 3.5, 4], desc: '% attack speed' },
       health: { owner: 'adventurer', name: 'Health', values: [3, 4, 5, 6, 7], desc: '% max HP' },
     },

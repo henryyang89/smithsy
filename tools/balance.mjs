@@ -2,7 +2,7 @@
 // ============================================================================
 // SMITHSY BALANCE REPORT — is the pacing and difficulty sensible?
 //
-//   node tools/balance.mjs [--section economy|power|bot|benchmark|specials|all] [--seeds N] [--days N] [--samples N]
+//   node tools/balance.mjs [--section economy|power|bot|benchmark|specials|estimator|all] [--seeds N] [--days N] [--samples N]
 //                          [--minwin P] [--future F] [--ablate x,y] [--immortal] [--carry value|default]
 //                          [--estimator game|bot] [--jobs N] [--quick] [--set path=value ...]
 //
@@ -58,6 +58,9 @@
 //            defence recovers, and how strong the adventurer's own gems and rings are against enemy
 //            resistances: direct fight simulations of a plain C set (iron, steel, mythril) vs an elite on the
 //            day that set wins about 55% (window of 7 days), one enemy attribute changed at a time.
+//   estimator How accurate the in-game win-chance estimate is at 10x10, with a Foresight ring or Battle simulation
+//            intel points, and at the old 40x30: wobble between presses and miss vs the true chance, at
+//            several scouting levels (steel C set vs elites at about 55 / 75 / 90% true win).
 //   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
 //            cut, smith, rings, intel; at night: free repairs, then the plan) and reports survival,
 //            score, gear over time, the daily time split, rings, skills, the tiers it chose and how
@@ -81,7 +84,7 @@ import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade
 import { gearStats, craftMinutes, craft, repairInfo, repairPlan, repair, isNight } from '../js/core/gear.js';
 import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
 import { estimateWinChanceSync } from '../js/core/sim.js';
-import { knownLevels, enemyCombatant } from '../js/core/enemies.js';
+import { knownLevels, enemyCombatant, rollLevels } from '../js/core/enemies.js';
 import { adventurerCombatant, fight } from '../js/core/combat.js';
 import { spendIntel, intelChance } from '../js/core/intel.js';
 import { smithBonuses } from '../js/core/bonuses.js';
@@ -208,7 +211,7 @@ function parseArgs(argv) {
     } else if (a === '-h' || a === '--help') o.help = true;
     else throw new Error(`Unknown option ${a} (try --help)`);
   }
-  if (!['all', 'economy', 'power', 'bot', 'benchmark', 'specials'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
+  if (!['all', 'economy', 'power', 'bot', 'benchmark', 'specials', 'estimator'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
   if (o.days == null) o.days = o.section === 'benchmark' ? 100 : 80;
   return o;
 }
@@ -1066,10 +1069,10 @@ function powerSection(o, T) {
 // one B ring) recovers at least half of that, and the adventurer's own S gem is a little weaker than the
 // enemy's High value (and enemy resistances blunt it).
 const SPECIALS = [
-  { name: 'Magic', off: 'magical', res: 'magicRes', gem: 'ruby', resRing: 'magicRes', offRing: 'magicDmg' },
-  { name: 'Piercing', off: 'piercing', res: 'pierceRes', gem: 'diamond', resRing: 'pierceRes', offRing: 'pierce' },
-  { name: 'Stun', off: 'stunning', res: 'stunRes', gem: 'topaz', resRing: 'stunRes', offRing: null },
-  { name: 'Slow', off: 'chilling', res: 'slowRes', gem: 'sapphire', resRing: 'slowRes', offRing: null },
+  { name: 'Magic', off: 'magical', field: 'magicPct', res: 'magicRes', gem: 'ruby', resRing: 'magicRes', offRing: 'magicDmg' },
+  { name: 'Piercing', off: 'piercing', field: 'pierce', res: 'pierceRes', gem: 'diamond', resRing: 'pierceRes', offRing: 'pierce' },
+  { name: 'Stun', off: 'stunning', field: 'stunChance', res: 'stunRes', gem: 'topaz', resRing: 'stunRes', offRing: null },
+  { name: 'Slow', off: 'chilling', field: 'slowPct', res: 'slowRes', gem: 'sapphire', resRing: 'slowRes', offRing: null },
 ];
 
 function specialsSection(o) {
@@ -1078,9 +1081,10 @@ function specialsSection(o) {
   const tier = 'elite';
   const lv = (over = {}) => Object.fromEntries(Object.keys(cfg.enemies.attributes).map((k) => [k, over[k] || 'normal']));
   const foe = (day, over) => enemyCombatant(tier, day, lv(over), 'Enemy', cfg);
-  const wins = (gear, rings, day, over, salt) => {
+  const wins = (gear, rings, day, over, salt, edit = null) => {
     const adv = adventurerCombatant(gear, rings, cfg);
     const en = foe(day, over);
+    if (edit) edit(en);
     const rng = seededRng(mixSeed(777, day, salt));
     let w = 0;
     for (let i = 0; i < n; i++) {
@@ -1137,7 +1141,7 @@ function specialsSection(o) {
   const ref = refDayOf(base);
   const days = [];
   for (let d = ref - WINDOW; d <= ref + WINDOW; d++) if (d >= 2) days.push(d);
-  const W = (gear, rings, over) => mean(days.map((d) => wins(gear, rings, d, over, 2)));
+  const W = (gear, rings, over, edit = null) => mean(days.map((d) => wins(gear, rings, d, over, 2, edit)));
   h2(`The adventurer's own specials: win-point gain of a sword gem / one ring over the same ${mat} C set without it, by the enemy's matching resistance (day ${ref}, all else Normal)`);
   const advRows = [];
   const gains = (gear, rings, res) => ['low', 'normal', 'high'].map((l) => W(gear, rings, { [res]: l }) - W(base, {}, { [res]: l }));
@@ -1163,6 +1167,25 @@ function specialsSection(o) {
   printTable(['gem / ring', 'effect', 'S / enemy High', 'enemy resist L/N/H', 'gain vs L', 'N', 'H'], advRows);
   note('"S / enemy High" = the S gem\'s main number as a share of the enemy\'s High value for the same special (target: below 100%, a little weaker).');
 
+  // ---- enemy special vs the adventurer's equivalent, in win points
+  h2(`Adventurer offence vs the enemy's equivalent special, in win points (${mat} C set vs an all-Normal ${tier}, day ${ref})`);
+  const normalW = W(base, {}, {});
+  const cmpRows = SPECIALS.map((sp) => {
+    const ev = cfg.enemies.attributes[sp.off].values;
+    const absent = W(base, {}, {}, (en) => { en[sp.field] = 0; });
+    const high = W(base, {}, { [sp.off]: 'high' });
+    const eff = cfg.gemEffects[sp.gem].weapon;
+    const mainKey = Object.keys(eff)[0];
+    const gS = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'S' } }), {}, {}) - normalW;
+    const gC = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'C' } }), {}, {}) - normalW;
+    const costN = absent - normalW;
+    const costH = absent - high;
+    const unit = (g) => Object.entries(eff).map(([k, a]) => `${a[GRADES.indexOf(g)]}${k.endsWith('Dur') ? 's' : '%'}`).join('/');
+    return [sp.name, `${ev.normal} / ${ev.high}`, `-${f1(costN)} / -${f1(costH)}`, `${sp.gem} C ${unit('C')} | S ${unit('S')}`, `+${f1(gC)} / +${f1(gS)}`, `${f0((100 * eff[mainKey][4]) / ev.high)}%`, `${f0((100 * gS) / costN)}% / ${f0((100 * gS) / costH)}%`];
+  });
+  printTable(['special', 'enemy Normal / High', 'enemy costs you vs none (Normal / High)', 'adventurer gem (C | S)', 'gem gain (C / S)', 'S value / enemy High', 'S gain / enemy cost (Normal / High)'], cmpRows);
+  note('Target: the adventurer\'s top gem is a little weaker than the enemy\'s High special, both in the number shown (S value / enemy High, below 100%) and in win points (S gain below the enemy\'s High cost, about the enemy\'s Normal cost).');
+
   // ---- defensive rings in their matchup
   h2(`Defensive and other adventurer rings: gain of ONE ring (B / S) vs an all-Normal ${tier} and vs an ${tier} with the matching attribute High (${mat} C set, day ${ref})`);
   const rrows = [];
@@ -1175,6 +1198,106 @@ function specialsSection(o) {
   }
   printTable(['ring', 'B value', 'S value', 'B: normal / vs High', 'S: normal / vs High'], rrows);
   console.log(`\nSPECIALS SUMMARY (steel C, N->H loss / recovered by 3 gems + B ring) | ${summary.join(' | ')}`);
+}
+
+// ============================================================ ESTIMATOR =====
+// How accurate is the in-game win-chance estimate at a given size (guesses x test fights)? A plain steel C set
+// vs random elites on three days chosen so the average true win chance is about 55 / 75 / 90%. For each
+// enemy: its TRUE win chance (4000 fights against its real attributes) and the estimate made when only a
+// share of its attributes is visible (enemy scouting: the base is CONFIG.intel.tracks.enemySight.base; 50 and
+// 100 show what better scouting does). Every estimate is made 3 times with different random draws.
+//   repeat sd  = how much the same estimate wobbles between presses (sampling noise; shrinks with size)
+//   error sd   = typical miss of the estimate vs the true chance (adds the hidden-attribute guesswork,
+//                which more guesses do not remove)
+//   >10 pts    = share of estimates that miss by more than 10 points
+// Sizes: 10x10 = start of the game; 13x13 / 16x16 = a C / S Foresight ring (+3 / +6); 20x20 = 1 Battle
+// simulation intel point (+10); 29x29 = 2 points (+10 +9); 40x30 = the 1.1 estimate.
+function estimatorSection(o) {
+  const M = o.quick ? 40 : 200; // enemies per target
+  const tier = 'elite';
+  const gear = setOf('steel', 'C');
+  const sizes = [[10, 10], [13, 13], [16, 16], [20, 20], [29, 29], [40, 30]];
+  const base = cfg.intel.tracks.enemySight.base;
+  const sights = [...new Set([base, 50, 100])];
+  const lvOf = (rng) => rollLevels(rng, tier, cfg);
+  const trueWin = (day, levels, n, seed) => {
+    const adv = adventurerCombatant(gear, {}, cfg);
+    const en = enemyCombatant(tier, day, levels, 'Enemy', cfg);
+    const rng = seededRng(seed);
+    let w = 0;
+    for (let i = 0; i < n; i++) {
+      const r = fight(adv, en, rng.next, false, cfg);
+      if (r.win || r.draw) w++;
+    }
+    return (100 * w) / n;
+  };
+  const dayFor = (target) => {
+    let best = 2;
+    let bd = Infinity;
+    for (let d = 2; d <= 90; d++) {
+      const rng = seededRng(mixSeed(5, d));
+      let t = 0;
+      for (let i = 0; i < 30; i++) t += trueWin(d, lvOf(rng), 150, mixSeed(6, d, i));
+      const dist = Math.abs(t / 30 - target);
+      if (dist < bd) [bd, best] = [dist, d];
+    }
+    return best;
+  };
+  h1(`ESTIMATOR — how far off is the win-chance estimate? (steel C set vs random ${tier}s; ${M} enemies per target, 3 estimates each)`);
+  note('Sizes are guesses x test fights. 13x13 / 16x16 = a C / S Foresight ring, 20x20 = 1 Battle simulation intel point, 29x29 = 2 points, 40x30 = what 1.1 used.');
+  note(`Sight = the share of the enemy's attributes visible (enemy scouting; ${base}% is the starting value). repeat sd = wobble of the same estimate between presses; error sd = miss vs the true chance (includes the guesswork about hidden attributes).`);
+  const summary = [];
+  for (const target of [55, 75, 90]) {
+    const day = dayFor(target);
+    const rng = seededRng(mixSeed(1234, target));
+    const enemies = [];
+    for (let i = 0; i < M; i++) {
+      const levels = lvOf(rng);
+      enemies.push({ levels, truth: trueWin(day, levels, 4000, mixSeed(9, target, i)), sightRoll: Object.fromEntries(Object.keys(levels).map((k) => [k, rng.float(0, 100)])) });
+    }
+    const mt = mean(enemies.map((e) => e.truth));
+    const sdT = Math.sqrt(mean(enemies.map((e) => (e.truth - mt) ** 2)));
+    h2(`target ~${target}%: steel C set vs ${tier} on day ${day}; mean true win ${f1(mt)}% (true spread sd ${f1(sdT)})`);
+    const rows = sizes.map(([S, E]) => {
+      const cells = [];
+      for (const sight of sights) {
+        const errs = [];
+        const reps = [];
+        let hi = 0;
+        let falseSafe = 0;
+        enemies.forEach((e, i) => {
+          const known = {};
+          for (const k of Object.keys(e.levels)) if (e.sightRoll[k] < sight) known[k] = e.levels[k];
+          const ests = [0, 1, 2].map((r) => estimateWinChanceSync({ gearItems: gear, ringTotals: {}, tier, day, known, seed: 1000 * i + r + 1 }, { samples: S, evalFights: E, fightsPerLoadout: E }, cfg).winPct);
+          const m = mean(ests);
+          reps.push(Math.sqrt(sum(ests.map((x) => (x - m) ** 2)) / 2));
+          errs.push(ests[0] - e.truth);
+          if (ests[0] >= 90) {
+            hi++;
+            if (e.truth < 80) falseSafe++;
+          }
+        });
+        const me = mean(errs);
+        const sdE = Math.sqrt(mean(errs.map((x) => (x - me) ** 2)));
+        const repSd = Math.sqrt(mean(reps.map((x) => x * x)));
+        const over10 = (100 * errs.filter((x) => Math.abs(x) > 10).length) / errs.length;
+        cells.push(f1(repSd), f1(sdE), `${f0(over10)}%`);
+        if (target === 90 && sight === base) summary.push({ S, E, falseSafe: hi ? (100 * falseSafe) / hi : NaN, hi });
+        if (sight === base) summary.push({ S, E, target, repSd, sdE, over10 });
+      }
+      return [`${S}x${E}`, ...cells];
+    });
+    printTable(['size', ...sights.flatMap((sg) => [`sight ${sg}%: repeat sd`, 'error sd', '>10 pts'])], rows);
+    if (target === 90) {
+      const fs = summary.filter((x) => x.falseSafe !== undefined && x.target === undefined);
+      note(`Risk at 90%: of the estimates >= 90 (sight ${base}%), the share whose true chance is under 80: ` + fs.map((x) => `${x.S}x${x.E} ${Number.isFinite(x.falseSafe) ? f0(x.falseSafe) + '%' : '-'}`).join(', ') + '.');
+    }
+  }
+  const line = (S, E) => {
+    const xs = summary.filter((x) => x.target && x.S === S && x.E === E);
+    return `${S}x${E}: repeat sd ${f1(mean(xs.map((x) => x.repSd)))}, error sd ${f1(mean(xs.map((x) => x.sdE)))}`;
+  };
+  console.log(`\nESTIMATOR SUMMARY (mean over the 55/75/90 targets, sight ${base}%, points) | ${sizes.map(([S, E]) => line(S, E)).join(' | ')}`);
 }
 
 // ================================================================== BOT =====
@@ -2166,7 +2289,8 @@ async function benchmarkSection(o) {
 
   const estShort = estimator === 'game' ? `game ${sim0.samples ?? cfg.sim.samples}x${sim0.evalFights ?? cfg.sim.evalFights}` : 'bot';
   console.log(`\nBENCHMARK | v${VERSION} | seeds ${N} | alive ${days.map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')} | median life ${medText} | mean score ${f0(meanScore)} | estimator ${estShort}`);
-  console.log(`BENCHMARK ROW | ${VERSION} | ${new Date().toISOString().slice(0, 10)} | ${N} | ${BENCH_DAYS.map((d) => (d <= D ? f0(alivePct(d)) : '-')).join(' | ')} | ${medText} | ${f0(meanScore)} | estimator: ${estShort}`);
+  console.log('\nMarkdown row for docs/BENCHMARKS.md (add your own notes at the end):');
+  console.log(`| ${VERSION} | ${new Date().toISOString().slice(0, 10)} | ${N} | ${BENCH_DAYS.map((d) => (d <= D ? f0(alivePct(d)) : '-')).join(' | ')} | ${medText} | ${f0(meanScore)} | estimator ${estShort} |`);
   return recs;
 }
 
@@ -2194,6 +2318,7 @@ async function main() {
   if (o.section === 'all' || o.section === 'bot') await run('bot', () => botSection(o, T));
   if (o.section === 'benchmark') await run('benchmark', () => benchmarkSection(o));
   if (o.section === 'specials') await run('specials', () => specialsSection(o));
+  if (o.section === 'estimator') await run('estimator', () => estimatorSection(o));
   console.log(`\n[total ${((Date.now() - t0) / 1000).toFixed(1)}s]`);
 }
 
