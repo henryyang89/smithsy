@@ -27,7 +27,7 @@ export const CONFIG = {
     blockedCells: 8, // impassable map cells (never the camp; every field stays reachable)
     maxDetour: 2, // a map is re-rolled if rocks make any field more than 2 steps farther than the straight walk
     travelMinPerStep: 15, // minutes per map step (up/down/left/right)
-    loadPenaltyPerItem: 2, // +2% travel time per carried item
+    loadPenaltyPerItem: 2.5, // +2.5% travel time per carried item (T-B2: the load is 8-15% of the travel minutes)
   },
 
   // Items you find go to the field's pile (no limit). When you leave a field you choose what to carry:
@@ -37,7 +37,7 @@ export const CONFIG = {
   // -------------------------------------------------------------- FIELD ----
   field: {
     size: 9, // each map field is a 9x9 grid = 9 plots of 3x3
-    searchMin: 25, // minutes per 3x3 search
+    searchMin: 27, // minutes per 3x3 search (27: copper takes about 24 field minutes per unit at the best distance, T-E2)
     freshCellMin: 2, // +minutes per never-searched cell in the 3x3 (a cell is "touched" once a search works on it)
     searchEfficiency: 30, // % of each cell searched per search, before bonuses (about 4 searches finish a cell)
     searchRandomness: 5, // each cell rolls efficiency +/- this many points per search (30 -> 25..35)
@@ -51,7 +51,7 @@ export const CONFIG = {
     //   loot: % chance a cell holds items · boulders: boulder cells per field (fixed, never rolled; can never be
     //   searched) · gemShare: % of items that are gems (the rest are ores) · ores: ore weights (relative)
     byDistance: [
-      { loot: 50, boulders: 2, gemShare: 15, ores: { copper: 80, iron: 20, coal: 0, mythril: 0 } },
+      { loot: 46, boulders: 2, gemShare: 15, ores: { copper: 80, iron: 20, coal: 0, mythril: 0 } },
       { loot: 53, boulders: 2, gemShare: 17, ores: { copper: 70, iron: 27, coal: 3, mythril: 0 } },
       { loot: 56, boulders: 3, gemShare: 19, ores: { copper: 57, iron: 36, coal: 7, mythril: 0 } },
       { loot: 59, boulders: 3, gemShare: 21, ores: { copper: 48, iron: 39, coal: 13, mythril: 0 } },
@@ -62,16 +62,16 @@ export const CONFIG = {
     // Sight thresholds: each item rolls a whole number above the first value and up to the second when the field is
     // made. In the field you stand in, you see an item still in the ground once your sight (Ore sight intel + Ore
     // sight rings) is at least its threshold. Rarer ores roll higher. `gem` is shared by every gem type.
-    sight: { copper: [0, 40], iron: [10, 60], coal: [20, 70], gem: [20, 80], mythril: [40, 100] },
+    sight: { copper: [0, 40], iron: [10, 60], coal: [15, 70], gem: [15, 80], mythril: [50, 100] },
   },
 
   // --------------------------------------------------------- PROCESSING ----
   // Grade outcome tables (% chance). F = failure (material lost). Each row sums to 100.
   refine: {
-    copper: { minutes: 15, input: { copper: 1 }, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
-    iron: { minutes: 20, input: { iron: 1 }, dist: { S: 4, A: 8, B: 18, C: 25, D: 35, F: 10 } },
-    steel: { minutes: 25, input: { iron: 1, coal: 1 }, dist: { S: 3, A: 6, B: 16, C: 25, D: 40, F: 10 } },
-    mythril: { minutes: 30, input: { mythril: 1 }, dist: { S: 2, A: 4, B: 14, C: 25, D: 45, F: 10 } },
+    copper: { minutes: 17, input: { copper: 1 }, dist: { S: 5, A: 10, B: 20, C: 25, D: 30, F: 10 } },
+    iron: { minutes: 23, input: { iron: 1 }, dist: { S: 4, A: 8, B: 18, C: 25, D: 35, F: 10 } },
+    steel: { minutes: 29, input: { iron: 1, coal: 1 }, dist: { S: 3, A: 6, B: 16, C: 25, D: 40, F: 10 } },
+    mythril: { minutes: 35, input: { mythril: 1 }, dist: { S: 2, A: 4, B: 14, C: 25, D: 45, F: 10 } },
   },
   // Gem cutting blends from the `novice` table (grade skill level 0) to the `master` table (max level).
   // Failure: novice F minus the gem's cutting skill (points). Grade weights D..S blend linearly by the
@@ -111,7 +111,7 @@ export const CONFIG = {
     repair: {
       materialFraction: 35, // a full 0->100% repair costs 35% of the item's bars, scaled by the % repaired; scrap gives back 35% x durability
       gemFraction: 35, // ... plus 35% of its cut gem, scaled the same way (0 = repairs cost bars only)
-      timeFraction: 100, // a full repair takes as long as smithing the item, scaled by the % repaired (repair skills cut it)
+      timeFraction: 250, // a full repair takes 2.5 times as long as smithing the item, scaled by the % repaired (repair skills cut it); T-B3: repairs are 3-6% of the work time
     },
   },
 
@@ -119,36 +119,38 @@ export const CONFIG = {
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
   // Balance (2.0): gems are meant to be worth crafting for. Against a High special, armor with the matching gem
   // should beat emerald armor; against a Low special emerald wins (so bring the right gem to each fight). Armor
-  // resistances are about 2.5x their 1.2 values; sword gems are about as strong as before. An S sword gem stays
-  // worth less in win points than the matching enemy special costs (Low to High). Targets M1-M7 and the way to
-  // measure them: docs/BALANCE.md and `node tools/balance.mjs --section specials`.
+  // resistances are about 3.75x their 1.2 values (diamond 6x: pierce resistance is the only piercing answer);
+  // sword gems are about as strong as before, except that the top grades are kept below the special they answer.
+  // An S sword gem stays worth less in win points than the matching enemy special costs (Low to High); sapphire
+  // is the tight one, so its sword gem rises only from 16% to 19%. Targets M1-M7 and the way to measure them:
+  // docs/BALANCE.md and `node tools/balance.mjs --section specials` (tuned in the Batch 7 log).
   gemEffects: {
     ruby: {
-      weapon: { magicPct: [5, 7, 9, 11, 15] }, // + magic damage as % of weapon damage (ignores defense)
-      armor: { magicRes: [12, 18, 24, 30, 36] }, // % magic damage reduction
+      weapon: { magicPct: [5, 7, 9, 11, 13] }, // + magic damage as % of weapon damage (ignores defense)
+      armor: { magicRes: [18, 27, 36, 45, 54] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [15, 20, 25, 30, 30], stunDur: [1, 1.5, 1.5, 1.5, 2] }, // % per hit, seconds
-      armor: { stunChanceRed: [10, 15, 20, 25, 30], stunDurRed: [10, 15, 20, 25, 30] }, // % reductions
+      weapon: { stunChance: [15, 20, 24, 26, 26], stunDur: [1, 1.5, 1.5, 1.5, 1.5] }, // % per hit, seconds
+      armor: { stunChanceRed: [15, 22, 30, 37, 45], stunDurRed: [15, 22, 30, 37, 45] }, // % reductions
     },
     emerald: {
-      weapon: { accuracy: [20, 30, 40, 50, 60] }, // accuracy rating
+      weapon: { accuracy: [28, 42, 56, 72, 90] }, // accuracy rating
       armor: { dodge: [2, 3, 4, 5, 6] }, // dodge rating (halved: emerald armor must not beat the matching gem)
     },
     sapphire: {
-      weapon: { slowPct: [15, 20, 25, 30, 30], slowDur: [2, 2, 2, 2, 2.5] }, // % slower attacks, seconds
-      armor: { slowRed: [10, 15, 20, 25, 30], slowDurRed: [10, 15, 20, 25, 30] }, // % reductions
+      weapon: { slowPct: [11, 16, 18, 19, 19], slowDur: [2, 2, 2, 2, 2] }, // % slower attacks, seconds
+      armor: { slowRed: [15, 22, 30, 37, 45], slowDurRed: [15, 22, 30, 37, 45] }, // % reductions
     },
     diamond: {
       weapon: { pierce: [15, 25, 35, 45, 55] }, // % of enemy defense ignored
-      armor: { pierceRes: [8, 12, 16, 20, 24] }, // % of enemy piercing ignored
+      armor: { pierceRes: [16, 24, 32, 40, 48] }, // % of enemy piercing ignored
     },
   },
 
   // --------------------------------------------------------- ADVENTURER ----
   adventurer: {
     hp: 100,
-    unarmedDamage: 11, // damage per hit with no sword
+    unarmedDamage: 14, // damage per hit with no sword (a Copper D sword is 16: the first sword is a modest step up, see enemies.tiers)
     attackInterval: 2.0, // seconds between attacks at 0% speed
     accuracy: 100,
     dodge: 100,
@@ -175,17 +177,21 @@ export const CONFIG = {
   // ------------------------------------------------------------ ENEMIES ----
   enemies: {
     attackInterval: 2.0,
-    stunDuration: 1.5, // seconds, when an enemy with Stunning lands a stun
-    slowDuration: 2.5, // seconds, when an enemy with Chilling hits
+    stunDuration: 1.8, // seconds, when an enemy with Stunning lands a stun
+    slowDuration: 3, // seconds, when an enemy with Chilling hits
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1). The player is never shown these numbers.
-    growthPerDay: { hpDamage: 4.5, ratings: 1 }, // HP & damage +4.5%/day, accuracy & dodge +1%/day
+    growthPerDay: { hpDamage: 6.3, ratings: 0.3 }, // HP & damage +6.3%/day, accuracy & dodge +0.3%/day (T-D: careful median life 30-40 days)
     // Base HP / damage / defense on day 1. Elites slightly above normals, champions slightly above elites.
     // Fights are steep (+1% enemy HP and damage is about -3.5 win points), so the steps are small on purpose.
     // Tiers also differ by attribute levels (normal: 6 low, elite: 3 low / 3 high, champion: 6 high), score and ring grades.
+    // Tuned together with adventurer.unarmedDamage and the High special values (docs/PLAN-2.0.md T-R7 / T-GEAR, user answer U1):
+    // on day 2 an unarmed adventurer wins about 42% against an elite (30-50 by how many of Magical / Stunning / Chilling are
+    // High) and about 18% against a champion (0-25); a Copper D sword + Copper D chest wins about 77% / 53%. Normals sit
+    // about 7% below elites in HP and damage so that every roster has a safe fight while the typical elite is 85% (T-D, T-GEAR c).
     tiers: {
-      normal: { count: 2, hp: 80, damage: 9, defense: 22, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
-      elite: { count: 3, hp: 81, damage: 9.1, defense: 23, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
-      champion: { count: 2, hp: 82, damage: 9.2, defense: 24, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
+      normal: { count: 2, hp: 82, damage: 9.2, defense: 22, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
+      elite: { count: 3, hp: 88, damage: 10, defense: 23, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
+      champion: { count: 2, hp: 89, damage: 10.1, defense: 24, levels: { low: 0, normal: 6, high: 6 }, score: 50 },
     },
     // 12 attributes, displayed as pairs: offensive (left) | defensive (right).
     // Specials and resistances: Low = the enemy does not have it at all (0, shown as "none"). Core stats (Accurate,
@@ -193,13 +199,13 @@ export const CONFIG = {
     attributes: {
       piercing: { name: 'Piercing', side: 'O', values: { low: 0, normal: 20, high: 45 }, desc: '% of your defense ignored' },
       pierceRes: { name: 'Pierce resistance', side: 'D', values: { low: 0, normal: 25, high: 60 }, desc: '% of your piercing ignored' },
-      magical: { name: 'Magical', side: 'O', values: { low: 0, normal: 5, high: 12 }, desc: 'extra magic damage, % of its damage' },
+      magical: { name: 'Magical', side: 'O', values: { low: 0, normal: 5, high: 9 }, desc: 'extra magic damage, % of its damage' },
       magicRes: { name: 'Magic resistance', side: 'D', values: { low: 0, normal: 25, high: 60 }, desc: '% magic damage reduction' },
       stunning: { name: 'Stunning', side: 'O', values: { low: 0, normal: 5, high: 15 }, desc: '% stun chance per hit' },
       stunRes: { name: 'Stun resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less stun chance and duration' },
       accurate: { name: 'Accurate', side: 'O', values: { low: 95, normal: 100, high: 105 }, desc: 'accuracy rating' },
       evasion: { name: 'Evasion', side: 'D', values: { low: 95, normal: 100, high: 105 }, desc: 'dodge rating' },
-      chilling: { name: 'Chilling', side: 'O', values: { low: 0, normal: 5, high: 15 }, desc: '% slower attacks for 2.5s on hit' },
+      chilling: { name: 'Chilling', side: 'O', values: { low: 0, normal: 5, high: 12 }, desc: '% slower attacks for 3s on hit' },
       slowRes: { name: 'Slow resistance', side: 'D', values: { low: 0, normal: 20, high: 40 }, desc: '% less slow strength and duration' },
       fast: { name: 'Fast', side: 'O', values: { low: -2, normal: 0, high: 2 }, desc: '% attack speed' },
       hp: { name: 'HP', side: 'D', values: { low: 97, normal: 100, high: 103 }, desc: '% of base HP' },
@@ -290,7 +296,7 @@ export const CONFIG = {
       debris: { name: 'Debris clearing', group: 'field', effects: { debrisClear: 10 }, xp: 1, xpUnit: 'point of debris cleared' },
       refineTime: { name: 'General refining', group: 'workshop', effects: { refineTime: 0.6, refineFail: 0.1 }, xp: 1, xpUnit: 'minute refining' },
       cutTime: { name: 'General cutting', group: 'workshop', effects: { cutTime: 0.6, cutBlend: 1 }, xp: 1, xpUnit: 'minute cutting' },
-      repairTime: { name: 'General repair', group: 'workshop', effects: { repairTime: 1 }, xp: 1, xpUnit: 'durability point repaired, per bar in the item' },
+      repairTime: { name: 'General repair', group: 'workshop', effects: { repairTime: 1 }, xp: 2, xpUnit: 'durability point repaired, per bar in the item' },
       gearCare: { name: 'Gear care', group: 'workshop', effects: { wear: 1 }, xp: 100, xpUnit: 'fight the adventurer survives' },
     },
     // One skill per bar type (materials: 'bars') or gem type ('gems'); name = material + label.
@@ -298,7 +304,7 @@ export const CONFIG = {
       oreGrade: { label: 'bar grade', materials: 'bars', effects: { refineUpgrade: 0.3 }, xpUnit: 'bar refined' },
       oreFail: { label: 'refining', materials: 'bars', effects: { refineFail: 0.5 }, xpUnit: 'bar refined' },
       smith: { label: 'smithing', materials: 'bars', effects: { smithTime: 2, repairTime: 0.5 }, xpUnit: 'bar smithed into gear' },
-      repair: { label: 'repair', materials: 'bars', effects: { repairTime: 3 }, xp: 1, xpUnit: 'durability point repaired, per bar in the item' },
+      repair: { label: 'repair', materials: 'bars', effects: { repairTime: 3 }, xp: 2.5, xpUnit: 'durability point repaired, per bar in the item' },
       gemGrade: { label: 'grade', materials: 'gems', effects: { cutBlend: 10 }, xpUnit: 'gem cut' },
       gemFail: { label: 'cutting', materials: 'gems', effects: { cutFail: 0.5 }, xpUnit: 'gem cut' },
     },

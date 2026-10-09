@@ -75,7 +75,8 @@
 //            refine, cut, smith, repair by day, rings, intel, plan) and reports survival, score, gear over time,
 //            the daily time split (with the load penalty), rings, skills at day 30, gem supply, repairs, the tiers
 //            it chose and how much of the map's finite supply it has used (fields never refill). Targets T-B1..T-B5,
-//            T-GEAR (c).
+//            T-GEAR (c): the TRUE win chance (all attributes known, 100 fights, the loadout the adventurer would pick)
+//            of every enemy on each day's roster with the gear the bot packed, averaged per tier (not only the fights it chose).
 //            In a field it searches (clearing debris on the way) until what is worth carrying fills the
 //            bag, chooses what to carry (--carry) and leaves the rest in the field's pile; its trip choice
 //            values items lying in piles (no search needed), so it comes back for them when worth it.
@@ -102,7 +103,7 @@ import {
 import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
 import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, couldBreak } from '../js/core/gear.js';
 import { ringDef, ringValue, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
-import { estimateWinChanceSync, shownMargin, pruneDominated, simCounts } from '../js/core/sim.js';
+import { estimateWinChanceSync, shownMargin, pruneDominated, simCounts, searchLoadout, loadoutEval } from '../js/core/sim.js';
 import { knownLevels, enemyCombatant, rollLevels, generateRoster, ringTypeVisible, ringGradeVisible, groupVisible, hiddenGradeOdds } from '../js/core/enemies.js';
 import { adventurerCombatant, fight } from '../js/core/combat.js';
 import { spendIntel, intelValue, nextIntelGain, canSpendIntel } from '../js/core/intel.js';
@@ -1680,7 +1681,7 @@ function botParams(T, o) {
     slotW, gemSword, gemArmor, ringW, smithW, gemOrder, ablate,
     persona: o.persona || 'careful', personaName: persona.name, pick: persona.pick, champMin: persona.champMin, eliteMin: persona.eliteMin,
     gearLevelForElites: persona.gearLevelForElites, pack: persona.pack, rings: persona.rings, trips: persona.trips, swordBias: persona.swordBias,
-    minWin: o.minwin ?? persona.minWin, future: o.future ?? persona.future, immortal: !!o.immortal, carry: o.carry ?? persona.carry, estimator: o.estimator ?? 'bot',
+    truth: false, minWin: o.minwin ?? persona.minWin, future: o.future ?? persona.future, immortal: !!o.immortal, carry: o.carry ?? persona.carry, estimator: o.estimator ?? 'bot',
     simOpts: botSimOpts(o),
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
     verifyTop: 3,
@@ -2230,6 +2231,25 @@ export function pickEnemy(P, st, evals) {
   return safe.length ? best(safe, evOf) : best(evals, (x) => x.p);
 }
 
+// T-GEAR (c): the TRUE win chance of every enemy on the day's roster, with the gear and rings packed for the fight. Not an
+// estimate: the enemy is fought as it really is (all 12 attributes known), the adventurer picks its loadout the way the game
+// does (searchLoadout over test fights, a lighter count than the game's bestGearFights to keep the bot run fast) and then
+// fights `fights` fights (a draw counts as survival, like everywhere in this tool). The bot section averages it over ALL the
+// roster's enemies of a tier, not over the fights the bot chose, which are selection-biased (it picks the enemies it is surest of).
+export const TRUTH = { selectFights: 50, fights: 100 };
+export function truePct(packed, rings, e, seed, opts = TRUTH) {
+  const enemyC = enemyCombatant(e.tier, e.day, e.levels, e.name, cfg);
+  const pick = searchLoadout(packed, loadoutEval(rings, enemyC, mixSeed(seed, 1), opts.selectFights, cfg), cfg);
+  const adv = adventurerCombatant(pick.items, rings, cfg);
+  const rng = seededRng(mixSeed(seed, 2));
+  let w = 0;
+  for (let f = 0; f < opts.fights; f++) {
+    const r = fight(adv, enemyC, rng.next, false, cfg);
+    if (r.win || r.draw) w++;
+  }
+  return (100 * w) / opts.fights;
+}
+
 function choosePlan(st, ctx, rec) {
   const P = ctx.P;
   const rest = P.pack === 'default' ? new Set() : restingIds(st, P);
@@ -2253,7 +2273,7 @@ function choosePlan(st, ctx, rec) {
     // no estimates: every fight is won; take an elite (the careful bot's usual mid-game pick)
     const i = Math.max(0, st.roster.enemies.findIndex((e) => e.tier === 'elite'));
     const all = Object.fromEntries(TIERS.map((t) => [t, 100]));
-    rec.picks.push({ day: st.day + 1, tier: st.roster.enemies[i].tier, p: 100, safe: true, bestP: all, meanP: all });
+    rec.picks.push({ day: st.day + 1, tier: st.roster.enemies[i].tier, p: 100, safe: true, bestP: all, meanP: all, trueP: P.truth ? all : null });
     return { enemyIndex: i, gearIds, ringIds };
   }
   const reads = P.pick !== 'looks'; // the casual persona never reads an estimate
@@ -2303,9 +2323,16 @@ function choosePlan(st, ctx, rec) {
       meanP[t] = mean(evals.filter((x) => x.tier === t).map((x) => x.p));
     }
   }
+  // The true win chance of each roster enemy with today's packed gear (only the bot section asks for it: P.truth)
+  let trueP = null;
+  if (reads && P.truth) {
+    const byTier = Object.fromEntries(TIERS.map((t) => [t, []]));
+    st.roster.enemies.forEach((e, i) => byTier[e.tier].push(truePct(packed, rings, e, mixSeed(ctx.seed, st.day, i, 5))));
+    trueP = Object.fromEntries(TIERS.map((t) => [t, mean(byTier[t])]));
+  }
   // "safe" = the pick was one the persona is sure of (the careful planner: p >= minWin; the champion hunter: p >= 50)
   const sureP = P.pick === 'ev' ? P.minWin : P.pick === 'champion' ? 50 : null;
-  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: sureP == null ? null : pick.p >= sureP, bestP, meanP });
+  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: sureP == null ? null : pick.p >= sureP, bestP, meanP, trueP });
   return { enemyIndex: pick.i, gearIds, ringIds };
 }
 
@@ -2465,6 +2492,7 @@ function botSection(o, T) {
   const D = o.quick ? Math.min(o.days, 40) : o.days;
   const VT = T ?? valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
   const P = botParams(VT, o);
+  P.truth = true; // the bot section also records the TRUE win chance of every roster enemy (T-GEAR c); the benchmark does not
   // --immortal: enemies deal no damage from here on (the value tables above used the real numbers)
   const immortalLog = o.immortal ? applySet('enemies.tiers.*.damage', '0') : [];
   const persona = PERSONAS[P.persona];
@@ -2524,29 +2552,31 @@ function botSection(o, T) {
     ['tier', ...pdays.map((d) => `d${d}`)],
     TIERS.map((t) => [t, ...pdays.map((d) => f0(meanFinite(recs.flatMap((r) => r.picks.filter((x) => x.day === d).map((x) => tierP(x, 'bestP', t))))))]),
   );
-  h2('Win chance by tier: the mean estimate over the roster\'s enemies of the tier, with the gear the bot packed (T-GEAR c)');
+  h2('Win chance by tier with the gear the bot packed, over ALL the roster\'s enemies of the tier (T-GEAR c): the true chance, and the estimate the bot saw');
   const gearRanges = [[2, 2], [3, 5], [6, 9], [10, 20], [21, 30], [31, 40], [41, 60]].filter(([a]) => a <= D);
   printTable(
-    ['fight days', 'runs x days', ...TIERS.map((t) => `${t} est. %`)],
+    ['fight days', 'runs x days', ...TIERS.map((t) => `${t} true %`), ...TIERS.map((t) => `${t} est. %`)],
     gearRanges.map(([a, b]) => {
       const pk = recs.flatMap((r) => r.picks.filter((x) => x.day >= a && x.day <= b));
-      return [a === b ? String(a) : `${a}-${b}`, pk.length, ...TIERS.map((t) => f1(meanFinite(pk.map((x) => tierP(x, 'meanP', t)))))];
+      return [a === b ? String(a) : `${a}-${b}`, pk.length, ...TIERS.map((t) => f1(meanFinite(pk.map((x) => tierP(x, 'trueP', t))))), ...TIERS.map((t) => f1(meanFinite(pk.map((x) => tierP(x, 'meanP', t)))))];
     }),
   );
   const midPicks = recs.flatMap((r) => r.picks.filter((x) => x.day >= 10 && x.day <= 40));
   if (reads) {
-    note(`Estimate: ${P.estimator === 'game' ? `the game's own (${cfg.sim.samples} x ${cfg.sim.evalFights} plus intel)` : `the bot's screen (${P.simOpts.samples} x ${P.simOpts.evalFights} with the best packed piece per slot, a slight underestimate)`}. Targets (T-GEAR c): days 10-40 mean elite 75-90, mean champion 50-75.`);
+    note(`TRUE = every enemy on that day's roster (not just the one the bot fought) fought as it really is, ${TRUTH.fights} fights with the loadout the adventurer would pick from the packed gear and the worn rings; ` +
+      `the mean over the enemies of the tier. EST. = what the bot's estimate said: ${P.estimator === 'game' ? `the game's own (${cfg.sim.samples} x ${cfg.sim.evalFights} plus intel)` : `the bot's screen (${P.simOpts.samples} x ${P.simOpts.evalFights} with the best packed piece per slot, a slight underestimate)`}, hidden attributes guessed. ` +
+      'Targets (T-GEAR c, judged on TRUE): days 10-40 mean elite 75-90, mean champion 50-75.');
     if (careful) {
-      check(T_ROWS, 'T-GEAR', 'elite, days 10-40 (mean estimate)', meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'elite'))), 75, 90);
-      check(T_ROWS, 'T-GEAR', 'champion, days 10-40 (mean estimate)', meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'champion'))), 50, 75);
+      check(T_ROWS, 'T-GEAR', 'elite, days 10-40 (mean true win chance, all roster elites)', meanFinite(midPicks.map((x) => tierP(x, 'trueP', 'elite'))), 75, 90);
+      check(T_ROWS, 'T-GEAR', 'champion, days 10-40 (mean true win chance, all roster champions)', meanFinite(midPicks.map((x) => tierP(x, 'trueP', 'champion'))), 50, 75);
     }
   } else note('The casual persona never reads an estimate, so there is no win chance to show.');
   const d2picks = recs.flatMap((r) => r.picks.filter((x) => x.day === 2));
   const day1 = recs.map((r) => r.craftLog.filter((c) => c.day === 1));
   const d1label = (c) => `${c.material[0].toUpperCase()}${c.grade} ${c.slot}`;
   if (reads) {
-    note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean est. over the roster's enemies of the tier): ` +
-      TIERS.map((t) => `${t} ${f0(meanFinite(d2picks.map((x) => tierP(x, 'meanP', t))))}%`).join(', ') + ` (T-GEAR kit rows: node tools/balance.mjs --section day2).`);
+    note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean over the roster's enemies of the tier): ` +
+      TIERS.map((t) => `${t} ${f0(meanFinite(d2picks.map((x) => tierP(x, 'trueP', t))))}%`).join(', ') + ` (true chance; T-GEAR kit rows: node tools/balance.mjs --section day2).`);
   }
   note(`Day-1 smithing: ${f1(mean(day1.map((c) => c.length)))} pieces/run; e.g. ${day1.slice(0, 6).map((cs) => cs.map(d1label).join(' + ') || 'nothing').join(' | ')}`);
 
@@ -2780,7 +2810,8 @@ function botSection(o, T) {
   const repairPct = (100 * repairMin) / Math.max(1, usedMin);
   console.log(`\nBOT SUMMARY | ${P.persona} | alive ${dayList([10, 20, 30, 40, 50, 60, 80]).map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')}` +
     ` | median life ${life === Infinity ? `>${D}` : f1(life)} | score ${f0(mean(scores))}` +
-    ` | d2 typical est n/e/c ${reads ? TIERS.map((t) => f0(meanFinite(d2.map((x) => tierP(x, 'meanP', t))))).join('/') : '-'}` +
+    ` | d2 typical true n/e/c ${reads ? TIERS.map((t) => f0(meanFinite(d2.map((x) => tierP(x, 'trueP', t))))).join('/') : '-'}` +
+    ` | d10-40 true e/c ${reads ? `${f0(meanFinite(midPicks.map((x) => tierP(x, 'trueP', 'elite'))))}/${f0(meanFinite(midPicks.map((x) => tierP(x, 'trueP', 'champion'))))}` : '-'}` +
     ` | d10-40 est e/c ${reads ? `${f0(meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'elite'))))}/${f0(meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'champion'))))}` : '-'}` +
     ` | first iron/steel/myth piece d${f0(prog.iron.first)}/${f0(prog.steel.first)}/${f0(prog.mythril.first)}` +
     ` | 3-slot iron/steel/myth d${f0(prog.iron.three)}/${f0(prog.steel.three)}/${f0(prog.mythril.three)}` +

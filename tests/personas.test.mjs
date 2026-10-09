@@ -10,11 +10,13 @@ import { canSpendIntel, intelValue, intelValueFor, nextIntelGain } from '../js/c
 import { endDay } from '../js/core/game.js';
 import { defaultPack, packLimit } from '../js/core/pack.js';
 import { ringValue } from '../js/core/rings.js';
-import { mixSeed } from '../js/core/rng.js';
+import { mixSeed, seededRng } from '../js/core/rng.js';
+import { adventurerCombatant, fight } from '../js/core/combat.js';
+import { enemyCombatant, rollLevels } from '../js/core/enemies.js';
 import { VERSION } from '../js/version.js';
 import {
   PERSONAS, PERSONA_KEYS, PICK_KEYS, BENCH_DAYS, DEATH_BINS, parseArgs, pickEnemy, gearLevel, spendIntelPoints, botParams, valueTables, runBot,
-  choosePlan, withSets, intelModeSets, judge, mapAttempts,
+  choosePlan, withSets, intelModeSets, judge, mapAttempts, truePct, TRUTH,
 } from '../tools/balance.mjs';
 import { game, addGear, addRing } from './helpers.mjs';
 
@@ -22,6 +24,7 @@ const TOOL = fileURLToPath(new URL('../tools/balance.mjs', import.meta.url));
 const TRACKS = Object.keys(CONFIG.intel.tracks);
 const NAMES = Object.keys(PERSONAS);
 const VT = valueTables(10, 5); // small value tables: these tests are about decisions, not about the balance
+const TIER_NAMES = Object.keys(CONFIG.enemies.tiers);
 
 // Runs the tool's command line; the output is the evidence.
 function runTool(...args) {
@@ -428,8 +431,14 @@ test('each persona plays: the plan gate is respected, trips are capped, and it f
     const spent = Object.values(rec.intel).reduce((a, b) => a + b, 0);
     assert.equal(spent, Math.floor(((rec.deathDay ?? rec.lastDay) - 1) / CONFIG.intel.daysPerPoint), `${name}: every point is spent`);
   }
-  // the first points go where the list says
-  const first = (name) => runBot(mixSeed(31337, 1), 6, botParams(VT, { persona: name, estimator: 'game', quick: true })).intel;
+  // the first points go where the list says (a seed on which the persona is still alive on day 6, so the balance does not decide the test)
+  const first = (name) => {
+    for (let k = 1; k <= 40; k++) {
+      const r = runBot(mixSeed(31337, k), 6, botParams(VT, { persona: name, estimator: 'game', quick: true }));
+      if (r.deathDay == null) return r.intel;
+    }
+    throw new Error(`${name} died before day 6 on all 40 seeds`);
+  };
   const c = PERSONAS.careful.intel[0][0];
   assert.equal(first('careful')[c], 1);
   const h = PERSONAS.champion.intel[0][0];
@@ -479,6 +488,67 @@ test('choosePlan: the casual persona packs the game\'s default pack and wears it
   // spare that the pack limit would have left at home anyway
   assert.equal(careful.rec.rested, SLOTS.length, 'one rested item per gear type');
   assert.ok(careful.plan.enemyIndex >= 0 && careful.plan.enemyIndex < careful.s.roster.enemies.length);
+});
+
+// ------------------------------------------- T-GEAR (c): the true win chance over the whole roster ----
+// A real enemy of a tier (all attributes known), made without a game state.
+const realEnemy = (tier, day, seed) => ({ tier, day, name: 'Test', levels: rollLevels(seededRng(seed), tier, CONFIG) });
+
+test('truePct: the plain win rate of the packed gear against the enemy as it really is (draws count as survival)', () => {
+  const s = game(5);
+  const e = realEnemy('elite', 2, 77);
+  const sword = addGear(s, 'sword', 'copper', 'D');
+  // one item per slot -> no loadout choice, so the number is the plain win rate of that adventurer with the tool's own seeds
+  const adv = adventurerCombatant([sword], {}, CONFIG);
+  const enemyC = enemyCombatant(e.tier, e.day, e.levels, e.name, CONFIG);
+  const rng = seededRng(mixSeed(11, 2));
+  let wins = 0;
+  for (let f = 0; f < TRUTH.fights; f++) {
+    const r = fight(adv, enemyC, rng.next, false, CONFIG);
+    if (r.win || r.draw) wins++;
+  }
+  assert.equal(truePct([sword], {}, e, 11), (100 * wins) / TRUTH.fights);
+  assert.equal(truePct([sword], {}, e, 11), truePct([sword], {}, e, 11), 'deterministic');
+});
+
+test('truePct: the adventurer packs the best loadout (a weak spare sword changes nothing), and more gear never lowers the chance by much', () => {
+  const s = game(5);
+  const e = realEnemy('champion', 2, 91);
+  const good = addGear(s, 'sword', 'mythril', 'S');
+  const bad = addGear(s, 'sword', 'copper', 'D');
+  assert.equal(truePct([good, bad], {}, e, 4), truePct([good], {}, e, 4), 'the spare is not used');
+  const none = truePct([], {}, e, 4);
+  const withSword = truePct([good], {}, e, 4);
+  assert.ok(withSword > none, `a mythril S sword beats fists (${withSword} vs ${none})`);
+  assert.ok(withSword >= 0 && withSword <= 100 && none >= 0 && none <= 100);
+});
+
+test('choosePlan with P.truth records the true win chance of EVERY roster enemy per tier (not only the chosen one); without it, nothing', () => {
+  const s = game(21);
+  endDay(s); // day 1 -> the plan phase
+  addGear(s, 'sword', 'copper', 'D'); // a day-1 sword: strong enough to win some fights, weak enough that the tiers differ
+  const run = (truth) => {
+    const P = botParams(VT, { persona: 'careful', estimator: 'game', quick: true });
+    P.truth = truth;
+    const rec = { picks: [], rested: 0 };
+    const ctx = { P, wasDebris: new WeakSet(), seed: 3, tm: null, seen: new Set() };
+    const plan = choosePlan(s, ctx, rec);
+    return { rec, plan, ctx };
+  };
+  assert.equal(run(false).rec.picks[0].trueP, null);
+  const { rec, plan } = run(true);
+  const t = rec.picks[0].trueP;
+  assert.deepEqual(Object.keys(t), TIER_NAMES);
+  const packed = s.gear.filter((g) => plan.gearIds.includes(g.id));
+  for (const tier of TIER_NAMES) {
+    const own = s.roster.enemies.map((e, i) => ({ e, i })).filter((x) => x.e.tier === tier);
+    assert.ok(own.length > 1, 'the roster has several enemies of the tier');
+    // the same number, worked out one roster enemy at a time with the same seeds (rings: none worn)
+    const expect = own.map(({ e, i }) => truePct(packed, {}, e, mixSeed(3, s.day, i, 5))).reduce((a, b) => a + b, 0) / own.length;
+    assert.ok(Math.abs(t[tier] - expect) < 1e-9, `${tier}: ${t[tier]} vs ${expect}`);
+  }
+  // a plain sword beats a normal more often than a champion
+  assert.ok(t.normal > t.champion);
 });
 
 // ------------------------------------------------------- the sections run ----
@@ -535,6 +605,7 @@ test('every other section runs (--quick) and ends with a SUMMARY line that carri
     [['--section', 'estimator'], /^ESTIMATOR SUMMARY .*T-A2/m],
     [['--section', 'economy', '--seeds', '4'], /^ECONOMY SUMMARY \|.*T-E1/m],
     [['--section', 'bot', '--persona', 'casual', '--seeds', '1', '--days', '8'], /^BOT SUMMARY \| casual \|/m],
+    [['--section', 'bot', '--persona', 'careful', '--seeds', '1', '--days', '12'], /^BOT SUMMARY \| careful \|.* d10-40 true e\/c \d+\/\d+ \| d10-40 est e\/c/m],
   ];
   for (const [args, pattern] of cases) assert.match(runTool(...args, '--quick'), pattern, args.join(' '));
 });

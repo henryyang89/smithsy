@@ -509,6 +509,9 @@ test('enemy growth is never shown: no "Rating growth" row, no "Ratings x1.05" st
 test('a Low special reads "none", and Accurate / Evasion show the value on the fight day', () => {
   const s = statePlan(0);
   for (const e of s.roster.enemies) for (const k of Object.keys(e.sight)) e.sight[k] = 0; // every attribute visible
+  // a late fight day, so that the day's rating growth moves the rounded values (a small growth per day does not on day 2)
+  s.roster.day = 40;
+  for (const e of s.roster.enemies) e.day = 40;
   const day = s.roster.day;
   const A = CONFIG.enemies.attributes;
   const text = textOf(render(renderPlan, s));
@@ -1011,12 +1014,13 @@ test('Confirm asks about packed items that could break and a win estimate that i
     endDay(s, WIN);
     const ctx = chosenPlanCtx(s, 0, ids([worn, boots]), WIN);
     const root = render(renderPlan, s, WIN, ctx);
+    const chosenName = s.roster.enemies[0].name; // read before the click: confirming starts the next day, which rolls a new roster
     clickOf(buttonById(root, 'adv-confirm'))();
     assert.equal(asked.length, 1);
     const names = [worn, boots].map((g) => `${g.grade} ${g.material[0].toUpperCase()}${g.material.slice(1)} ${g.slot[0].toUpperCase()}${g.slot.slice(1)}`);
     assert.match(asked[0], /2 packed items could break in this fight: /);
     for (const n of names) assert.ok(asked[0].includes(n), n);
-    assert.ok(asked[0].includes(`The win estimate for ${s.roster.enemies[0].name} is not finished yet.`));
+    assert.ok(asked[0].includes(`The win estimate for ${chosenName} is not finished yet.`));
     assert.match(asked[0], /A lost fight ends the game\. Confirm anyway\?/);
     assert.equal(s.phase, 'work', 'the plan was confirmed after the yes');
     assert.equal(s.plan.shownEstimate, null, 'no finished estimate to pass on');

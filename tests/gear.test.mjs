@@ -462,7 +462,13 @@ test('repair earns XP: durability points x bars in the item, to the bar type\'s 
   const r2 = repair(t, sw.id, PG);
   assert.equal(r2.ok, true, r2.msg);
   assert.equal(t.skills.repair_copper.level, 1);
-  assert.deepEqual(r2.notes, ['Skill up: Copper repair is now level 1.', 'Skill up: General repair is now level 1.']);
+  // General repair got the same repair's XP (its own xp per point); the level it reached follows from the config
+  let generalXp = totalXp(t, 'repairTime', PG);
+  let generalLevel = 0;
+  while (generalXp >= xpToNext(generalLevel, PG)) generalXp -= xpToNext(generalLevel++, PG);
+  assert.ok(generalLevel >= 1, 'this repair is worth at least General repair level 1');
+  assert.equal(t.skills.repairTime.level, generalLevel);
+  assert.deepEqual(r2.notes, ['Skill up: Copper repair is now level 1.', `Skill up: General repair is now level ${generalLevel}.`]);
   // a refused repair earns nothing
   const u = game(1);
   const it = addGear(u, 'sword', 'copper', 'D', null, { durability: 50 });
