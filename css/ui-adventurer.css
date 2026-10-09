@@ -13,7 +13,6 @@
 .adv-geartable td { padding-top: 4px; padding-bottom: 4px; }
 .adv-totals { margin-top: 6px; }
 .adv-gname { white-space: nowrap; }
-.adv-where { white-space: nowrap; }
 .adv-rname { white-space: nowrap; }
 
 /* durability */
@@ -65,11 +64,59 @@
 .bar.adv-hp-e .bar-fill { background: var(--err); }
 .adv-details summary { cursor: pointer; margin: 8px 0 4px; color: var(--accent-2); }
 .adv-summary th.num { white-space: nowrap; }
-.combatlog .adv-line { padding: 1px 0; white-space: pre-wrap; }
-.combatlog .adv-line.miss { opacity: 0.6; }
-.combatlog .t { color: var(--muted); }
-.combatlog .adv-end { font-weight: 700; margin-top: 2px; }
-.combatlog .adv-gap { font-style: italic; padding: 3px 0; }
+
+/* combat log (renderCombatLog): a fixed-column table, so the numbers line up */
+.clog { table-layout: fixed; width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.clog col.c-time { width: 4.5em; }
+.clog col.c-att { width: 7em; }
+.clog col.c-fx { width: 9em; }
+.clog col.c-you, .clog col.c-foe { width: 5em; }
+.clog th, .clog td { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px dotted var(--border); vertical-align: middle; }
+.clog thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; border-bottom: 1px solid var(--border); }
+.clog td.num, .clog th.num { text-align: right; }
+.clog tr.A .clog-att { color: var(--accent-2); }
+.clog tr.E .clog-att { color: var(--err); }
+.clog tr.miss td { opacity: 0.6; }
+.clog-t { color: var(--muted); }
+.clog-detail { color: var(--muted); }
+.clog-fx-inline { display: none; }
+.clog tr.clog-note td { white-space: normal; }
+.clog tr.clog-gap td { font-style: italic; }
+.clog tr.clog-end td { font-weight: 700; }
+@media (max-width: 640px) {
+  /* the Effects column folds into Result, and the muted detail of a hit goes */
+  .clog col.c-fx { width: 0; }
+  .clog th.clog-fx, .clog td.clog-fx { width: 0; padding: 0; border: 0; font-size: 0; }
+  .clog-fx-inline { display: inline; }
+  .clog-detail { display: none; }
+  .clog th, .clog td { padding: 1px 4px; }
+  .clog col.c-time { width: 4em; }
+  .clog col.c-you, .clog col.c-foe { width: 3.7em; } /* the Attacker column keeps its 7em: "Adventurer" is on most rows and must not be cut */
+  /* the Result column takes what is left and may wrap, so a stun or slow text is not cut off */
+  .clog td.clog-res { white-space: normal; overflow: visible; text-overflow: clip; }
+}
+
+/* run summary and "What went wrong?" */
+.adv-total td { border-top: 2px solid var(--border); }
+.adv-newbest { font-size: 18px; margin: 4px 0 8px; }
+.adv-over.adv-retired { border-left-color: var(--accent-2); }
+.adv-notused { margin-bottom: 4px; }
+.loss { border-left: 4px solid var(--err); }
+.oc { position: relative; max-width: 560px; margin: 8px 0 22px; }
+.oc-bar { display: flex; height: 16px; border-radius: 4px; overflow: hidden; background: var(--cell); }
+.oc-seg { display: block; height: 100%; }
+.oc-seg.oc-lostBadly { background: #8e1b1b; }
+.oc-seg.oc-lostClose { background: #e57373; }
+.oc-seg.oc-draw { background: #9e9e9e; }
+.oc-seg.oc-wonClose { background: #81c784; }
+.oc-seg.oc-wonEasily { background: #2e7d32; }
+.oc-mark { position: absolute; top: 18px; transform: translateX(-50%); font-size: 12px; line-height: 1; }
+.oc-key.oc-lostBadly-t { color: #8e1b1b; }
+.oc-key.oc-lostClose-t { color: #d04a4a; }
+.oc-key.oc-draw-t { color: var(--muted); }
+.oc-key.oc-wonClose-t { color: #4f9a54; }
+.oc-key.oc-wonEasily-t { color: var(--ok); }
+.loss-helped { font-weight: 600; }
 
 /* screens */
 .adv-titlebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; margin-bottom: 8px; }
@@ -178,6 +225,9 @@ table.rt { --rt-label: 100px; --rt-col: 96px; border-collapse: separate; border-
 @media (prefers-color-scheme: dark) {
   .adv-lv.attr-low { color: #81c784; background: rgba(129, 199, 132, 0.14); }
   .adv-lv.attr-high { color: #ef7b7b; background: rgba(239, 123, 123, 0.16); }
-  .combatlog .adv-line.E { color: #ef7b7b; }
-  .combatlog .adv-line.A { color: #7fb3dc; }
+  .clog tr.E .clog-att { color: #ef7b7b; }
+  .clog tr.A .clog-att { color: #7fb3dc; }
+  .oc-key.oc-lostBadly-t { color: #ef7b7b; }
+  .oc-key.oc-lostClose-t { color: #e8908f; }
+  .oc-key.oc-wonClose-t, .oc-key.oc-wonEasily-t { color: #81c784; }
 }

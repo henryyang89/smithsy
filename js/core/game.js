@@ -48,6 +48,7 @@ export function newGame(seed = (Math.random() * 2 ** 32) >>> 0, cfg = CONFIG) {
     stats: { score: 0, wins: { normal: 0, elite: 0, champion: 0 }, fights: 0, bestDay: 1 },
     log: [],
     battles: [],
+    end: null, // how the run ended (phase 'over'): see endDay (a lost fight) and endRun (retired)
   };
   const rng = rngFor(state);
   state.map = generateMap(rng, cfg);
@@ -91,11 +92,29 @@ export function endDay(state, cfg = CONFIG) {
   state.report = report;
   if (report && !report.win && !report.draw) {
     state.phase = 'over';
+    state.end = { reason: 'fell', day: state.day, daysSurvived: state.day - 1, enemy: { name: report.enemy.name, tier: report.enemy.tier }, cancelled: null };
     addLog(state, `GAME OVER on day ${state.day}. Final score ${state.stats.score}.`);
   } else {
     state.phase = report ? 'report' : 'plan';
   }
   return { ok: true, report };
+}
+
+// End the run by choice (the player retires the adventurer): allowed while working, reading the report and planning. A
+// fight planned for today does not happen (no fight, no ring, no score), the gear comes home, and the run is over with the
+// score it has, the same as a lost fight would leave it. state.end tells the run summary how it ended.
+export function endRun(state, cfg = CONFIG) {
+  if (state.phase === 'over') return { ok: false, msg: 'The run is already over.' };
+  const planned = state.plan ? { name: state.plan.enemy.name, tier: state.plan.enemy.tier } : null;
+  const day = state.day;
+  const working = state.phase === 'work';
+  state.plan = null;
+  for (const g of state.gear) g.packed = false;
+  state.phase = 'over';
+  // days survived: a work day's own fight has not happened yet; after the report or the plan the day is done
+  state.end = { reason: 'retired', day, daysSurvived: working ? day - 1 : day, enemy: null, cancelled: planned };
+  addLog(state, `Run ended on day ${day}: you retired the adventurer. Final score ${state.stats.score}.`);
+  return { ok: true }; // logged here (a message would be logged a second time by the screen's act())
 }
 
 export function acknowledgeReport(state) {
@@ -141,7 +160,9 @@ export function confirmPlan(state, plan, cfg = CONFIG) {
   const enemy = state.roster.enemies[plan.enemyIndex];
   for (const g of state.gear) g.packed = plan.gearIds.includes(g.id);
   for (const r of state.rings) if (ringDef(r.type, cfg).owner === 'adventurer') r.worn = plan.ringIds.includes(r.id);
-  state.plan = { day: state.day + 1, enemy, gearIds: [...plan.gearIds], ringIds: [...plan.ringIds], shownEstimate: cleanEstimate(plan.shownEstimate) };
+  // lastGearId: the highest gear id there is now; gear with a higher id was smithed after the packing, so the loss analysis
+  // does not call it "left at home"
+  state.plan = { day: state.day + 1, enemy, gearIds: [...plan.gearIds], ringIds: [...plan.ringIds], shownEstimate: cleanEstimate(plan.shownEstimate), lastGearId: Math.max(0, ...state.gear.map((g) => g.id)) };
   state.day += 1;
   state.time = cfg.time.dayStartMin;
   state.phase = 'work';
@@ -236,6 +257,7 @@ export function resolveBattle(state, cfg = CONFIG) {
     log: result.log.length > 2000 ? [...result.log.slice(0, 1500), ...result.log.slice(-500)] : result.log,
     logTrimmed: result.log.length > 2000 ? result.log.length - 2000 : 0,
     packedIds: [...plan.gearIds],
+    lastGearId: plan.lastGearId ?? null, // gear with a higher id was smithed after the packing
     summary: result.summary,
   };
   state.battles.push(report);

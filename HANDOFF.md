@@ -837,6 +837,132 @@ what was done instead and which batch it touches.
      the 22 px icon slot on could-break rows only (`css/ui-adventurer.css .adv-geartable .adv-dur span.adv-flag`), so
      bars on risky and safe rows do not line up. The shared `gearTable` is batch 5's (plan 4.18); FYI.
 
+**Batch 5 (player-facing UI: workshop, gear list, inventory, battle report and loss analysis, combat log, score, top bar, Help)**
+- **New files:** `js/core/replay.js` (loss analysis), `js/ui/inventory.js` (Storage and gear), `js/ui/gearlist.js` (the shared `gearTable`),
+  `tests/replay.test.mjs`. `renderGameOver` is now `renderRunSummary` (tab label "Run summary"). New config blocks `display` and `report`.
+- **`endRun` returns `{ ok: true }` without a message** and writes the log line itself ("Run ended on day 23: you retired the adventurer. Final
+  score 485."): `ctx.act` logs a returned `msg`, so a message would have been logged twice. `state.end` for a lost fight is set in `endDay` (next to
+  `phase = 'over'`), not in `resolveBattle`, so a tool or test that calls `resolveBattle` directly gets no `end`. `recordBest()` (main.js) stores
+  `end.prevBest` once, only when `localStorage` can be read; with storage blocked `prevBest` stays unset and the summary does not claim "New best
+  score!". A same-version 'over' save without `end` (written by the B4 tree) is worked out from the last report by `renderRunSummary`.
+- **Loss analysis (`js/core/replay.js`).** `replayStats` returns the five parts as COUNTS (`seg`), `outcomeSegments` (present.js) turns them into
+  percentages. The analysis is a generator, so `analyzeLossSync` and the async `analyzeLoss` give identical numbers; `analyzeLoss` calls
+  `onProgress(1)` at the end and returns `null` when `onProgress` returns false. Candidates are the report's `used` and `notUsed` snapshots plus the real
+  `homeGear` (so a destroyed used item is still tried); `whatIf.items / fromHome / replaced` are snapshots (no `packed` flag). `cacheAnalysis`
+  (new helper) keeps the result on `report.analysis` and on the matching `state.battles` entry (after a load they are separate objects). The screen
+  starts the work the first time a lost report is shown (`ctx.ui.loss_run`, cancelled by a new game through `cancelAnalysis`); `ctx.ui.analysis === 'off'`
+  turns the automatic start off (render tests). The analysis panel appears once: in the run summary above "The fatal battle" (whose report is shown with
+  `analysis: false`), and inside a lost report in the Log tab.
+- **Score words.** The plan says work-phase screens contain no "Score", but Help has a "Score" section (4.19), so the render guard checks the Rings,
+  Map, Workshop, Adventurer, Skills, Log screens and the plan / report screens for the word, and Help for score NUMBERS (`+25 pts`, `score 85`,
+  "N points per ..."). The run summary shows the points per tier (`scoreBreakdown`, the one reader of `tiers[].score` in js/ui); the roster Tier row,
+  enemy card, Today panel, report header and Rings "Score" column no longer have them. Help's Score section says tougher tiers are worth more, with no number.
+- **Workshop.** Smith form: tiles for gear type, material, bar grade, gem and gem grade (no `<select>`). A material tile's small line lists the grades in
+  stock ("D 5 · C 2"), dashed when no grade has enough bars. The "gem grade (reference)" buttons moved into the closed "Compare all gear types and gem
+  effects" `<details>` (the plan has no place for them once the grade row only shows with a gem). Refine / cut rows are `Bar | Needs | Outcome chance |
+  You can make | Time each | buttons`; the outcome hover for a gem says "Chances for a first-time cutter" (`cut[gem].novice`), the time hover says "Base 20m.
+  Your skills and rings make it faster (see Skills)." Result box: `ws_last = { area, tone, msg, bold }`; the action result carries `tone` and `ctx.act` toasts
+  `res.tone || (ok ? 'ok' : 'err')`; the log gets the batch message ("Copper: refined 5 in 1h 15m: 3 bars (D 2, C 1), 2 of 5 failed (ore lost)."), without bold.
+- **Repair all is back, by day only** (`repairAllInfo` / `repairAll` in `js/ui/repairui.js`, a UI helper; B2 had removed the night version). The label's
+  count and minutes come from a preview that counts the bars down item by item and skips what does not fit (so a cheaper later item may still go);
+  the real run repairs the same list in order through `repair()` and stops at the first failure. The minutes can differ by a fraction (a skill level
+  gained from the first repair makes the next one faster: measured 53.2m shown, 52.6m done).
+- **Gear list on the Adventurer tab has the inline Repair button too** (R24 lists both screens; the plan text of 4.13 / 4.18 only says "scrap off"), plus the
+  could-break flag against the toughest tier. The Workshop passes `blocked` ("Workshop closed: ..."); the Adventurer tab lets `repairCheck` give the reason
+  (not at camp / not during the work day). The old "Where" column is folded into the durability cell ("63% · with the adventurer today").
+- **Report wear** is shown as the difference of the two shown durabilities (B3 open note), so "63% - 11% = 52% left" always adds up; a destroyed item shows
+  "-<shown before>%" and "Destroyed". The roll detail ("rolled 8% x 1.10 ...") stays under the name.
+- **Combat log.** One `<table class="clog">` with a `<colgroup>`; `combatLogRows` gives the rows (all of them; the 1000 / 300 trimming and the gap row stay in
+  the screen). Effects text is compact ("Stun 1.5s", "Slow 5% 2.5s"). Under 640 px the Effects column is collapsed to zero width and its text is added to
+  Result (which may wrap), and the muted magic detail is hidden. Checked in Chromium at 390 px: no page overflow, the HP columns stay aligned.
+- **Help (4.19).** Sections: Time, World map & travel, Fields searching & sight, Workshop, Gear repairs & scrap (gear + gem infusions + durability),
+  Adventurer & combat (kept: it holds the formulas; not in the plan's list), Enemies, Banners, Win estimate (new; moved out of Combat), Intel (a live table:
+  Now and Next point per track, no schedule), Skills, Rings, Score (new). No novice / master tables, no gem blend table, no level-10 values, no tier points,
+  no "night" (rings text reworded); the skill effect text for Cutting still says "(of the way to a master cutter)" in the Skills tables and the skill hovers (the
+  hover test pins it), which is not a table.
+- **Phone width (checked in Chromium, no page overflow at 390 / 360 px):** the Storage and gear overview sits in a horizontal scroll box (gear table min
+  width 470 px); refine / cut rows and gear rows are cards under 640 px; the combat log fits (above); the Skills tab (done-when: skills matrix) now shows each
+  activity skill as a small card under 560 px (name and level, progress, what it gives now) and the bar-type / gem-type matrix has tighter cells, so every
+  column is on screen (the B2 open note about the cut-off "Now" and "Repair" columns). The Adventurer tab's gear list fits at 360 px (the B4 open note).
+- **Earlier open notes fixed here:** report wear numbers that did not add up (B3); the Adventurer gear table too wide at 360 px (B4); the roster row-header and
+  attribute hovers are `tip()` now, so a phone can read them (B4); Skills tab columns cut off at 390 px (B2); the smith panel time test no longer hard-codes
+  numbers (B2).
+- **Review fixes (after the batch 5 review)**
+  - **Top bar after a finished run.** `clockStatus(state, left, cfg)` (present.js) gives the top bar's clock. When `phase === 'over'` (retired in the middle of
+    a work day, or lost) it shows "Run over" with no clock and no work-day bar; the plan has no wording for this, so it is a small addition to 4.17. Before it
+    read "Day 7 16:47 1h 12.2m left" with a yellow bar next to [New game].
+  - **Combat log, Attacker column.** The 640 px rule no longer narrows it (6.4em cut "Adventurer" to "Adventur..." on every adventurer row at 390 px); it keeps the
+    plan's 7em, and the Result column (which may wrap) gives up the 7 px. Measured at 390 and 360 px: the text fits (scrollWidth = clientWidth), no page overflow.
+  - **Overview red dot** follows the SHOWN durability (`shownDurability(d) <= LOW_DURABILITY`, 30, a UI constant exported by inventory.js), so a chip whose hover says
+    "30%" always has the dot (the item was at 30.4%).
+  - **Overview scroll boxes keep their position across the re-render** a tap causes (`keepInventoryScroll(root, ctx)` in inventory.js, called by `renderWorkshop`
+    once the screen is in the page; the gear table and the gem table are marked `data-scroll="gear"` / `"gems"`; positions in `ctx.ui.inv_scroll`). Same pattern as
+    the plan screen's roster (`restoreScrollLeft`). Checked in Chromium at 390 px with touch: scrolled to the Steel column, a tap on a cell and on a gem row both leave
+    `scrollLeft` at 140 (it jumped to 0 before).
+  - **Workshop repair intro** reads both levers: "N% of the item's bars (and M% of its gem)" from `repair.materialFraction` / `repair.gemFraction`; the gem part is
+    left out when `gemFraction` is 0 (critique #10: repairs may stop costing gems).
+  - **"Would have helped" text** names a home item that fills an empty slot separately: "With S Mythril Sword +Ruby S from home (instead of D Copper Sword), plus C Iron
+    Chest from home, ...". `whatIfText` tells the two apart by `replaced[].slot`; `replaced` itself is unchanged.
+  - **Dead CSS** `.adv-where` (the old Adventurer "Where" column) deleted.
+  - **Tests no longer hard-code CONFIG numbers** in the new Workshop tests (house rule): the hover strings come from `CONFIG.refine` / `CONFIG.cut`, tile counts from
+    `SLOTS` / `BARS` / `GEMS`, the sword's bar count from `CONFIG.gear.slots.sword.bars`, the best-score label from `VERSION`; the R16 result-box test pins
+    `input` and `minutes` of copper with `cfgWith` next to its `dist` (its "refined 5" / 6 ore assume one ore and 15 minutes per bar).
+- **Review fixes (second batch 5 review)**
+  - **Workshop "Compare all gear types and gem effects" panel keeps its open state** in `ctx.ui.ws_refOpen` (same click + toggle pattern as Help's `det()`), so
+    the gem-grade buttons inside it and the smith tiles no longer close it on each redraw. It still starts closed (plan 4.12). Checked in Chromium at 1280 / 390 / 360 px.
+  - **Skills matrix phone rule.** The unconditional `.mi-matrix { min-width: 300px }` now comes before the `@media (max-width: 560px)` block, so the block's
+    `min-width: 0` and tighter cells apply (measured at 360 px: matrix 298 px in a 298 px box, was 300 px; no page overflow at 390 / 360).
+  - **"Gear left at home" ignores gear smithed after the packing** (deviation from the 4.15 formula `state.gear` minus `report.packedIds`, a cheap guard from the
+    review). `confirmPlan` records `plan.lastGearId` (the highest gear id then, 0 with no gear), `resolveBattle` copies it to `report.lastGearId`, and `homeGear`
+    only counts items with `id <= lastGearId`. An item smithed on the fight day, after the packing was locked in, is therefore never "from home". A report without
+    `lastGearId` (null) keeps the old formula. The highest GEAR id is used (not `state.nextId`) so a ring picked up earlier does not change the report of an
+    otherwise identical fight (the "real fight is unaffected by intel and Foresight rings" test compares whole reports). `state.plan` has one new key (game.test.mjs
+    pins it).
+- **Batch 5 open notes**
+  - [minor] Not changed: B4 note 3 (the warning icon also marks a blunted sword gem). The plan has one ⚠ for could-break; B4 kept a second reason on the same icon
+    and a test pins it. Changing it means a different glyph or hover-only (a sword with a blunted gem would then have no visible cue).
+  - [minor] Not changed (not in this batch's files): B2 `craft()` / `repair()` XP without `xpPerUnit`; `travelMinutes` repeating the `loadPenaltyPct` formula; B3
+    `startFillMax` pinned in the request-pins test; B4 estimate re-render notes (estimates.js).
+  - [minor] The Workshop scrap sentence still uses the shown durability for the arithmetic ("35% of its 2 bars x 63%") while the bars returned use the exact value
+    (B3 note, unchanged).
+  - [minor] README (night repairs, 10 x 10 estimate, Estimate all) and CHANGELOG are B7's.
+  - [minor] Top-bar clock and work-day bar hovers are title-only, so a phone cannot read them: `js/main.js:157` (timebar `title: day.label`) and `js/main.js:174`
+    (`.timestat` `title: clock.label`) use a plain `title` instead of the `tip()` helper (house rule: hover details also work on touch; plan 4.17 gives dayProgress's
+    label as the hover text). Both lines were also title-only in 1.2. The visible "08:00 10h left" text covers most of it. Fix: spread `...tip(clock.label)` /
+    `...tip(day.label)`.
+  - [minor] Storage and gear: the gem table scrolls by 2 px at 390 px. `css/ui-workshop.css` `.inv-gemtable { min-width: 330px; }` sits in a 328 px `.ws-scroll` box
+    at 390 px (Chromium: scrollWidth 330 vs clientWidth 328). The page does not overflow, but the gem block gets a scrollbar. Lower the min-width to about 320 px or
+    tighten the cell padding; at 360 px the scroll box is still needed.
+
+**Tests (B5)**
+- New `tests/replay.test.mjs`: `replayStats` (deterministic, totals and the five parts add up, a lethal / harmless enemy, `closeCut`), `analyzeLossSync` equals
+  `replayStats(report.adv, report.enemyC, 500, mixSeed(seed, day, 501))`, verdicts `helped` (a mythril S sword at home against a copper D sword used; the
+  lost fight is found by looking through seeds, so no number is pinned) / `noHome` / `notHelped` (the real enemies at 2.5x hp and damage, so the used mythril S sword
+  wins part of its fights and the weaker iron C home sword really scores lower; under `DEADLY_ENEMIES` every loadout scores 0 and the verdict would be automatic),
+  gear smithed after the packing is not home gear (`lastGearId`), a destroyed used item is a candidate, async equals sync with
+  progress reaching 1 and a `false` cancelling to `null`, the state is unchanged (serialize equal) and `cacheAnalysis`.
+- `tests/present.test.mjs`: `durText` / `repairGainShown` (sum 100 for every durability), `dayProgress` (8:00, half way, the warn / low thresholds, past 18:00,
+  a patched config), `processOutcome`, `processMessage`, `failedText`, `combatLogRows` (both HP on every row and never rising, `hitSide`, effects iff stun / slow),
+  `gearMatrix`, `gemOverview`, `scoreBreakdown` (total = `stats.score` after real wins), `outcomeSegments`, `fightSegment`, `whatIfText`.
+- `tests/game.test.mjs`: `newGame` has `end: null`; the lost-fight test checks `used` / `notUsed` and `state.end`; `endRun` from work (with a planned fight), plan and
+  report, refused when over, logged once, survives a save.
+- `tests/ui-render.test.mjs`: no score or tier points on any screen but the run summary; Help promises (the sentences, the sections in order, nothing forbidden); the
+  Workshop has no `<select>`, no luck / fail / time text, tiles, one bar and one row of numbers per row, the hovers; the result box green / red and the toast tone; the
+  gem picker back on None after a craft (and the grade re-picked); the preview; the Storage and gear overview (chips, `+N`, `none yet`, packed / low marks, clicks);
+  the gear list (groups, Repair inline right of the bar and number, packed text, Scrap column) and Repair all; the report (used / brought but not used, no home
+  gear, wear adds up, header line); the combat log table and its trimming; the run summary (retired, fatal, New best score, the analysis working then done, the
+  automatic start and `cancelAnalysis`); the Log tab shows the analysis. Updated: renamed `renderGameOver`, the Workshop intro text, the smith time hover, the
+  durability cell selector (`gl-pct`).
+- Second review-fix tests: the Workshop reference panel stays open across redraws (grade button, tile, summary click, toggle event) and a fresh screen starts closed;
+  the overview `+N` chip test adds `chipsPerCell + 1` iron swords and expects `+1` whatever `display.chipsPerCell` is.
+- Review-fix tests: `clockStatus` (present.test.mjs: work day, day over, run over with no bar), `whatIfText` with a swap plus an empty-slot item, the overview's red dot
+  at the shown limit and the scroll boxes restored through `renderWorkshop` (ui-render.test.mjs), the repair intro with pinned `materialFraction` / `gemFraction`.
+- `tests/spec-guards.test.mjs`: no running score and no tier points in js/ui, top bar (End run, confirm text, `dayProgress`, `clockStatus`, toast tone, `recordBest`, Run summary),
+  deleted names stay deleted, no drop-downs in the Workshop, Help source guards, `replay.js` is screen-only and writes nothing to the state, the report guards, a B5
+  "request pins" test (R15 fill = fraction used, R28 columns, R30 column order).
+- Hand-checked in headless Chromium (1280, 390 and 360 px): Workshop, report, run summary (lost with the analysis, retired), Adventurer tab, Skills tab; an
+  end-to-end click through craft, refine, Repair all, End run (confirm text, `end.prevBest`, a reload shows the same summary) and New game: no console errors.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),

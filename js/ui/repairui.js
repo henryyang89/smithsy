@@ -4,7 +4,8 @@
 import { h, num, tip } from './dom.js';
 import { repairPlan, repairInfo, repair, gearName } from '../core/gear.js';
 import { atCamp } from '../core/map.js';
-import { cap, qtyText, EPS } from '../core/util.js';
+import { packOrder } from '../core/pack.js';
+import { cap, qtyText, round1, EPS } from '../core/util.js';
 import { repairGainShown } from './present.js';
 
 // Quantities: whole numbers as-is, fractional ones (repairs use 0.01 bars) to 2 decimals.
@@ -78,6 +79,8 @@ export function repairButton(ctx, item, check, cls = 'small') {
 
 // One compact block: [Repair +7%] 0.07 Iron C bars · 12m
 //                     WARNING line when a higher grade substitutes, reason line when it can't be done.
+// opts.lead: nodes placed first on the line (the gear list puts the durability bar and number there, so the button sits
+// right of the durability).
 export function repairLine(ctx, item, opts = {}) {
   const check = repairCheck(ctx.state, item, ctx.cfg, opts);
   const { plan, info, why } = check;
@@ -90,8 +93,58 @@ export function repairLine(ctx, item, opts = {}) {
   }, `${num(plan.minutes)}m`);
   return h('div', { class: 'rp-line' },
     h('div', { class: 'rp-main' },
+      opts.lead || null,
       repairButton(ctx, item, check),
       h('span', { class: 'rp-cost' }, repairCostNodes(ctx.state, item, check), ' · ', timeNode)),
     warn && !item.packed ? h('div', { class: 'rp-warn' }, h('b', {}, 'Warning: '), warn, '.') : null,
     why && why !== 'At 100%' ? h('div', { class: 'rp-why' }, why) : null);
+}
+
+// "Repair all": which items would be repaired right now, in order (best first), and how long that takes. The stock is
+// counted down item by item, so two items that need the same bars are not both promised; an item that does not fit
+// (no bars, no time left) is skipped and a cheaper one after it may still go. Nothing is changed. Returns { ids, minutes }.
+export function repairAllInfo(state, cfg) {
+  const shadow = { ...state, storage: { ...state.storage, bars: { ...state.storage.bars }, cut: { ...state.storage.cut } } };
+  const ids = [];
+  let minutes = 0;
+  for (const g of state.gear.filter((x) => !x.packed && x.durability < 100).sort(packOrder(cfg))) {
+    const plan = repairPlan(shadow, g, cfg);
+    if (!plan.ok || state.time + minutes + plan.minutes > cfg.time.dayEndMin + EPS) continue;
+    for (const [k, n] of Object.entries(plan.bars)) shadow.storage.bars[k] = (shadow.storage.bars[k] || 0) - n;
+    for (const [k, n] of Object.entries(plan.gems)) shadow.storage.cut[k] = (shadow.storage.cut[k] || 0) - n;
+    ids.push(g.id);
+    minutes += plan.minutes;
+  }
+  return { ids, minutes: round1(minutes) };
+}
+
+// Do the repairs repairAllInfo listed, one after the other (each through the normal repair()), and stop at the first one
+// that fails. Returns { ok, msg, notes }.
+export function repairAll(state, cfg) {
+  const { ids } = repairAllInfo(state, cfg);
+  if (!ids.length) return { ok: false, msg: 'Nothing can be repaired right now.' };
+  const done = [];
+  const notes = [];
+  let minutes = 0;
+  let substitute = false;
+  let stopped = null;
+  for (const id of ids) {
+    const item = state.gear.find((g) => g.id === id);
+    const res = repair(state, id, cfg);
+    if (!res.ok) {
+      stopped = res.msg;
+      break;
+    }
+    done.push(gearName(item));
+    minutes += res.minutes;
+    notes.push(...(res.notes || []));
+    if (res.substitutes && res.substitutes.length) substitute = true;
+  }
+  if (!done.length) return { ok: false, msg: stopped };
+  return {
+    ok: true,
+    minutes,
+    notes,
+    msg: `Repaired ${done.length} item${done.length === 1 ? '' : 's'} to 100% in ${num(minutes)}m: ${done.join(', ')}.${substitute ? ' Some used a higher grade (no extra benefit).' : ''}${stopped ? ` Stopped: ${stopped}` : ''}`,
+  };
 }

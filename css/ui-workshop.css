@@ -38,45 +38,85 @@
 .ws-dist-nums span { flex: 1 1 0; text-align: center; }
 .ws-btns { display: flex; gap: 4px; flex-wrap: nowrap; white-space: nowrap; }
 .ws-last { margin: 6px 0 0; font-size: 12px; }
+/* the result of the last refine / cut / craft: green, or red when it was refused or any attempt failed */
+.ws-result { margin: 8px 0 0; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--ok); background: rgba(46, 125, 50, 0.10); font-size: 13px; }
+.ws-result.err { border-color: var(--err); background: rgba(198, 40, 40, 0.10); }
+.ws-result.err b { color: var(--err); }
 
 /* smith */
 .ws-smith { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(330px, 100%), 1fr)); gap: 16px; align-items: start; }
 .ws-form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: start; }
 .ws-form > label, .ws-form > span { padding-top: 5px; font-weight: 600; font-size: 13px; }
-.ws-form select { width: 100%; min-width: 0; }
+.ws-tiles { display: flex; flex-wrap: wrap; gap: 4px; }
+.ws-tile { display: flex; flex-direction: column; align-items: flex-start; min-width: 72px; padding: 4px 8px; text-align: left; line-height: 1.2; }
+.ws-tile .ws-tile-sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ws-tile.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: rgba(181, 101, 29, 0.12); }
+.ws-tile.short { border-style: dashed; }
 .ws-gbtns { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 2px; }
 .ws-gbtn { min-width: 44px; padding: 3px 8px; font-variant-numeric: tabular-nums; }
 .ws-gbtn.sel { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: rgba(181, 101, 29, 0.12); }
 .ws-gbtn.short { border-style: dashed; }
 .ws-preview { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 12px; }
 .ws-preview-name { margin-bottom: 4px; }
-.ws-stats { margin-bottom: 6px; max-width: 360px; }
+.ws-statsline { margin: 2px 0 6px; font-size: 13px; }
+.ws-refbox { margin-top: 12px; }
+.ws-refbox > summary { cursor: pointer; color: var(--accent-2); }
+.ws-refbox .ws-ref { margin-top: 8px; }
+.ws-repairall { margin: 0 0 8px; }
 .ws-cost > div { margin: 2px 0; }
 .ws-craft-row { margin-top: 8px; }
 .ws-reason { font-size: 12px; }
 .ws-ref h4 { margin-top: 10px; }
 .ws-ref h4:first-child { margin-top: 0; }
 
-/* gear list */
-.ws-gear td { vertical-align: top; }
-.ws-statstext { font-size: 12px; }
-.ws-durcell { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.ws-dur { width: 80px; min-width: 80px; }
-.ws-dur.hi .bar-fill { background: var(--ok); }
-.ws-dur.mid .bar-fill { background: var(--warn); }
-.ws-dur.lo .bar-fill { background: var(--err); }
-.ws-repair-row { margin-top: 3px; gap: 6px; }
-.ws-chip-packed { border-color: var(--accent-2); color: var(--accent-2); margin-top: 2px; white-space: nowrap; }
-.ws-gear tr.ws-packed td { opacity: 0.85; }
-.ws-scrap:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+/* process rows (refine / cut): Bar | Needs | Outcome chance | You can make | Time each | buttons */
 .ws-process td:first-child, .ws-process td:nth-child(2) > div { white-space: nowrap; }
+.ws-process td:nth-child(5) { white-space: nowrap; }
 
-/* phone width: refine/cut and gear rows become stacked cards instead of wide tables */
+/* gear list (js/ui/gearlist.js): Item and stats | Durability (with Repair) | Scrap, grouped by gear type */
+.gl-table td { vertical-align: top; }
+.gl-table tr.gl-group td { background: var(--cell); padding: 3px 6px; }
+.gl-dur { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.gl-bar { width: 80px; min-width: 80px; flex: none; }
+.gl-bar.hi .bar-fill { background: var(--ok); }
+.gl-bar.mid .bar-fill { background: var(--warn); }
+.gl-bar.lo .bar-fill { background: var(--err); }
+.gl-pct { font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; font-size: 13px; }
+.gl-away .gl-bar { opacity: 0.6; }
+.gl-where { font-size: 12px; }
+.gl-table tr.gl-packed td { opacity: 0.9; }
+.gl-durcell .rp-line { min-width: 0; }
+.ws-scrap:hover:not(:disabled) { border-color: var(--err); color: var(--err); }
+
+/* storage and gear overview (js/ui/inventory.js) */
+.inv-gear-h { margin-top: 12px; }
+.inv-geartable { min-width: 470px; }
+.inv-geartable td, .inv-geartable th { vertical-align: middle; }
+.inv-type { white-space: nowrap; }
+.inv-none { font-size: 12px; }
+.inv-pick { cursor: pointer; }
+.inv-pick:hover { background: rgba(181, 101, 29, 0.08); }
+.inv-chip { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; margin: 1px 3px 1px 0; font-size: 12px; line-height: 1.5; }
+.inv-packed { border-bottom: 2px dotted var(--accent-2); }
+.inv-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--err); }
+.inv-more { color: var(--muted); }
+.inv-gem { display: inline-block; font-size: 10px; font-weight: 700; line-height: 1.4; border-radius: 6px; padding: 0 4px; color: #fff; }
+.gem-ruby { background: #c62828; }
+.gem-topaz { background: #d98200; }
+.gem-sapphire { background: #2f6f9f; }
+.gem-emerald { background: #2e7d32; }
+.gem-diamond { background: #5fb0c4; color: #10303a; }
+.inv-gemcount { display: inline-block; margin-right: 6px; font-size: 12px; white-space: nowrap; }
+.inv-gemrow { cursor: pointer; }
+.inv-gemrow:hover td { background: rgba(181, 101, 29, 0.08); }
+.inv-gemtable { min-width: 330px; }
+
+/* phone width: refine/cut rows and gear rows become stacked cards instead of wide tables */
 @media (max-width: 640px) {
-  .ws-process, .ws-process tbody, .ws-gear, .ws-gear tbody { display: block; }
+  .ws-process, .ws-process tbody, .gl-table, .gl-table tbody { display: block; }
   .ws-process thead, .ws-process thead tr { display: block; }
   .ws-process thead th { display: none; border: none; }
-  .ws-process thead th:nth-child(4) { display: block; }
+  .ws-process thead th:nth-child(3) { display: block; }
   .ws-process tbody tr {
     display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 6px 0; border-bottom: 1px solid var(--border);
     grid-template-areas: 'name make' 'needs time' 'dist dist' 'btns btns';
@@ -84,26 +124,26 @@
   .ws-process tbody td { border: none; padding: 1px 0; }
   .ws-process td:nth-child(1) { grid-area: name; }
   .ws-process td:nth-child(2) { grid-area: needs; }
-  .ws-process td:nth-child(3) { grid-area: time; }
-  .ws-process td:nth-child(3)::before { content: 'each '; color: var(--muted); }
-  .ws-process td:nth-child(4) { grid-area: dist; }
-  .ws-process td:nth-child(5) { grid-area: make; text-align: right; }
-  .ws-process td:nth-child(5)::before { content: 'can make'; display: block; font-size: 11px; color: var(--muted); }
+  .ws-process td:nth-child(3) { grid-area: dist; }
+  .ws-process td:nth-child(4) { grid-area: make; text-align: right; }
+  .ws-process td:nth-child(4)::before { content: 'can make'; display: block; font-size: 11px; color: var(--muted); }
+  .ws-process td:nth-child(5) { grid-area: time; }
+  .ws-process td:nth-child(5)::before { content: 'each '; color: var(--muted); }
   .ws-process td:nth-child(6) { grid-area: btns; }
   .ws-process .ws-dist { width: 100%; }
   .ws-form { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .ws-form > label, .ws-form > span { padding-top: 6px; }
-  .ws-gear thead { display: none; }
-  .ws-gear tbody tr {
-    display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--border);
-    grid-template-areas: 'item scrap' 'stats stats' 'dur dur' 'repair repair';
+  .gl-table thead { display: none; }
+  .gl-table tr.gl-group, .gl-table tr.gl-group td { display: block; }
+  .gl-table tr.gl-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--border);
+    grid-template-areas: 'item scrap' 'dur dur';
   }
-  .ws-gear tbody td { border: none; padding: 0; }
-  .ws-gear td:nth-child(1) { grid-area: item; }
-  .ws-gear td:nth-child(2) { grid-area: stats; }
-  .ws-gear td:nth-child(3) { grid-area: dur; }
-  .ws-gear td:nth-child(4) { grid-area: repair; }
-  .ws-gear td:nth-child(5) { grid-area: scrap; }
+  .gl-table:not(.gl-hasscrap) tr.gl-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'item' 'dur'; }
+  .gl-table tr.gl-row td { border: none; padding: 0; }
+  .gl-table td.gl-item { grid-area: item; }
+  .gl-table td.gl-durcell { grid-area: dur; }
+  .gl-table td.gl-scrapcell { grid-area: scrap; }
 }
 
 /* shared repair widgets (js/ui/repairui.js: workshop gear list) — prefixed rp- */
@@ -114,14 +154,3 @@
 .rp-sub { color: var(--warn); font-weight: 600; }
 .rp-warn { margin-top: 3px; font-size: 12px; color: var(--warn); border-left: 3px solid var(--warn); padding: 1px 6px; background: rgba(178, 135, 4, 0.08); overflow-wrap: anywhere; }
 .rp-why { margin-top: 2px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-
-/* gem rows: label column (Now / Novice / Master) + the same aligned numbers */
-.ws-dist.ws-dist-l { width: 262px; }
-.ws-dist-row { display: flex; align-items: center; }
-.ws-dist-row > .ws-dist-bar, .ws-dist-row > .ws-dist-nums { flex: 1 1 0; min-width: 0; }
-.ws-dist-row > .ws-dist-bar { margin: 1px 0 2px; }
-.ws-dist-lab { flex: 0 0 52px; font-size: 11px; color: var(--muted); }
-.ws-dist-ref .ws-dist-nums { color: var(--muted); font-size: 10px; }
-@media (max-width: 640px) {
-  .ws-process .ws-dist.ws-dist-l { width: 100%; }
-}

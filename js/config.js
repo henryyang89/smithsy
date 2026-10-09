@@ -355,4 +355,22 @@ export const CONFIG = {
     perSlot: 2, // items of one gear type the adventurer can pack (before banner pack mules)
     leaveHomeBelow: 50, // "Leave worn gear home" unpacks repairable items below this durability %
   },
+
+  // ------------------------------------------------------------ DISPLAY ----
+  // Screen-only numbers: they change what you see, never how the game plays.
+  display: {
+    dayBarWarnPct: 75, // the work-day bar turns yellow once this % of the day is used
+    dayBarLowPct: 90, // ... and red from this %
+    chipsPerCell: 3, // Workshop gear overview: items shown per gear type x material cell before "+N"
+  },
+
+  // ------------------------------------------------------ BATTLE REPORT ----
+  // After a lost fight the run summary replays it (same enemy, now fully known; same rings; seeded). Screen only:
+  // bots and the benchmark never run it (js/core/replay.js).
+  report: {
+    replayFights: 500, // replays with the gear used (and with the best owned gear)
+    whatIfFights: 50, // fights per gear combination when searching all owned gear
+    whatIfMinGain: 5, // win points a better loadout must gain to count as "would have helped"
+    closeCut: 25, // % HP left that splits "close" from "badly" / "easily" in the outcome bar
+  },
 };

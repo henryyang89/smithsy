@@ -69,8 +69,23 @@ p.mi-note { margin: 4px 0 8px; }
 .mi-skills th:nth-child(2) { width: 9%; }
 .mi-skills th:nth-child(3) { width: 25%; }
 .mi-skills tr[data-tip] { cursor: help; }
+.mi-matrix { min-width: 300px; } /* before the phone block below, which sets it back to 0 (same specificity: the later rule wins) */
+/* phone width: each skill becomes a small card (name and level, progress, what it gives now) instead of a wide row;
+   the bar-type / gem-type matrix gets tighter cells so every column is on screen */
+@media (max-width: 560px) {
+  .mi-skills { min-width: 0; table-layout: auto; display: block; }
+  .mi-skills thead { display: none; }
+  .mi-skills tbody { display: block; }
+  .mi-skills tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 10px; padding: 5px 0; border-bottom: 1px solid var(--border); grid-template-areas: 'name level' 'progress progress' 'now now'; }
+  .mi-skills tbody td { border: none; padding: 0; }
+  .mi-skills td:nth-child(1) { grid-area: name; }
+  .mi-skills td:nth-child(2) { grid-area: level; }
+  .mi-skills td:nth-child(3) { grid-area: progress; }
+  .mi-skills td:nth-child(4) { grid-area: now; font-size: 12px; color: var(--muted); }
+  .mi-matrix { min-width: 0; }
+  .mi-matrix td, .mi-matrix th { padding-left: 3px; padding-right: 3px; font-size: 12px; }
+}
 /* bar types / gem types: "Lv 3" and a thin XP bar per cell */
-.mi-matrix { min-width: 300px; }
 .mi-lv { min-width: 56px; cursor: help; }
 .mi-lv.mi-dim { color: var(--muted); }
 .mi-thin { height: 4px; min-width: 40px; margin-top: 2px; }

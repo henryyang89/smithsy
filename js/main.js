@@ -3,7 +3,7 @@
 import { CONFIG } from './config.js';
 import * as Game from './core/game.js';
 import { atCamp, timeLeft, currentField, returnMinutes, projectedLoad } from './core/map.js';
-import { formatClock, formatDuration, EPS } from './core/util.js';
+import { formatDuration } from './core/util.js';
 import { VERSION } from './version.js';
 import { h, clear, isRestoredScroll } from './ui/dom.js';
 import { renderMap } from './ui/mapview.js';
@@ -13,8 +13,9 @@ import { renderRings } from './ui/ringsview.js';
 import { renderSkills } from './ui/skillsview.js';
 import { renderLog } from './ui/logview.js';
 import { renderHelp } from './ui/help.js';
-import { renderReport, renderPlan, renderGameOver } from './ui/endday.js';
+import { renderReport, renderPlan, renderRunSummary, cancelAnalysis } from './ui/endday.js';
 import { clearEstimates } from './ui/estimates.js';
+import { dayProgress, clockStatus } from './ui/present.js';
 
 const TABS = [
   { id: 'map', label: 'Map', render: renderMap },
@@ -49,7 +50,7 @@ const ctx = {
       res = { ok: false, msg: `Error: ${e.message}` };
     }
     if (res && res.ok) Game.logResult(state, res);
-    if (res && res.msg && (!res.ok || opts.toast)) toast(res.msg, res.ok ? 'ok' : 'err');
+    if (res && res.msg && (!res.ok || opts.toast)) toast(res.msg, res.tone || (res.ok ? 'ok' : 'err')); // an action may colour its own toast (a failed refine is red)
     save();
     render();
     return res;
@@ -59,6 +60,7 @@ const ctx = {
   toast: (msg, kind) => toast(msg, kind),
   newGame(seed) {
     clearEstimates(ctx); // the automatic win estimates belong to the old game
+    cancelAnalysis(ctx); // ... and so does a loss analysis that is still being worked out
     state = Game.newGame(seed);
     ui.plan = null;
     ui.tab = 'map';
@@ -105,21 +107,25 @@ function load() {
   }
 }
 
-function save() {
+// When a run is over, remember its score as the best one (per version) once: end.prevBest is the best score from before this
+// run, so the run summary can say "New best score!". Lives in the save, so a reload shows the same summary.
+function recordBest() {
+  if (state.phase !== 'over' || !state.end || state.end.prevBest != null) return;
   try {
-    localStorage.setItem(Game.SAVE_KEY, Game.serialize(state));
-    const best = Number(localStorage.getItem(Game.BEST_KEY) || 0);
-    if (state.stats.score > best) localStorage.setItem(Game.BEST_KEY, String(state.stats.score));
+    const prev = Number(localStorage.getItem(Game.BEST_KEY) || 0);
+    state.end.prevBest = prev;
+    if (state.stats.score > prev) localStorage.setItem(Game.BEST_KEY, String(state.stats.score));
   } catch (e) {
-    /* storage unavailable: game still works for this session */
+    /* storage unavailable: no best score to compare with */
   }
 }
 
-function bestScore() {
+function save() {
+  recordBest();
   try {
-    return Number(localStorage.getItem(Game.BEST_KEY) || 0);
-  } catch {
-    return 0;
+    localStorage.setItem(Game.SAVE_KEY, Game.serialize(state));
+  } catch (e) {
+    /* storage unavailable: game still works for this session */
   }
 }
 
@@ -138,32 +144,25 @@ function locationText() {
   return `Field (${state.location.x + 1},${state.location.y + 1}) · distance ${f.dist}`;
 }
 
-// Visual bar of the work day (08:00-18:00): full at the start, empty when the day is over. Drawn as a thin
-// strip along the bottom edge of the top bar (CSS: absolute, so it takes no layout space).
-function timeLabel(left) {
-  const dayLen = CONFIG.time.dayEndMin - CONFIG.time.dayStartMin;
-  return left > EPS ? `${formatDuration(left)} left of the ${formatDuration(dayLen)} work day (${formatClock(CONFIG.time.dayStartMin)}-${formatClock(CONFIG.time.dayEndMin)})` : 'The work day is over';
-}
-
-function timeBar(left) {
-  const dayLen = CONFIG.time.dayEndMin - CONFIG.time.dayStartMin;
-  const frac = Math.max(0, Math.min(1, left / dayLen));
-  const tone = frac <= 0.1 ? ' low' : frac <= 0.25 ? ' mid' : '';
-  const label = timeLabel(left);
+// Visual bar of the work day (08:00-18:00): empty at the start, it fills from left to right as the day's minutes are used
+// (dayProgress). Drawn as a thin strip along the bottom edge of the top bar (CSS: absolute, so it takes no layout space).
+function timeBar(day) {
   return h('div', {
-    class: `timebar${tone}`,
+    class: `timebar${day.tone === 'ok' ? '' : ` ${day.tone}`}`,
     role: 'progressbar',
-    'aria-label': 'Time left in the work day',
+    'aria-label': 'Work day used',
     'aria-valuemin': 0,
-    'aria-valuemax': dayLen,
-    'aria-valuenow': Math.round(Math.max(0, left)),
-    title: label,
-  }, h('div', { class: 'timebar-fill', style: { width: `${Math.round(frac * 1000) / 10}%` } }));
+    'aria-valuemax': Math.round(day.len),
+    'aria-valuenow': Math.round(day.used),
+    title: day.label,
+  }, h('div', { class: 'timebar-fill', style: { width: `${Math.round(day.frac * 1000) / 10}%` } }));
 }
 
 function renderTopbar() {
   const el = clear(document.getElementById('topbar'));
   const left = timeLeft(state);
+  const day = dayProgress(state, CONFIG);
+  const clock = clockStatus(state, left, CONFIG);
   const working = state.phase === 'work';
   const canEnd = working && atCamp(state);
   const field = currentField(state);
@@ -172,12 +171,11 @@ function renderTopbar() {
   const parts = [
     h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version', title: `Smithsy version ${VERSION} (see Help and CHANGELOG.md)` }, `v${VERSION}`)),
     h('div', { class: 'stat' }, h('b', {}, `Day ${state.day}`)),
-    h('div', { class: 'stat timestat', title: timeLabel(left) }, h('b', {}, formatClock(Math.min(state.time, CONFIG.time.dayEndMin))), ' ', h('span', { class: 'muted' }, left > EPS ? `${formatDuration(left)} left` : 'day over')),
+    h('div', { class: 'stat timestat', title: clock.label }, clock.clock ? [h('b', {}, clock.clock), ' '] : null, h('span', { class: 'muted' }, clock.note)),
     h('div', { class: 'stat' }, locationText()),
     h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`,
       field && field.pile && field.pile.length ? h('span', { class: 'muted', title: 'Items waiting in this field\'s pile' }, ` · pile ${field.pile.length}`) : null),
     !atCamp(state) && working ? h('div', { class: 'stat muted', title: `Walk home with a full load (${load} items: bag + this field's pile, up to ${CONFIG.bag.slots})` }, `Return: ${formatDuration(returnMinutes(state, state.location, load))}`) : null,
-    h('div', { class: 'stat' }, `Score ${state.stats.score}`, h('span', { class: 'muted' }, ` (best ${Math.max(bestScore(), state.stats.score)})`)),
     state.intel.points > 0 ? h('div', { class: 'stat hl' }, `${state.intel.points} intel pt`) : null,
     away ? h('div', { class: 'stat muted' }, away) : null,
     h('div', { class: 'spacer' }),
@@ -192,14 +190,20 @@ function renderTopbar() {
         },
       }, 'End day')
       : null,
-    h('button', {
-      class: 'ghost',
-      onclick: () => {
-        if (confirm('Start a new game? Your current run will be lost.')) ctx.newGame();
-      },
-    }, 'New game'),
+    state.phase !== 'over'
+      ? h('button', {
+        class: 'ghost',
+        id: 'end-run',
+        title: 'Retire the adventurer and see your score',
+        onclick: () => {
+          const planned = state.plan ? ` Today's fight against ${state.plan.enemy.name} will not happen.` : '';
+          if (confirm(`End this run now? Your adventurer retires and the run is scored, the same as a lost fight would score it. You can't continue it afterwards.${planned}`)) ctx.act(() => Game.endRun(state));
+        },
+      }, 'End run')
+      : h('button', { class: 'primary', onclick: () => ctx.newGame() }, 'New game'),
   ];
-  el.append(...parts.filter(Boolean), timeBar(left));
+  if (clock.bar) parts.push(timeBar(day));
+  el.append(...parts.filter(Boolean));
 }
 
 // Outside the work day (report / plan / game over) the phase screen is the first tab and only
@@ -207,7 +211,7 @@ function renderTopbar() {
 const PHASE_SCREENS = {
   report: { label: 'Battle report', render: renderReport },
   plan: { label: 'Plan tomorrow', render: renderPlan },
-  over: { label: 'Game over', render: renderGameOver },
+  over: { label: 'Run summary', render: renderRunSummary },
 };
 const PHASE_EXTRA_TABS = ['rings', 'skills', 'log', 'help'];
 

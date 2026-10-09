@@ -1,5 +1,5 @@
 // End-of-day screens: battle report (phase 'report'), plan tomorrow's fight (phase 'plan'),
-// game over (phase 'over').
+// run summary (phase 'over': how the run ended, how the score is worked out, what went wrong).
 // Also exports widgets reused by the Adventurer tab and the Log tab: rosterTable (one enemy per column),
 // enemyCard (a single enemy), renderBattleReport, renderCombatLog, combatStatsTable and small gear/ring helpers.
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.plan* (the selection)
@@ -11,14 +11,16 @@ import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisib
 import { loadouts, simCounts, shownMargin } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
-import { gearStats, gearPower, gearName, wearLoss, worstWear, couldBreak, gearMatchNotes, repairPlan } from '../core/gear.js';
+import { gearStats, gearPower, gearName, shownDurability, wearLoss, worstWear, couldBreak, gearMatchNotes, repairPlan } from '../core/gear.js';
+import { analyzeLoss, cacheAnalysis } from '../core/replay.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { intelValue, nextIntelGain, trackValueText, canSpendIntel } from '../core/intel.js';
 import { bannerLabel, bannersLine, bannersText, groupRewardText } from '../core/groups.js';
 import { packLimit, packOrder, slotNoun, defaultPack, leaveWornHome } from '../core/pack.js';
 import { cap, qtyText } from '../core/util.js';
 import { spendIntelAction, intelTip } from './skillsview.js';
-import { durText, winText, winClass, winWithMargin, sortedIds, gearAnswers } from './present.js';
+import { durText, winText, winClass, winWithMargin, sortedIds, gearAnswers, combatLogRows, scoreBreakdown, outcomeSegments, fightSegment, whatIfText } from './present.js';
+import { VERSION } from '../version.js';
 import { scheduleEstimates, cancelEstimates, cachedEstimate, estimatesPending, estimateStatus, estimateCell } from './estimates.js';
 
 // ------------------------------------------------------------------ format ----
@@ -82,7 +84,7 @@ export function gearStatsText(g, cfg) {
 export function gearCell(g, cfg) {
   return [
     gearNameNode(g),
-    h('span', { class: 'muted adv-small', title: 'Material x grade multiplier' }, ` x${f2(gearPower(g, cfg))}`),
+    h('span', { class: 'muted adv-small', ...tip('Material x grade multiplier') }, ` x${f2(gearPower(g, cfg))}`),
     h('div', { class: 'adv-gstats' }, gearStatsText(g, cfg)),
   ];
 }
@@ -133,20 +135,9 @@ export function couldBreakText(state, cfg, item, enemyName = null, tier = null) 
   return `Could break: against ${enemyName || 'the toughest enemy'} it can lose up to ${worst}% (it has ${durText(item.durability)}). At 0% it is destroyed after the fight; it always lasts the whole fight.`;
 }
 
-// wear: { min, max } from wearRange (defaults to the raw config range). The text is a whole number (durText); the
-// bar keeps the exact value. risky = the item could break in its next fight (couldBreak): a red number and a warning icon.
-export function durabilityNode(g, cfg, wear, risky = false) {
-  const d = g.durability;
-  const { min, max } = wear || cfg.gear.durabilityLoss;
-  const cls = risky ? 'adv-dur-low' : d < 50 ? 'adv-dur-mid' : '';
-  const range = `${Math.floor(min + 1e-9)}-${Math.ceil(max - 1e-9)}%`;
-  return h('div', { class: 'adv-dur', ...tip(risky ? `Could break in its next fight (a used item loses ${range} per fight; 0% = destroyed)` : `A used item loses ${range} durability per fight`) },
-    bar(d, cls), h('span', { class: risky ? 'err' : '' }, durText(d)), risky ? h('span', { class: 'adv-flag warn' }, '⚠') : null);
-}
-
 export function ringNameNode(r, cfg) {
   const d = ringDef(r.type, cfg);
-  return h('span', { class: 'adv-rname', title: ringLabel(r, cfg) }, `${d.name} `, h('span', { class: `grade-${r.grade}` }, r.grade));
+  return h('span', { class: 'adv-rname', ...tip(ringLabel(r, cfg)) }, `${d.name} `, h('span', { class: `grade-${r.grade}` }, r.grade));
 }
 
 // -------------------------------------------------------------- stat table ----
@@ -244,7 +235,7 @@ function ringRewardNode(ctx, enemy) {
   }
   return h('div', { class: 'adv-ring' },
     h('span', { class: 'muted' }, 'Ring reward: '),
-    tv ? h('b', { title: def.desc }, def.name) : h('span', { class: 'adv-lv attr-unknown', title: `Type hidden: any of ${nTypes} ring types (equally likely)` }, '? type'),
+    tv ? h('b', { ...tip(def.desc) }, def.name) : h('span', { class: 'adv-lv attr-unknown', ...tip(`Type hidden: any of ${nTypes} ring types (equally likely)`) }, '? type'),
     ' ',
     gv ? h('span', { class: `adv-lv grade-${enemy.ring.grade}` }, enemy.ring.grade)
       : h('span', { class: 'adv-lv attr-unknown', ...tip(hiddenGradeTip(odds)) }, '? grade'),
@@ -268,13 +259,13 @@ export function enemyCard(ctx, enemy, opts = {}) {
   const { cfg } = ctx;
   const v = enemyView(ctx, enemy, opts);
   const { A, tierCfg, day, base, known, hidden, rem, hpText } = v;
-  const stat = (label, value, title) => h('span', { class: 'adv-bstat', title }, h('span', { class: 'muted' }, `${label} `), h('b', {}, value));
+  const stat = (label, value, title) => h('span', { class: 'adv-bstat', ...tip(title) }, h('span', { class: 'muted' }, `${label} `), h('b', {}, value));
   const baseLine = h('div', { class: 'adv-base' },
     stat('HP', hpText, `Base ${f1(base.hp)} x HP attribute`),
     stat('Damage', f1(base.damage), 'Damage per hit before magic, defense and piercing'),
     stat('Defense', `${base.defense}%`, 'Reduces your physical damage (piercing ignores part of it)'));
 
-  const cell = (k) => h('div', { class: 'adv-attr', title: attrTitle(cfg, k, day) }, h('span', { class: 'adv-an' }, A[k].name), levelChip(cfg, k, known[k], day));
+  const cell = (k) => h('div', { class: 'adv-attr', ...tip(attrTitle(cfg, k, day)) }, h('span', { class: 'adv-an' }, A[k].name), levelChip(cfg, k, known[k], day));
   const pairs = h('div', { class: 'adv-pairs' },
     h('div', { class: 'adv-ph' }, 'Offense'), h('div', { class: 'adv-ph' }, 'Defense'),
     cfg.enemies.pairs.flatMap(([o, d]) => [cell(o), cell(d)]));
@@ -284,8 +275,7 @@ export function enemyCard(ctx, enemy, opts = {}) {
 
   const head = h('div', { class: 'adv-ehead' },
     h('span', { class: 'adv-ename' }, enemy.name),
-    h('span', { class: `adv-tier tier-${enemy.tier}` }, cap(enemy.tier)),
-    h('span', { class: 'muted' }, `+${tierCfg.score} pts`));
+    h('span', { class: `adv-tier tier-${enemy.tier}` }, cap(enemy.tier)));
 
   return h('div', { class: 'enemy-card adv-ecard' }, head, baseLine, pairs, mix, opts.ring === false ? null : ringRewardNode(ctx, enemy));
 }
@@ -307,7 +297,7 @@ export function rosterTable(ctx, enemies, opts = {}) {
 
   const colCls = (i, extra = '') => `rt-c${i === sel ? ' rt-sel' : ''}${pick ? ' rt-pick' : ''}${extra ? ` ${extra}` : ''}`;
   const colAttrs = (i, extra) => ({ class: colCls(i, extra), 'data-col': i, onclick: pick ? () => pick(i) : null });
-  const rowHead = (label, title) => h('th', { class: 'rt-row', scope: 'row', title }, label);
+  const rowHead = (label, title) => h('th', { class: 'rt-row', scope: 'row', ...tip(title) }, label);
   const row = (label, title, fn, cls = '') => h('tr', { class: cls }, rowHead(label, title), enemies.map((e, i) => h('td', colAttrs(i), fn(e, views[i], i))));
 
   const names = h('tr', { class: 'rt-names' },
@@ -325,9 +315,7 @@ export function rosterTable(ctx, enemies, opts = {}) {
         }) : null,
         h('span', { class: 'rt-name' }, e.name)))));
 
-  const tier = row('Tier', 'Tier and the score for a win', (e, v) => [
-    h('div', { class: `adv-tier tier-${e.tier}`, title: `Tier mix: ${mixText(v.tierCfg.levels)}` }, cap(e.tier)),
-    h('div', { class: 'muted rt-sm' }, `+${v.tierCfg.score} pts`)]);
+  const tier = row('Tier', 'The enemy\'s tier: Normal, Elite or Champion. Tougher tiers have more High attributes (hover the tier for the exact mix)', (e, v) => h('div', { class: `adv-tier tier-${e.tier}`, ...tip(`Tier mix: ${mixText(v.tierCfg.levels)}`) }, cap(e.tier)));
   const baseHp = row('Base HP', 'Base HP on the fight day, before the HP attribute (see the HP row below)', (e, v) => f1(v.base.hp));
   const baseDmg = row('Damage', 'Damage per hit before magic, defense and piercing', (e, v) => f1(v.base.damage));
   const baseDef = row('Defense', 'Reduces your physical damage (piercing ignores part of it)', (e, v) => `${v.base.defense}%`);
@@ -347,7 +335,7 @@ export function rosterTable(ctx, enemies, opts = {}) {
   const attrRow = (key, last) => row(A[key].name, attrTitle(cfg, key, views.length ? views[0].day : opts.day), (e, v) => {
     const chip = levelChip(cfg, key, v.known[key], v.day);
     if (key !== 'hp') return chip;
-    return [chip, h('div', { class: 'muted rt-sm', title: `HP = base ${f1(v.base.hp)} x the HP attribute` }, `= ${v.hpText} HP`)];
+    return [chip, h('div', { class: 'muted rt-sm', ...tip(`HP = base ${f1(v.base.hp)} x the HP attribute`) }, `= ${v.hpText} HP`)];
   }, last ? 'rt-last' : '');
   const offense = cfg.enemies.pairs.map(([o]) => o);
   const defense = cfg.enemies.pairs.map(([, d]) => d);
@@ -406,46 +394,49 @@ export function bannersNote(ctx) {
 }
 
 // -------------------------------------------------------------- combat log ----
-// Backpack-Battles style log lines. Returns a DOM node.
+// The combat log is a fixed-column table (css .clog): Time · Attacker · Result · Effects · You · Foe. Every row shows both
+// HP values after the attack, in the same columns, and the one that dropped is bold. The rows come from combatLogRows().
+// Under 640 px the Effects column is hidden (its text is added to Result) and so is the muted detail of a hit.
+const fx1 = (v) => (Math.round(v * 10) / 10).toFixed(1);
+
 export function renderCombatLog(report) {
   const en = report.enemy.name;
-  const nameOf = (side) => (side === 'A' ? 'Adventurer' : en);
-  const maxHp = { A: report.advMaxHp, E: report.enemyMaxHp };
-  const entries = report.log || [];
-  const line = (e) => {
-    const att = nameOf(e.side);
-    const defSide = e.side === 'A' ? 'E' : 'A';
-    const def = nameOf(defSide);
-    let text;
-    if (e.hit) {
-      text = `${att} hits ${def} for ${f1(e.dmg)}`;
-      if (e.magic > 0.005) text += ` (${f1(e.phys)} phys + ${f1(e.magic)} magic)`;
-      if (e.stun) text += ` — stun ${f2(e.stun)}s`;
-      if (e.slow) text += ` — slow ${f1(e.slow.pct)}% for ${f1(e.slow.dur)}s`;
-      text += ` — ${def} ${f1(defSide === 'A' ? e.hpA : e.hpE)}/${f1(maxHp[defSide])}`;
-    } else {
-      text = `${att} misses (${Math.round(e.hitPct)}% to hit)`;
-    }
-    return h('div', { class: `adv-line ${e.side}${e.hit ? '' : ' miss'}` }, h('span', { class: 't' }, `[${e.t.toFixed(1)}s] `), text);
-  };
+  const all = combatLogRows(report);
+  const row = (r) => h('tr', { class: `${r.side}${r.hit ? '' : ' miss'}` },
+    h('td', { class: 'clog-t' }, r.time),
+    h('td', { class: 'clog-att' }, r.attacker),
+    h('td', { class: 'clog-res' }, r.result,
+      r.detail ? h('span', { class: 'clog-detail' }, ` (${r.detail})`) : null,
+      r.effects ? h('span', { class: 'clog-fx-inline' }, ` · ${r.effects}`) : null),
+    h('td', { class: 'clog-fx', ...(r.effects ? { title: r.effects } : {}) }, r.effects),
+    h('td', { class: 'num' }, r.hitSide === 'A' ? h('b', {}, fx1(r.hpA)) : fx1(r.hpA)),
+    h('td', { class: 'num' }, r.hitSide === 'E' ? h('b', {}, fx1(r.hpE)) : fx1(r.hpE)));
+  const note = (cls, text) => h('tr', { class: cls }, h('td', { colspan: 6 }, text));
   // Very long fights: show the start and the end. Saved reports of very long fights are already
   // trimmed by the core (report.logTrimmed = attacks from the middle that were not saved).
   const HEAD = 1000;
   const TAIL = 300;
   const trimmed = report.logTrimmed > 0 ? report.logTrimmed : 0;
-  let shown = entries.map(line);
-  if (entries.length > HEAD + TAIL) {
-    const hiddenHere = entries.length - HEAD - TAIL;
+  let shown = all.map(row);
+  if (all.length > HEAD + TAIL) {
+    const hiddenHere = all.length - HEAD - TAIL;
     const more = hiddenHere + trimmed;
-    shown = [...entries.slice(0, HEAD).map(line),
-      h('div', { class: 'adv-line muted adv-gap' }, `… ${more} more attacks${trimmed ? ` (${trimmed} not saved: log trimmed)` : ''} …`),
-      ...entries.slice(-TAIL).map(line)];
+    shown = [...all.slice(0, HEAD).map(row),
+      note('clog-note clog-gap muted', `… ${more} more attacks${trimmed ? ` (${trimmed} not saved: log trimmed)` : ''} …`),
+      ...all.slice(-TAIL).map(row)];
   }
   const end = report.win ? `${en} is defeated after ${f1(report.time)}s.` : report.draw ? `Safety time cap reached after ${f1(report.time)}s — draw.` : `The adventurer falls after ${f1(report.time)}s.`;
   return h('div', { class: 'combatlog' },
-    h('div', { class: 'adv-line muted' }, `[0.0s] Fight starts: Adventurer ${f1(report.advMaxHp)} HP vs ${en} ${f1(report.enemyMaxHp)} HP.`),
-    shown,
-    h('div', { class: `adv-line adv-end ${report.win ? 'ok' : report.draw ? 'warn' : 'err'}` }, end));
+    h('table', { class: 'clog' },
+      h('colgroup', {}, ['c-time', 'c-att', 'c-res', 'c-fx', 'c-you', 'c-foe'].map((c) => h('col', { class: c }))),
+      h('thead', {}, h('tr', {},
+        h('th', {}, 'Time'), h('th', {}, 'Attacker'), h('th', {}, 'Result'), h('th', { class: 'clog-fx' }, 'Effects'),
+        h('th', { class: 'num', ...tip('The adventurer\'s HP after the attack') }, 'You'),
+        h('th', { class: 'num', ...tip(`${en}'s HP after the attack`) }, 'Foe'))),
+      h('tbody', {},
+        note('clog-note muted', `Fight starts: Adventurer ${f1(report.advMaxHp)} HP vs ${en} ${f1(report.enemyMaxHp)} HP.`),
+        shown,
+        note(`clog-note clog-end ${report.win ? 'ok' : report.draw ? 'warn' : 'err'}`, end))));
 }
 
 // ----------------------------------------------------------- battle report ----
@@ -465,7 +456,7 @@ function summaryTable(report, cfg) {
     { st: S.A, foe: S.E, hit: S.hitAE, dmg: S.dmgAE },
     { st: S.E, foe: S.A, hit: S.hitEA, dmg: S.dmgEA },
   ];
-  const row = (label, fn, title) => h('tr', { title }, h('td', {}, label), sides.map((s) => h('td', { class: 'num' }, fn(s))));
+  const row = (label, fn, title) => h('tr', { ...tip(title) }, h('td', {}, label), sides.map((s) => h('td', { class: 'num' }, fn(s))));
   return h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-summary' },
     h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', { class: 'num' }, 'Adventurer → ', h('wbr'), en), h('th', { class: 'num' }, `${en} → `, h('wbr'), 'Adventurer'))),
     h('tbody', {},
@@ -480,18 +471,137 @@ function summaryTable(report, cfg) {
       row('Slows landed', (s) => String(s.st.slows), 'A slow makes the target\'s attack bar fill slower for its duration (slows do not stack; the stronger one is kept and the timer refreshes)'))));
 }
 
-// Full report body. opts: { headline (default true), log (default true) }
+
+// "rolled 8% x 1.10 (elite enemy) x 0.95 (Gear care -5%)": how one item's wear came about (older reports lack the detail).
+function wearDetail(w, tier) {
+  if (w.base == null) return null;
+  const bits = [`rolled ${w.base}%`];
+  if (w.tierMult && w.tierMult !== 1) bits.push(`x ${f2(w.tierMult)} (${tier} enemy)`);
+  if (w.skillRed > 0) bits.push(`x ${f2(1 - w.skillRed / 100)} (Gear care -${num(w.skillRed, 1)}%)`);
+  return bits.join(' ');
+}
+
+// "Gear used in the fight (3)": what the adventurer used, with its wear (the difference of the two shown durabilities, so
+// the numbers add up on screen) and what is left. Then "Brought but not used (no wear)" chips. Gear left at home is never listed.
+function gearUsedPanel(report, ctx) {
+  const { cfg } = ctx;
+  const tier = report.enemy.tier;
+  const used = report.used || [];
+  const notUsed = report.notUsed || [];
+  const wearOf = (id) => (report.wear || []).find((w) => w.id === id);
+  const wearRows = used.map((snap) => {
+    const w = wearOf(snap.id);
+    const before = shownDurability(snap.durability);
+    const left = w ? w.left : snap.durability;
+    const after = left <= 0 ? 0 : shownDurability(left);
+    return h('tr', { 'data-gear': snap.id },
+      h('td', {}, gearNameNode(snap), w && wearDetail(w, tier) ? h('div', { class: 'muted adv-small' }, wearDetail(w, tier)) : null),
+      h('td', { class: 'num err' }, `-${Math.max(0, before - after)}%`),
+      h('td', { class: 'num' }, after <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${after}% left`));
+  });
+  const destroyed = report.destroyed || [];
+  const survived = report.win || report.draw;
+  const care = cfg.skills.activity.gearCare;
+  const gearCareNode = survived && Array.isArray(report.notes) && care
+    ? h('p', { class: 'adv-tight muted adv-small' }, `${care.name} +${care.xp} XP`, report.notes.map((n) => [' · ', h('b', { class: 'ok' }, n)]))
+    : null;
+  return section(`Gear used in the fight (${used.length})`,
+    used.length
+      ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows))
+      : h('p', { class: 'adv-tight muted' }, 'No gear used: the adventurer fought unarmed.'),
+    destroyed.length ? h('p', { class: 'err adv-tight' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
+    notUsed.length
+      ? [h('h4', { class: 'adv-h4' }, 'Brought but not used (no wear)'),
+        h('div', { class: 'chips adv-notused' }, notUsed.map((snap) => h('span', { class: 'chip', 'data-gear': snap.id }, gearNameNode(snap), h('span', { class: 'muted' }, ` ${durText(snap.durability)}`))))]
+      : null,
+    gearCareNode,
+    h('h4', { class: 'adv-h4' }, 'Reward'),
+    report.ring
+      ? h('p', { class: 'adv-tight' }, 'Ring gained: ', h('b', { class: `grade-${report.ring.grade}` }, report.ringText),
+        h('span', { class: 'muted' }, ringDef(report.ring.type, cfg).owner === 'adventurer' ? ' — an adventurer ring: you can give it to the adventurer in the next plan.' : ' — a smith ring: wear it on the Rings tab.'))
+      : h('p', { class: 'adv-tight muted' }, report.draw ? 'No ring (draw).' : 'No ring.'),
+    report.groupReward ? h('p', { class: 'adv-tight ok' }, groupRewardText(report, cfg)) : null);
+}
+
+// ---- "What went wrong?" (lost fights): 500 replays, the outcome bar, and whether gear left at home would have helped.
+// The work runs in the background (core/replay.js) the first time the screen is shown and is kept on the report.
+// ctx.ui.analysis === 'off' (render tests) turns the automatic start off; ctx.ui.loss_run is the run that is going.
+export function cancelAnalysis(ctx) {
+  if (ctx.ui.loss_run) ctx.ui.loss_run.cancelled = true;
+  ctx.ui.loss_run = null;
+}
+
+const hpLeftText = (pct) => (pct < 1 ? 'less than 1%' : `${Math.round(pct)}%`);
+
+function analysisNode(ctx, report, a) {
+  const { cfg } = ctx;
+  const segs = outcomeSegments(a.used);
+  const here = fightSegment(report, cfg);
+  const hereSeg = segs.find((x) => x.key === here);
+  let x = 0;
+  let centre = null;
+  for (const sg of segs) {
+    if (sg.key === here) centre = x + sg.pct / 2;
+    x += sg.pct;
+  }
+  const en = report.enemy.name;
+  const w = whatIfText(a);
+  return h('section', { class: 'panel loss', 'data-loss': 'done' },
+    h('h3', {}, 'What went wrong?'),
+    h('p', { class: 'adv-tight' }, `In ${a.n} replays of this fight (same gear and rings, the enemy now fully known) the adventurer won `, h('b', {}, winText(a.used.winPct)), '.'),
+    h('div', { class: 'oc' },
+      h('div', { class: 'oc-bar' }, segs.map((sg) => (sg.count ? h('span', { class: `oc-seg oc-${sg.key}`, style: { width: `${sg.pct}%` }, ...tip(`${sg.label}: ${Math.round(sg.pct)}%`) }) : null))),
+      centre != null ? h('div', { class: 'oc-mark', style: { left: `${centre}%` } }, '▲') : null),
+    h('p', { class: 'adv-tight adv-small oc-here' }, `▲ This fight: ${hereSeg.label.toLowerCase()} (${en} had ${hpLeftText(a.thisFight.enemyHpPct)} HP left).`),
+    h('p', { class: 'adv-tight adv-small' }, segs.filter((sg) => sg.count > 0).map((sg, i) => [i ? ' · ' : '', h('span', { class: `oc-key oc-${sg.key}-t` }, `${sg.label} ${Math.round(sg.pct)}%`)])),
+    report.planEstimate ? h('p', { class: 'adv-tight adv-small' }, `Your plan showed ${winText(report.planEstimate.winPct)}${report.planEstimate.margin != null ? ` ± ${report.planEstimate.margin}` : ''}.`) : null,
+    h('h4', { class: 'adv-h4' }, 'Would gear left at home have helped?'),
+    h('p', { class: `adv-tight loss-${w.verdict}` }, w.text),
+    h('details', { class: 'adv-details' }, h('summary', {}, 'How this was worked out'),
+      h('p', { class: 'adv-tight muted adv-small' }, `The fight was replayed ${a.n} times with the enemy exactly as it was (every attribute known), the gear the adventurer used and the rings it wore; each replay has its own luck, so the result is a chance, not a story. `,
+        `Then every piece of gear you owned was tried (${cfg.report.whatIfFights} fights per combination) to find the best set, and that set was replayed ${a.n} times with the same luck, so the difference comes from the gear alone. `,
+        `Gear counts as "would have helped" when it adds ${cfg.report.whatIfMinGain} win points or more. "Close" means the loser had less than ${cfg.report.closeCut}% of its HP left.`)));
+}
+
+function lossPanel(ctx, report) {
+  if (report.analysis) return analysisNode(ctx, report, report.analysis);
+  const run = ctx.ui.loss_run;
+  const key = `${ctx.state.seed}:${report.day}`;
+  const text = (f) => `Working out what happened… ${Math.round(f * 100)}%`;
+  const progress = h('p', { class: 'adv-tight muted loss-progress' }, text(run && run.key === key ? run.pct : 0));
+  if (run && run.key === key && !run.cancelled) {
+    run.node = progress; // the run updates the newest screen's text
+  } else if (ctx.ui.analysis !== 'off') {
+    const r = { key, cancelled: false, pct: 0, node: progress };
+    ctx.ui.loss_run = r;
+    analyzeLoss(ctx.state, report, ctx.cfg, (f) => {
+      if (r.cancelled) return false;
+      r.pct = f;
+      if (r.node) r.node.textContent = text(f);
+      return true;
+    }).then((a) => {
+      if (ctx.ui.loss_run === r) ctx.ui.loss_run = null;
+      if (!a || r.cancelled) return;
+      cacheAnalysis(ctx.state, report, a);
+      ctx.save();
+      ctx.rerender();
+    }).catch((e) => console.error(e));
+  }
+  return h('section', { class: 'panel loss', 'data-loss': 'working' }, h('h3', {}, 'What went wrong?'), progress);
+}
+
+// Full report body. opts: { headline (default true), log (default true), analysis (default true: the "What went wrong?" panel
+// of a lost fight) }
 export function renderBattleReport(report, ctx, opts = {}) {
   const cfg = ctx.cfg;
   const en = report.enemy.name;
   const tier = report.enemy.tier;
   const kind = report.win ? 'win' : report.draw ? 'draw' : 'loss';
   const title = report.win ? `Victory over ${en}!` : report.draw ? `Draw against ${en}` : `Defeat — the adventurer fell to ${en}`;
-  const score = cfg.enemies.tiers[tier]?.score || 0;
 
   const head = h('section', { class: `panel adv-rhead adv-${kind}` },
     opts.headline === false ? null : h('div', { class: `adv-headline adv-${kind}` }, title),
-    h('div', { class: 'muted' }, `Day ${report.day} fight vs ${en} (${tier}) · lasted ${f1(report.time)}s`, report.win ? ` · +${score} points` : '',
+    h('div', { class: 'muted' }, `Day ${report.day} · ${tier} · lasted ${f1(report.time)}s`,
       report.enemy.group && cfg.groups.list[report.enemy.group] ? [' · Banner: ', h('b', { class: `bn bn-${report.enemy.group}` }, bannerLabel(report.enemy.group, cfg))] : null),
     report.planEstimate ? h('div', { class: 'muted' }, `Your plan showed ${winText(report.planEstimate.winPct)}${report.planEstimate.margin != null ? ` ± ${report.planEstimate.margin}` : ''}.`) : null,
     report.draw ? h('p', { class: 'warn' }, 'The fight reached the safety time cap: the adventurer survives, but gets no ring.') : null,
@@ -499,54 +609,13 @@ export function renderBattleReport(report, ctx, opts = {}) {
       hpRow('Adventurer', report.advHp, report.advMaxHp, 'adv-hp-a'),
       hpRow(en, report.enemyHp, report.enemyMaxHp, 'adv-hp-e')));
 
-  const destroyed = report.destroyed || [];
-  // how much wear each item took: the roll, x the enemy tier's multiplier, x (1 - Gear care) (older reports lack the detail)
-  const wearDetail = (w) => {
-    if (w.base == null) return null;
-    const bits = [`rolled ${w.base}%`];
-    if (w.tierMult && w.tierMult !== 1) bits.push(`x ${f2(w.tierMult)} (${tier} enemy)`);
-    if (w.skillRed > 0) bits.push(`x ${f2(1 - w.skillRed / 100)} (Gear care -${num(w.skillRed, 1)}%)`);
-    return bits.join(' ');
-  };
-  const wearRows = (report.wear || []).map((w) => h('tr', {},
-    h('td', {}, w.name, wearDetail(w) ? h('div', { class: 'muted adv-small' }, wearDetail(w)) : null),
-    h('td', { class: 'num err' }, `-${Math.round(w.loss)}%`),
-    h('td', { class: 'num' }, w.left <= 0 ? h('b', { class: 'err' }, 'Destroyed') : `${durText(w.left)} left`)));
-  const survived = report.win || report.draw;
-  const gearCareNode = survived && Array.isArray(report.notes) && cfg.skills.activity.gearCare
-    ? h('p', { class: 'adv-tight muted adv-small' }, `${cfg.skills.activity.gearCare.name}: +${cfg.skills.activity.gearCare.xp} XP for surviving the fight.`,
-      report.notes.map((n) => [' ', h('b', { class: 'ok' }, n)]))
-    : null;
-  // Packed but unused (report.packedIds). Unused items do not wear.
-  const unusedIds = report.packedIds.filter((id) => !report.usedIds.includes(id));
-  const unusedNode = unusedIds.length
-    ? h('p', { class: 'adv-tight muted adv-small' }, `Packed but not used (no wear): `,
-      unusedIds.map((id, i) => {
-        const g = ctx.state.gear.find((x) => x.id === id);
-        return [i ? ', ' : '', g ? gearNameNode(g) : 'an item you no longer own'];
-      }), '.')
-    : null;
-  const gearPanel = section('Gear the adventurer used',
-    report.usedNames.length
-      ? h('p', { class: 'adv-tight' }, 'Picked from the packed gear after seeing the enemy: ', h('b', {}, report.usedNames.join(', ')), '.')
-      : h('p', { class: 'adv-tight muted' }, report.packedIds.length ? 'No gear used — fought unarmed.' : 'No gear — fought unarmed.'),
-    unusedNode,
-    wearRows.length ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)) : null,
-    gearCareNode,
-    destroyed.length ? h('p', { class: 'err' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
-    h('h4', { class: 'adv-h4' }, 'Reward'),
-    report.ring
-      ? h('p', { class: 'adv-tight' }, 'Ring gained: ', h('b', { class: `grade-${report.ring.grade}` }, report.ringText),
-        h('span', { class: 'muted' }, ringDef(report.ring.type, cfg).owner === 'adventurer' ? ' — an adventurer ring: you can give it to the adventurer in tonight\'s plan.' : ' — a smith ring: wear it on the Rings tab.'))
-      : h('p', { class: 'adv-tight muted' }, report.draw ? 'No ring (draw).' : 'No ring.'),
-    report.groupReward ? h('p', { class: 'adv-tight ok' }, groupRewardText(report, cfg)) : null);
-
   const enemyPanel = section('Enemy attributes (revealed)',
     enemyCard(ctx, { name: en, tier, levels: report.enemy.levels, day: report.day }, { reveal: true, ring: false, day: report.day }));
 
   const parts = [
     head,
-    h('div', { class: 'cols' }, gearPanel, enemyPanel),
+    h('div', { class: 'cols' }, gearUsedPanel(report, ctx), enemyPanel),
+    !report.win && !report.draw && opts.analysis !== false ? lossPanel(ctx, report) : null,
     section('Summary', summaryTable(report, cfg),
       report.adv && report.enemyC
         ? h('details', { class: 'adv-details' }, h('summary', {}, 'Combat stats of both sides'),
@@ -576,37 +645,47 @@ export function renderReport(root, ctx) {
     h('div', { class: 'row adv-bottom' }, cont())));
 }
 
-export function renderGameOver(root, ctx) {
+// The run summary (phase 'over'): how the run ended, the score and how it is worked out, and for a lost run what went wrong.
+// This is the only place the score is shown: nothing about it appears while the run is going.
+export function renderRunSummary(root, ctx) {
   const s = ctx.state;
   const cfg = ctx.cfg;
-  const r = s.report || s.battles[s.battles.length - 1] || null;
-  let best = s.stats.score;
-  try {
-    best = Math.max(best, Number(localStorage.getItem(Game.BEST_KEY) || 0));
-  } catch {
-    /* storage unavailable */
-  }
+  const lost = s.report && !s.report.win && !s.report.draw ? s.report : null;
+  // saves from before `end` existed: work it out from the last report
+  const end = s.end || { reason: lost ? 'fell' : 'retired', day: s.day, daysSurvived: Math.max(0, s.day - 1), enemy: lost ? { name: lost.enemy.name, tier: lost.enemy.tier } : null, cancelled: null };
+  const fell = end.reason === 'fell';
+  const fatal = fell ? lost : null;
+  const score = s.stats.score;
   const totalWins = Object.values(s.stats.wins).reduce((a, b) => a + b, 0);
-  const tierRows = Object.entries(cfg.enemies.tiers).map(([tier, t]) => h('tr', {},
-    h('td', { class: `tier-${tier}` }, cap(tier)),
-    h('td', { class: 'num' }, String(s.stats.wins[tier] || 0)),
-    h('td', { class: 'num' }, `x ${t.score}`),
-    h('td', { class: 'num' }, String((s.stats.wins[tier] || 0) * t.score))));
+  const best = Math.max(score, end.prevBest || 0);
+  const newBest = end.prevBest != null && score > end.prevBest;
+  const bd = scoreBreakdown(s, cfg);
+  const tierRows = bd.rows.map((r) => h('tr', {},
+    h('td', { class: `tier-${r.tier}` }, cap(r.tier)),
+    h('td', { class: 'num' }, String(r.wins)),
+    h('td', { class: 'num' }, `× ${r.each}`),
+    h('td', { class: 'num' }, String(r.points))));
   root.append(h('div', { class: 'adv-screen' },
-    h('section', { class: 'panel adv-over' },
-      h('div', { class: 'adv-headline adv-loss' }, 'Game over'),
-      h('p', {}, r ? `Your adventurer fell to ${r.enemy.name} (${r.enemy.tier}) on day ${s.day}.` : `Your adventurer fell on day ${s.day}.`),
+    h('section', { class: `panel adv-over${fell ? '' : ' adv-retired'}` },
+      h('div', { class: `adv-headline ${fell ? 'adv-loss' : ''}` }, fell ? 'Game over' : 'Run ended'),
+      h('p', {}, fell
+        ? (end.enemy ? `Your adventurer fell to ${end.enemy.name} (${end.enemy.tier}) on day ${end.day}.` : `Your adventurer fell on day ${end.day}.`)
+        : [`You retired the adventurer on day ${end.day}.`, end.cancelled ? ` Today's fight against ${end.cancelled.name} (${end.cancelled.tier}) did not happen.` : '', ' The run is scored the same as a lost fight.']),
       h('div', { class: 'adv-bignums' },
-        h('div', {}, h('div', { class: 'adv-big' }, String(s.stats.score)), h('div', { class: 'muted' }, 'final score')),
-        h('div', {}, h('div', { class: 'adv-big' }, String(Math.max(0, s.day - 1))), h('div', { class: 'muted' }, 'days survived')),
+        h('div', {}, h('div', { class: 'adv-big', id: 'run-score' }, String(score)), h('div', { class: 'muted' }, 'final score')),
+        h('div', {}, h('div', { class: 'adv-big' }, String(end.daysSurvived)), h('div', { class: 'muted' }, 'days survived')),
         h('div', {}, h('div', { class: 'adv-big' }, String(totalWins)), h('div', { class: 'muted' }, 'fights won')),
-        h('div', {}, h('div', { class: 'adv-big' }, String(best)), h('div', { class: 'muted' }, 'best score'))),
+        h('div', {}, h('div', { class: 'adv-big' }, String(best)), h('div', { class: 'muted' }, `best score (v${VERSION})`))),
+      newBest ? h('p', { class: 'ok adv-newbest' }, h('b', {}, 'New best score!')) : null,
+      h('h4', { class: 'adv-h4' }, 'How your score is worked out'),
       h('table', { class: 'adv-stats adv-wins' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Wins by tier'), h('th', { class: 'num' }, 'Wins'), h('th', { class: 'num' }, 'Points each'), h('th', { class: 'num' }, 'Points'))),
-        h('tbody', {}, tierRows)),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Enemy tier'), h('th', { class: 'num' }, 'Wins'), h('th', { class: 'num' }, 'Points per win'), h('th', { class: 'num' }, 'Points'))),
+        h('tbody', {}, tierRows, h('tr', { class: 'adv-total' }, h('td', {}, h('b', {}, 'Score')), h('td', { colspan: 2 }), h('td', { class: 'num' }, h('b', {}, String(bd.total)))))),
+      h('p', { class: 'adv-tight muted' }, 'Each win adds points for the enemy\'s tier. Draws and losses add nothing. Every day alive is another chance to win.'),
       h('div', { class: 'row adv-bottom' }, h('button', { class: 'primary', onclick: () => ctx.newGame() }, 'New game'))),
-    r ? h('h3', { class: 'adv-subtitle' }, 'The fatal battle') : null,
-    r ? renderBattleReport(r, ctx) : null));
+    fatal ? lossPanel(ctx, fatal) : null,
+    fatal ? h('h3', { class: 'adv-subtitle' }, 'The fatal battle') : null,
+    fatal ? renderBattleReport(fatal, ctx, { analysis: false }) : null));
 }
 
 // ------------------------------------------------------------------- plan ----
@@ -844,7 +923,7 @@ function gearStep(ctx, p, selGear, sel) {
       h('span', { class: 'muted adv-small' }, `${selGear.length} packed · ${combos} gear combination${combos === 1 ? '' : 's'} for the adventurer to choose from`)),
     s.gear.length
       ? h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-geartable' },
-        h('thead', {}, h('tr', {}, h('th', {}, 'Pack'), h('th', {}, 'Item and stats'), h('th', { title: 'Durability, then a warning (⚠) or a match (✓)' }, 'Durability'))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Pack'), h('th', {}, 'Item and stats'), h('th', { ...tip('Durability, then a warning (⚠) or a match (✓)') }, 'Durability'))),
         h('tbody', {}, rows)))
       : h('p', { class: 'warn' }, 'You own no gear: the adventurer fights unarmed with no armor.'));
 }

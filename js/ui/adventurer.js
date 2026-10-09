@@ -1,19 +1,20 @@
 // Adventurer tab: today's fight, owned gear, adventurer stats and rings, tomorrow's roster.
-// Read-only screen (no game actions); shared widgets come from endday.js.
-import { h, section, tip } from './dom.js';
+// The only game action here is a gear repair (the Repair button of the shared gear list, ui/gearlist.js, through ctx.act);
+// the other shared widgets come from endday.js.
+import { h, section } from './dom.js';
 import { SLOTS } from '../config.js';
 import { adventurerCombatant } from '../core/combat.js';
 import { adventurerRingTotals } from '../core/game.js';
 import { wornRings, ringContributions, ringDef, ringValue } from '../core/rings.js';
 import { intelValue, trackValueText } from '../core/intel.js';
-import { couldBreak } from '../core/gear.js';
 import { defaultPack } from '../core/pack.js';
 import { bannerLabel } from '../core/groups.js';
 import { groupVisible } from '../core/enemies.js';
 import { cap } from '../core/util.js';
 import { durText, winText } from './present.js';
 import { scheduleEstimates, cachedEstimate, estimatesPending } from './estimates.js';
-import { enemyCard, rosterTable, bannersNote, gearNameNode, gearCell, durabilityNode, wearRange, wearText, gearPower, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
+import { gearTable } from './gearlist.js';
+import { enemyCard, rosterTable, bannersNote, gearNameNode, wearRange, wearText, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
 
 const f2 = (v) => String(Math.round(v * 100) / 100);
 
@@ -38,7 +39,7 @@ function todayPanel(ctx) {
         h('td', {}, items.length ? items.map((g, i) => [i ? ', ' : '', gearNameNode(g), h('span', { class: 'muted' }, ` (${durText(g.durability)})`)]) : h('span', { class: 'muted' }, slot === 'sword' ? 'none (unarmed)' : 'none')));
     });
     return section(`Today (day ${s.day}): fighting ${e.name}`,
-      h('p', { class: 'adv-tight' }, 'The adventurer is away fighting ', h('b', {}, e.name), ' ', h('span', { class: `tier-${e.tier}` }, `(${e.tier}, +${cfg.enemies.tiers[e.tier].score} pts)`),
+      h('p', { class: 'adv-tight' }, 'The adventurer is away fighting ', h('b', {}, e.name), ' ', h('span', { class: `tier-${e.tier}` }, `(${e.tier})`),
         '. The result comes in when you end the day. The packed gear is away and can\'t be repaired today.'),
       h('p', { class: 'adv-tight muted adv-small' },
         groupVisible(s, e, cfg) && cfg.groups.list[e.group] ? ['Banner: ', h('b', { class: `bn bn-${e.group}` }, bannerLabel(e.group, cfg)), '. '] : 'Banner: unknown (the battle report shows it). ',
@@ -68,25 +69,11 @@ function gearPanel(ctx) {
       h('button', { class: 'small', onclick: () => ctx.setTab('workshop') }, 'Go to Workshop'));
   }
   const wear = wearRange(s, cfg); // the toughest tier: the could-break flag is against the toughest enemy
-  const rows = [];
-  for (const slot of SLOTS) {
-    const items = s.gear
-      .filter((g) => g.slot === slot)
-      .sort((a, b) => gearPower(b, cfg) - gearPower(a, cfg) || b.durability - a.durability || a.id - b.id);
-    rows.push(h('tr', { class: 'adv-slotrow' }, h('td', { colspan: 3 }, h('b', {}, cap(slot)), h('span', { class: 'muted' }, ` · ${items.length} owned`))));
-    for (const g of items) {
-      rows.push(h('tr', {},
-        h('td', {}, gearCell(g, cfg)),
-        h('td', {}, durabilityNode(g, cfg, wear, couldBreak(g, s, null, cfg))),
-        h('td', { class: 'adv-where' }, g.packed ? h('span', { class: 'warn', ...tip('Away with the adventurer today: it cannot be repaired until it comes back in the evening.') }, 'Packed (away)') : h('span', { class: 'ok' }, 'Home'))));
-    }
-  }
   const packed = s.gear.filter((g) => g.packed).length;
   return section(`Gear (${s.gear.length} items${packed ? `, ${packed} packed` : ''})`,
-    h('p', { class: 'adv-tight muted adv-small' }, `Wear: each item the adventurer uses loses ${wearText(s, cfg)}.${wear.red > 0 ? '' : ' The Gear care skill reduces it.'}`),
-    h('div', { class: 'adv-scroll' }, h('table', { class: 'adv-stats adv-geartable' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Item and stats'), h('th', {}, 'Durability'), h('th', {}, 'Where'))),
-      h('tbody', {}, rows))));
+    h('p', { class: 'adv-tight muted adv-small' }, `Wear: each item the adventurer uses loses ${wearText(s, cfg)}.${wear.red > 0 ? '' : ' The Gear care skill reduces it.'} `,
+      h('span', { class: 'warn' }, '⚠'), ' = could break in a fight against the toughest enemy. Repairs work at camp, by day, on gear the adventurer does not have today.'),
+    gearTable(ctx, s.gear, { scrap: false, repair: true, flags: true }));
 }
 
 function statsPanel(ctx) {

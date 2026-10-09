@@ -1,18 +1,20 @@
-// Workshop tab: storage, refining ore, cutting gems, smithing gear, repairing/scrapping gear.
+// Workshop tab: storage and gear overview, refining ore, cutting gems, smithing gear, the gear list (repair / scrap).
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.ws_*.
-import { h, section, bar, num, tip } from './dom.js';
-import { BARS, GEMS, SLOTS, ORES, GRADES } from '../config.js';
+// Order: status line, Storage and gear (ui/inventory.js), Refine, Cut, Smith, Gear (ui/gearlist.js).
+import { h, section, num, tip } from './dom.js';
+import { BARS, GEMS, SLOTS, GRADES } from '../config.js';
 import { refine, cut, repeat, refineDistribution, cutDistribution, refineMinutes, cutMinutes, GRADE_ORDER } from '../core/processing.js';
-import { craft, canCraft, craftCost, craftMinutes, smithMinutes, gearStats, gearName, gearPower, scrap, scrapReturn, STAT_LABELS, fmtStat } from '../core/gear.js';
+import { craft, canCraft, craftCost, craftMinutes, smithMinutes, gearStats, gearName, STAT_LABELS, STAT_NAMES, fmtStat } from '../core/gear.js';
 import { atCamp, timeLeft, returnMinutes } from '../core/map.js';
-import { smithBonuses } from '../core/bonuses.js';
 import { formatClock, formatDuration, cap, EPS } from '../core/util.js';
-import { qty, repairLine } from './repairui.js';
-import { durText } from './present.js';
+import { qty, repairAllInfo, repairAll } from './repairui.js';
+import { processOutcome, processMessage, failedText } from './present.js';
+import { inventoryPanel, keepInventoryScroll } from './inventory.js';
+import { gearTable } from './gearlist.js';
+import { gearStatsText } from './endday.js';
 
 const OUTCOMES = GRADE_ORDER; // F D C B A S: lowest on the left, highest on the right
-const GRADE_LIST = GRADE_ORDER.filter((g) => g !== 'F'); // D C B A S (lowest first, for display)
-const BEST_FIRST = [...GRADE_LIST].reverse(); // S A B C D (for picking the best grade in stock)
+const BEST_FIRST = [...GRADES].reverse(); // S A B C D (for picking the best grade in stock)
 const BASE_STATS = ['damage', 'accuracy', 'defense', 'dodge', 'speed'];
 
 // ------------------------------------------------------------------ helpers ----
@@ -20,14 +22,20 @@ const enough = (have, need) => (have || 0) + EPS >= need;
 const outcomeLabel = (g) => (g === 'F' ? 'Fail' : g);
 // pierce resistance is a % of the enemy's piercing ignored
 const statLabel = (k) => (k === 'pierceRes' ? 'Pierce resistance %' : STAT_LABELS[k] || k);
-const statLine = (stats) => Object.entries(stats).map(([k, v]) => fmtStat(k, v)).join(', ');
 const mins = (m) => formatDuration(m);
 
+// "Damage, accuracy and speed" from stat keys.
+function listText(names) {
+  const lower = names.map((n, i) => (i ? n.toLowerCase() : n));
+  return lower.length < 2 ? lower.join('') : `${lower.slice(0, -1).join(', ')} and ${lower[lower.length - 1]}`;
+}
+
 // Small table. Cells: string | Node | { v, cls, title, span }. Rows: array of cells, or { attrs, cells }.
+// A cell title is a tip(): it also opens on a tap.
 function tbl(head, rows, cls = '') {
   const cell = (tag, c) => {
     if (c && typeof c === 'object' && !(c instanceof Node) && !Array.isArray(c) && 'v' in c) {
-      return h(tag, { class: c.cls, title: c.title, colspan: c.span }, c.v);
+      return h(tag, { class: c.cls, colspan: c.span, ...(c.title ? tip(c.title) : {}) }, c.v);
     }
     return h(tag, {}, c);
   };
@@ -35,8 +43,6 @@ function tbl(head, rows, cls = '') {
     head ? h('thead', {}, h('tr', {}, head.map((c) => cell('th', c)))) : null,
     h('tbody', {}, rows.map((r) => (Array.isArray(r) ? h('tr', {}, r.map((c) => cell('td', c))) : h('tr', r.attrs || {}, r.cells.map((c) => cell('td', c)))))));
 }
-
-const countCell = (n) => (n > EPS ? { v: qty(n), cls: 'num' } : { v: '·', cls: 'num ws-zero' });
 
 // Why workshop actions are unavailable right now (null = available).
 function blockReason(state) {
@@ -58,16 +64,26 @@ function pickGrade(stock, prefix, need, current) {
   return most || current;
 }
 
+// The result box of the last action in an area: green, or red when it was refused or any attempt failed. The part of a
+// batch message that says how many failed is bold.
+function resultBox(last) {
+  const parts = last.bold && last.msg.includes(last.bold) ? last.msg.split(last.bold) : null;
+  return h('p', { class: `ws-last ws-result ${last.tone}`, 'data-tone': last.tone },
+    h('span', { class: 'muted' }, 'Last: '),
+    parts ? [parts[0], h('b', {}, last.bold), parts.slice(1).join(last.bold)] : last.msg);
+}
+
 // --------------------------------------------------------------------- main ----
 export function renderWorkshop(root, ctx) {
   const blocked = blockReason(ctx.state);
   root.append(h('div', { class: 'ws' },
     statusBar(ctx, blocked),
-    storagePanel(ctx),
+    inventoryPanel(ctx, { onGear: (slot, material) => pickGear(ctx, slot, material), onGem: (gem) => pickGem(ctx, gem) }),
     processPanel(ctx, 'refine', blocked),
     processPanel(ctx, 'cut', blocked),
     smithPanel(ctx, blocked),
     gearPanel(ctx, blocked)));
+  keepInventoryScroll(root, ctx); // a click in the overview re-renders: keep its scroll boxes where the player had them
 }
 
 function statusBar(ctx, blocked) {
@@ -91,63 +107,46 @@ function statusBar(ctx, blocked) {
       : h('span', { class: 'warn' }, 'No work time left today. End the day from the top bar.'));
 }
 
-// ------------------------------------------------------------------ storage ----
-function storagePanel(ctx) {
-  const st = ctx.state.storage;
-  const gradeHead = (first) => [first, ...GRADE_LIST.map((g) => ({ v: g, cls: `num grade-${g}` })), { v: 'Total', cls: 'num' }];
-  const gradeRow = (store, k) => {
-    const vals = GRADE_LIST.map((g) => store[`${k}:${g}`] || 0);
-    return [cap(k), ...vals.map(countCell), { ...countCell(vals.reduce((a, b) => a + b, 0)), cls: 'num ws-total' }];
-  };
-  return section('Storage',
-    h('div', { class: 'ws-storage' },
-      h('div', { class: 'ws-raw' }, h('h4', {}, 'Raw ores'), tbl(null, ORES.map((o) => [cap(o), countCell(st.ore[o] || 0)]), 'ws-compact')),
-      h('div', { class: 'ws-raw' }, h('h4', {}, 'Raw gems'), tbl(null, GEMS.map((g) => [cap(g), countCell(st.gem[g] || 0)]), 'ws-compact')),
-      h('div', { class: 'ws-graded' }, h('h4', {}, 'Bars by grade'), tbl(gradeHead('Bar'), BARS.map((b) => gradeRow(st.bars, b)), 'ws-compact')),
-      h('div', { class: 'ws-graded' }, h('h4', {}, 'Cut gems by grade'), tbl(gradeHead('Gem'), GEMS.map((g) => gradeRow(st.cut, g)), 'ws-compact'))));
+// A click on a gear cell of the overview picks that gear type and material in the smith form; a click on a gem row picks the gem.
+function pickGear(ctx, slot, material) {
+  const ui = ctx.ui;
+  ui.ws_slot = slot;
+  ui.ws_mat = material;
+  ui.ws_grade = pickGrade(ctx.state.storage.bars, material, ctx.cfg.gear.slots[slot].bars, ui.ws_grade);
+  ctx.rerender();
+}
+
+function pickGem(ctx, gem) {
+  ctx.ui.ws_gem = gem;
+  ctx.ui.ws_gemGrade = pickGrade(ctx.state.storage.cut, gem, 1, ctx.ui.ws_gemGrade || 'D');
+  ctx.rerender();
 }
 
 // ------------------------------------------------------- refine / cut panels ----
-// Outcome header. labelled = true adds the label column used by the gem rows (Now / Novice / Master).
-function distHeader(labelled = false) {
-  const nums = h('div', { class: 'ws-dist-nums' }, OUTCOMES.map((g) => h('span', { class: `grade-${g}` }, outcomeLabel(g))));
-  if (!labelled) return h('div', { class: 'ws-dist' }, h('div', {}, 'Outcome chance %'), nums);
-  return h('div', { class: 'ws-dist ws-dist-l' }, h('div', {}, 'Outcome chance %'),
-    h('div', { class: 'ws-dist-row' }, h('span', { class: 'ws-dist-lab' }), nums));
+// Outcome header: Fail D C B A S, lowest on the left.
+function distHeader() {
+  return h('div', { class: 'ws-dist' }, h('div', {}, 'Outcome chance %'),
+    h('div', { class: 'ws-dist-nums' }, OUTCOMES.map((g) => h('span', { class: `grade-${g}` }, outcomeLabel(g)))));
 }
 
-const distNums = (dist, muted) => h('div', { class: 'ws-dist-nums' },
-  OUTCOMES.map((g) => h('span', { class: !(dist[g] > EPS) ? 'ws-zero' : muted ? '' : `grade-${g}` }, num(dist[g] || 0))));
+const distNums = (dist) => h('div', { class: 'ws-dist-nums' },
+  OUTCOMES.map((g) => h('span', { class: !(dist[g] > EPS) ? 'ws-zero' : `grade-${g}` }, num(dist[g] || 0))));
 const distSegs = (dist) => h('div', { class: 'ws-dist-bar' }, OUTCOMES.map((g) => (dist[g] > EPS
-  ? h('span', { class: `ws-seg ws-seg-${g}`, style: { width: `${dist[g]}%` }, title: `${outcomeLabel(g)}: ${num(dist[g])}%` })
+  ? h('span', { class: `ws-seg ws-seg-${g}`, style: { width: `${dist[g]}%` } })
   : null)));
 const distText = (dist) => OUTCOMES.map((g) => `${outcomeLabel(g)} ${num(dist[g] || 0)}%`).join(', ');
 
-// Gem rows: the current table (bar + numbers) and the novice / master tables from config below it.
-function distRefView(rows, title) {
-  return h('div', { class: 'ws-dist ws-dist-l', title },
-    h('div', { class: 'ws-dist-row' }, h('span', { class: 'ws-dist-lab' }), distSegs(rows[0].dist)),
-    rows.map((r) => h('div', { class: `ws-dist-row${r.muted ? ' ws-dist-ref' : ''}`, title: r.title },
-      h('span', { class: 'ws-dist-lab' }, r.label), distNums(r.dist, r.muted))));
-}
-
+// One bar and one row of numbers: your chances now. The hover has the base chances next to them.
 function distView(dist, title) {
-  return h('div', { class: 'ws-dist', title }, distSegs(dist), distNums(dist, false));
+  return h('div', { class: 'ws-dist', ...tip(title) }, distSegs(dist), distNums(dist));
 }
 
 function processPanel(ctx, kind, blocked) {
   const s = ctx.state;
   const cfg = ctx.cfg;
   const isRefine = kind === 'refine';
-  const b = smithBonuses(s, cfg);
   const left = timeLeft(s, cfg);
   const verb = isRefine ? 'Refine' : 'Cut';
-  const sk = cfg.skills;
-  const blendPerLevel = sk.perMaterial.gemGrade.effects.cutBlend; // % of the way to the master table, per grade skill level
-  const cutFailPerLevel = sk.perMaterial.gemFail.effects.cutFail; // failure points removed per cutting skill level
-  // Level at which the gem grade skill reaches the master table (100% of the way).
-  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(blendPerLevel, EPS) - 1e-9));
-  const levelOf = (key) => (s.skills[key] && s.skills[key].level) || 0;
 
   const rows = (isRefine ? BARS : GEMS).map((k) => {
     const def = isRefine ? cfg.refine[k] : cfg.cut[k];
@@ -156,9 +155,6 @@ function processPanel(ctx, kind, blocked) {
       : [{ label: `1 raw ${k}`, need: 1, have: s.storage.gem[k] || 0 }];
     const minutes = isRefine ? refineMinutes(s, k, cfg) : cutMinutes(s, k, cfg);
     const dist = isRefine ? refineDistribution(s, k, cfg) : cutDistribution(s, k, cfg);
-    const upPct = isRefine ? b.oreUpgrade(k) : b.gemUpgrade(k); // gems: Gem luck rings only
-    const failRed = isRefine ? b.oreFailRed(k) : b.gemFailRed(k);
-    const timePct = Math.min(isRefine ? b.refineTimePct : b.cutTimePct, cfg.processing.maxTimeReduction);
     const byMat = Math.min(...inputs.map((i) => Math.floor((i.have + EPS) / i.need)));
     const byTime = minutes > 0 ? Math.max(0, Math.floor((left + EPS) / minutes)) : Infinity;
     const n = Math.max(0, Math.min(byMat, byTime));
@@ -167,36 +163,17 @@ function processPanel(ctx, kind, blocked) {
       const st = ctx.state;
       const one = () => (isRefine ? refine(st, k, cfg) : cut(st, k, cfg));
       const res = max === 1 ? one() : repeat(st, one, max);
-      if (res.ok && res.results) res.msg = `${cap(k)}${isRefine ? ' bars' : ''}: ${res.msg}`;
-      ctx.ui.ws_last = { area: kind, ok: res.ok, msg: res.msg };
+      const out = processOutcome(res);
+      res.msg = processMessage(kind, k, res);
+      res.tone = out.tone; // the toast takes the same colour as the result box
+      ctx.ui.ws_last = { area: kind, tone: out.tone, msg: res.msg, bold: failedText(res) };
       return res;
     }, { toast: true });
 
-    const tiered = !isRefine && !!def.novice; // gem table blends novice -> master
-    const bonusBits = [];
-    if (upPct > EPS) bonusBits.push(`+${num(upPct)}% upgrade luck${tiered ? ' (Gem luck rings)' : ''}`);
-    if (failRed > EPS && !tiered) bonusBits.push(`−${num(failRed)} fail`);
-    if (timePct > EPS) bonusBits.push(`−${num(timePct)}% time`);
-
-    let nameCell;
-    let distCell;
-    if (tiered) {
-      const gLv = levelOf(`gemGrade_${k}`);
-      const fLv = levelOf(`gemFail_${k}`);
-      const blend = b.gemBlend(k);
-      nameCell = h('div', {}, h('b', {}, cap(k)),
-        h('div', { class: 'ws-sub', title: `${cap(k)} grade skill level ${gLv} of ${sk.maxLevel}: your table is ${num(blend)}% of the way from novice to master` }, `Grade skill lv ${gLv} · ${num(blend)}% to master`),
-        h('div', { class: 'ws-sub', title: `${cap(k)} cutting skill level ${fLv} of ${sk.maxLevel}: failure ${num(failRed)} points lower` }, `Cutting skill lv ${fLv} · fail ${num(dist.F)}%`),
-        bonusBits.length ? h('div', { class: 'ws-sub ok' }, bonusBits.join(' · ')) : null);
-      distCell = distRefView([
-        { label: 'Now', dist, title: `Your chances now: ${distText(dist)}` },
-        { label: 'Novice', dist: def.novice, muted: true, title: `Novice table (grade skill level 0): ${distText(def.novice)}` },
-        { label: 'Master', dist: def.master, muted: true, title: `Master table (grade skill level ${masterLv}; its failure chance needs the cutting skill too): ${distText(def.master)}` },
-      ], `Now: ${distText(dist)}. Novice (level 0): ${distText(def.novice)}. Master (grade skill level ${masterLv}; failure from the cutting skill): ${distText(def.master)}.${upPct > EPS ? ` Gem luck rings: +${num(upPct)}% upgrade chance on top.` : ''}`);
-    } else {
-      nameCell = h('div', {}, h('b', {}, cap(k), isRefine ? ' bar' : ''), bonusBits.length ? h('div', { class: 'ws-sub ok' }, bonusBits.join(' · ')) : null);
-      distCell = distView(dist, `Base chances: ${distText(def.dist)}.${bonusBits.length ? ` Your bonuses: ${bonusBits.join(', ')}.` : ''}`);
-    }
+    // your chances now; the hover adds the base chances (for a gem, the first-time cutter's)
+    const base = isRefine ? def.dist : def.novice || def.dist;
+    const baseLabel = isRefine ? 'Base chances' : 'Chances for a first-time cutter';
+    const outcomeTip = `Your chances: ${distText(dist)}. ${baseLabel}: ${distText(base)}. Your skills and rings make the difference (see Skills).`;
 
     let makeSub;
     if (byMat === 0) makeSub = h('div', { class: 'ws-sub' }, isRefine ? 'not enough ore' : 'no raw gems');
@@ -207,35 +184,33 @@ function processPanel(ctx, kind, blocked) {
     const btn = (label, count, max) => h('button', {
       class: 'small',
       disabled: !!blocked || n < count,
-      title: blocked ? `Workshop closed: ${blocked}`
+      'data-run': `${kind}:${k}:${max === Infinity ? 'all' : max}`,
+      ...tip(blocked ? `Workshop closed: ${blocked}`
         : n < count ? `Can make only ${n} right now`
-          : `${verb} ${max === Infinity ? n : count} (${mins((max === Infinity ? n : count) * minutes)})`,
+          : `${verb} ${max === Infinity ? n : count} (${mins((max === Infinity ? n : count) * minutes)})`),
       onclick: () => run(max),
     }, label);
 
+    // Bar | Needs (you have) | Outcome chance | You can make | Time each | buttons
     return [
-      nameCell,
+      h('div', {}, h('b', {}, cap(k), isRefine ? ' bar' : '')),
       h('div', {}, inputs.map((i) => h('div', {}, i.label, ' ',
         h('span', { class: enough(i.have, i.need) ? 'ok' : 'err' }, `(have ${qty(i.have)})`)))),
-      { v: `${num(minutes)}m`, cls: 'num', title: `Base ${def.minutes}m${timePct > EPS ? `, −${num(timePct)}% from rings/skills` : ''}` },
-      distCell,
+      distView(dist, outcomeTip),
       h('div', {}, h('b', { class: 'ws-big' }, String(n)), makeSub),
+      { v: `${num(minutes)}m`, cls: 'num', title: `Base ${def.minutes}m. Your skills and rings make it faster (see Skills).` },
       h('div', { class: 'ws-btns' }, btn(`${verb} 1`, 1, 1), btn(`${verb} 5`, 5, 5), btn(`${verb} all${n > 0 ? ` (${n})` : ''}`, 1, Infinity)),
     ];
   });
 
   const last = ctx.ui.ws_last && ctx.ui.ws_last.area === kind ? ctx.ui.ws_last : null;
-  const tieredAll = !isRefine && GEMS.every((g) => cfg.cut[g].novice);
-  const gemLuck = b.gemUpgrade();
   return section(isRefine ? 'Refine ore into bars' : 'Cut gems',
     h('p', { class: 'ws-sub ws-intro' }, isRefine
-      ? 'Each bar rolls a grade (D lowest, S highest). Fail = the ore is lost. Chances already include your rings and skills.'
-      : tieredAll
-        ? `Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. "Now" is your table: each gem's grade skill blends D to S from the novice table (level 0) to the master table (level ${masterLv}), +${num(blendPerLevel)}% of the way per level (General cutting adds a little to every gem); failure starts at the novice value and its cutting skill lowers it by ${num(cutFailPerLevel)} points per level. Gem luck rings (+${num(gemLuck)}% now) then give each successful cut that chance to go up one grade, on top. "Now" includes all of this.`
-        : 'Each cut gem rolls a grade (D lowest, S highest). Fail = the gem is lost. Chances already include your rings and skills.'),
+      ? 'Each bar rolls a grade from D (lowest) to S (highest). On a fail the ore is lost.'
+      : 'Each cut gem rolls a grade from D to S. On a fail the gem is lost. You get better the more you cut of each gem.'),
     h('div', { class: 'ws-scroll' },
-      tbl([isRefine ? 'Bar' : 'Gem', 'Needs (you have)', { v: 'Time each', cls: 'num' }, distHeader(tieredAll), 'You can make', ''], rows, `ws-process${tieredAll ? ' ws-process-gems' : ''}`)),
-    last ? h('p', { class: `ws-last ${last.ok ? '' : 'err'}` }, h('span', { class: 'muted' }, 'Last: '), last.msg) : null);
+      tbl([isRefine ? 'Bar' : 'Gem', 'Needs (you have)', distHeader(), 'You can make', { v: 'Time each', cls: 'num' }, ''], rows, 'ws-process')),
+    last ? resultBox(last) : null);
 }
 
 // -------------------------------------------------------------------- smith ----
@@ -248,21 +223,32 @@ function initSmith(ctx) {
     ui.ws_mat = [...BARS].reverse().find((m) => bestGrade(st.bars, m, need)) || BARS[0];
     ui.ws_grade = null;
   }
-  if (!GRADE_LIST.includes(ui.ws_grade)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, need, 'D');
+  if (!GRADES.includes(ui.ws_grade)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, need, 'D');
   if (ui.ws_gem !== '' && !GEMS.includes(ui.ws_gem)) ui.ws_gem = '';
-  if (!GRADE_LIST.includes(ui.ws_gemGrade)) ui.ws_gemGrade = ui.ws_gem ? pickGrade(st.cut, ui.ws_gem, 1, 'D') : 'D';
+  if (!GRADES.includes(ui.ws_gemGrade)) ui.ws_gemGrade = ui.ws_gem ? pickGrade(st.cut, ui.ws_gem, 1, 'D') : 'D';
 }
 
 function gradeButtons(selected, counts, need, onPick, unit) {
-  return h('div', { class: 'ws-gbtns' }, GRADE_LIST.map((g) => {
+  return h('div', { class: 'ws-gbtns' }, GRADES.map((g) => {
     const have = counts[g] || 0;
     const short = !enough(have, need);
     return h('button', {
       class: `ws-gbtn${g === selected ? ' sel' : ''}${short ? ' short' : ''}`,
-      title: `${qty(have)} ${unit(g)} in stock${short ? ` (need ${need})` : ''}`,
+      'data-grade': g,
+      ...tip(`${qty(have)} ${unit(g)} in stock${short ? ` (need ${need})` : ''}`),
       onclick: () => onPick(g),
     }, h('b', { class: `grade-${g}` }, g), ' ', h('span', { class: short ? 'ws-zero' : '' }, qty(have)));
   }));
+}
+
+// A choosable tile: a label and a small line under it. `short` draws it dashed (you cannot make it from what you have).
+function tile(label, sub, { sel, short, hover, onPick, data }) {
+  return h('button', {
+    class: `ws-tile${sel ? ' sel' : ''}${short ? ' short' : ''}`,
+    ...(data || {}),
+    ...(hover ? tip(hover) : {}),
+    onclick: onPick,
+  }, h('b', {}, label), sub ? h('span', { class: 'ws-tile-sub' }, sub) : null);
 }
 
 function fxText(effects, gi, mult = 1) {
@@ -285,75 +271,78 @@ function smithPanel(ctx, blocked) {
     fn();
     ctx.rerender();
   };
-  const matTotal = (m) => GRADE_LIST.reduce((a, g) => a + (st.bars[`${m}:${g}`] || 0), 0);
-  const gemTotal = (t) => GRADE_LIST.reduce((a, g) => a + (st.cut[`${t}:${g}`] || 0), 0);
+  const matGrades = (m) => GRADES.filter((g) => (st.bars[`${m}:${g}`] || 0) > EPS);
+  const matTotal = (m) => GRADES.reduce((a, g) => a + (st.bars[`${m}:${g}`] || 0), 0);
+  const gemTotal = (t) => GRADES.reduce((a, g) => a + (st.cut[`${t}:${g}`] || 0), 0);
 
-  // ---- form
-  const form = h('div', { class: 'ws-form' },
-    h('label', { for: 'ws-slot' }, 'Slot'),
-    h('select', {
-      id: 'ws-slot',
-      onchange: (e) => pick(() => {
-        ui.ws_slot = e.target.value;
-        const n = cfg.gear.slots[ui.ws_slot].bars;
+  // ---- form: tiles, no drop-downs
+  const slotTiles = SLOTS.map((sl) => {
+    const n = cfg.gear.slots[sl].bars;
+    const stats = listText(Object.keys(cfg.gear.slots[sl].stats).map((k) => (STAT_NAMES[k] ? STAT_NAMES[k][0] : k)));
+    return tile(cap(sl), `${n} bars`, {
+      sel: sl === slot,
+      data: { 'data-slot': sl },
+      hover: `${cap(sl)}: ${n} bars, ${num(smithMinutes(s, sl, mat, false, cfg))}m to smith. ${stats}.`,
+      onPick: () => pick(() => {
+        ui.ws_slot = sl;
         if (!enough(st.bars[`${ui.ws_mat}:${ui.ws_grade}`], n)) ui.ws_grade = pickGrade(st.bars, ui.ws_mat, n, ui.ws_grade);
       }),
-    }, SLOTS.map((sl) => h('option', { value: sl, selected: sl === slot }, `${cap(sl)} — ${cfg.gear.slots[sl].bars} bars, ${num(smithMinutes(s, sl, mat, false, cfg))}m`))),
-
-    h('label', { for: 'ws-mat' }, 'Material'),
-    h('select', {
-      id: 'ws-mat',
-      onchange: (e) => pick(() => {
-        ui.ws_mat = e.target.value;
-        ui.ws_grade = pickGrade(st.bars, ui.ws_mat, need, ui.ws_grade);
+    });
+  });
+  const matTiles = BARS.map((m) => {
+    const short = !bestGrade(st.bars, m, need);
+    const have = matGrades(m);
+    return tile(cap(m), have.length ? have.map((g) => `${g} ${qty(st.bars[`${m}:${g}`])}`).join(' · ') : 'none', {
+      sel: m === mat,
+      short,
+      data: { 'data-material': m },
+      hover: `${cap(m)}: stats ×${cfg.gear.materialMult[m]}. You have ${qty(matTotal(m))} ${m} bars.${short ? ` Not enough of one grade for a ${slot} (needs ${need}).` : ''}`,
+      onPick: () => pick(() => {
+        ui.ws_mat = m;
+        ui.ws_grade = pickGrade(st.bars, m, need, ui.ws_grade);
       }),
-    }, BARS.map((m) => h('option', { value: m, selected: m === mat }, `${cap(m)} (stats ×${cfg.gear.materialMult[m]}) — ${qty(matTotal(m))} bars`))),
+    });
+  });
+  const gemTiles = [
+    tile('None', 'no gem', { sel: !gem, data: { 'data-gem': 'none' }, hover: 'No gem: a plain item.', onPick: () => pick(() => { ui.ws_gem = ''; }) }),
+    ...GEMS.map((t) => tile(cap(t), `${qty(gemTotal(t))} cut`, {
+      sel: !!gem && gem.type === t,
+      short: gemTotal(t) < EPS,
+      data: { 'data-gem': t },
+      hover: `${cap(t)}: ${qty(gemTotal(t))} cut gems in stock. Infusing adds ${cfg.gear.infuseMin}m and uses 1 cut gem.`,
+      onPick: () => pick(() => {
+        ui.ws_gem = t;
+        ui.ws_gemGrade = pickGrade(st.cut, t, 1, ui.ws_gemGrade);
+      }),
+    })),
+  ];
 
+  const form = h('div', { class: 'ws-form' },
+    h('span', {}, 'Gear type'), h('div', { class: 'ws-tiles' }, slotTiles),
+    h('span', {}, 'Material'), h('div', { class: 'ws-tiles' }, matTiles),
     h('span', {}, 'Bar grade'),
     h('div', {},
-      gradeButtons(grade, Object.fromEntries(GRADE_LIST.map((g) => [g, st.bars[`${mat}:${g}`]])), need,
+      gradeButtons(grade, Object.fromEntries(GRADES.map((g) => [g, st.bars[`${mat}:${g}`]])), need,
         (g) => pick(() => (ui.ws_grade = g)), (g) => `${mat} ${g} bars`),
       h('div', { class: 'ws-sub' }, `Needs ${need} ${mat} bars of one grade. Grade multiplies stats: `,
-        GRADE_LIST.map((g) => `${g} ×${cfg.gear.gradeMult[g]}`).join(', '), '.')),
+        GRADES.map((g) => `${g} ×${cfg.gear.gradeMult[g]}`).join(', '), '.')),
+    h('span', {}, 'Gem'), h('div', { class: 'ws-tiles' }, gemTiles),
+    gem ? h('span', {}, 'Gem grade') : null,
+    gem
+      ? h('div', {},
+        gradeButtons(ui.ws_gemGrade, Object.fromEntries(GRADES.map((g) => [g, st.cut[`${gem.type}:${g}`]])), 1,
+          (g) => pick(() => (ui.ws_gemGrade = g)), (g) => `cut ${gem.type} ${g}`),
+        h('div', { class: 'ws-sub' }, `Infusing adds ${cfg.gear.infuseMin}m and uses 1 cut gem.`))
+      : null);
 
-    h('label', { for: 'ws-gem' }, 'Gem'),
-    h('select', {
-      id: 'ws-gem',
-      onchange: (e) => pick(() => {
-        ui.ws_gem = e.target.value;
-        if (ui.ws_gem) ui.ws_gemGrade = pickGrade(st.cut, ui.ws_gem, 1, ui.ws_gemGrade);
-      }),
-    },
-    h('option', { value: '', selected: !gem }, 'None'),
-    GEMS.map((t) => h('option', { value: t, selected: gem && gem.type === t }, `${cap(t)} — ${qty(gemTotal(t))} cut`))),
-
-    h('span', {}, gem ? 'Gem grade' : 'Gem grade (reference)'),
-    h('div', {},
-      gem
-        ? gradeButtons(ui.ws_gemGrade, Object.fromEntries(GRADE_LIST.map((g) => [g, st.cut[`${gem.type}:${g}`]])), 1,
-          (g) => pick(() => (ui.ws_gemGrade = g)), (g) => `cut ${gem.type} ${g}`)
-        : h('div', { class: 'ws-gbtns' }, GRADE_LIST.map((g) => h('button', {
-          class: `ws-gbtn${g === ui.ws_gemGrade ? ' sel' : ''}`,
-          title: 'Grade used for the gem effect reference',
-          onclick: () => pick(() => (ui.ws_gemGrade = g)),
-        }, h('b', { class: `grade-${g}` }, g)))),
-      h('div', { class: 'ws-sub' }, gem ? `Infusing adds ${cfg.gear.infuseMin}m and uses 1 cut gem.` : 'Optional. Pick a gem to infuse a bonus.')));
-
-  // ---- preview
+  // ---- preview: no durability (a new item is always at 100%)
   const mock = { slot, material: mat, grade, gem };
-  const stats = gearStats(mock, cfg);
-  const base = gearStats({ ...mock, gem: null }, cfg);
   const baseMinutes = craftMinutes(slot, !!gem, cfg);
   const minutes = smithMinutes(s, slot, mat, !!gem, cfg);
   const cost = craftCost(spec, cfg);
   let reason = blocked ? `Workshop closed: ${blocked}` : canCraft(s, spec, cfg);
   if (!reason && s.time + minutes > cfg.time.dayEndMin + EPS) reason = `Not enough time left today (needs ${num(minutes)}m, ${mins(Math.max(0, left))} left).`;
 
-  const statRows = Object.entries(stats).map(([k, v]) => {
-    const fromGem = v - (base[k] || 0);
-    const split = gem && fromGem > EPS && base[k] ? h('span', { class: 'muted' }, ` (${num(base[k])} + ${num(fromGem)} gem)`) : gem && !base[k] ? h('span', { class: 'muted' }, ' (gem)') : null;
-    return [statLabel(k), { v: [h('b', {}, num(v)), split], cls: 'num' }];
-  });
   const costLines = [
     ...Object.entries(cost.bars).map(([k, n]) => {
       const [m, g] = k.split(':');
@@ -364,37 +353,41 @@ function smithPanel(ctx, blocked) {
       return { text: `${n} × cut ${cap(t)} ${g}`, have: st.cut[k] || 0, n };
     }),
   ];
-  const timeParts = `${need} bars × ${cfg.gear.smithMinPerBar}m${gem ? ` + ${cfg.gear.infuseMin}m gem` : ''}`;
-  const timeTip = minutes < baseMinutes - EPS
-    ? `Base ${num(baseMinutes)}m (${timeParts}); your ${cap(mat)} smithing skill cuts it to ${num(minutes)}m. See the Skills tab.`
-    : `Base ${num(baseMinutes)}m (${timeParts}). The ${cap(mat)} smithing skill (Skills tab) makes it faster.`;
+  const timeTip = `${need} bars × ${cfg.gear.smithMinPerBar}m${gem ? ` + ${cfg.gear.infuseMin}m gem` : ''} = ${num(baseMinutes)}m before your ${cap(mat)} smithing skill.`;
 
   const preview = h('div', { class: 'ws-preview' },
-    h('div', { class: 'ws-preview-name' }, 'Result: ', h('b', { class: `grade-${grade}` }, gearName(mock)), h('span', { class: 'muted' }, ' · 100% durability')),
-    tbl(null, statRows, 'ws-compact ws-stats'),
+    h('div', { class: 'ws-preview-name' }, 'Result: ', h('b', { class: `grade-${grade}` }, gearName(mock))),
+    h('div', { class: 'ws-statsline' }, gearStatsText(mock, cfg)),
     h('div', { class: 'ws-cost' },
       h('div', {}, h('span', { class: 'muted' }, 'Cost: '), costLines.map((c, i) => [i ? ', ' : '', c.text, ' ',
         h('span', { class: enough(c.have, c.n) ? 'ok' : 'err' }, `(have ${qty(c.have)})`)])),
-      h('div', {}, h('span', { class: 'muted' }, 'Time: '), h('b', { ...tip(timeTip) }, `${num(minutes)}m`),
+      h('div', { class: 'ws-time' }, h('span', { class: 'muted' }, 'Time: '), h('b', { ...tip(timeTip) }, `${num(minutes)}m`),
         !blocked && !reason ? h('span', { class: 'muted' }, ` · done at ${formatClock(s.time + minutes)}`) : null)),
     h('div', { class: 'row ws-craft-row' },
       h('button', {
         class: 'primary',
+        id: 'ws-craft',
         disabled: !!reason,
-        title: reason || `Craft ${gearName(mock)}`,
+        ...tip(reason || `Craft ${gearName(mock)}`),
         onclick: () => ctx.act(() => {
           const res = craft(ctx.state, spec, cfg);
-          ctx.ui.ws_last = { area: 'smith', ok: res.ok, msg: res.msg };
+          ctx.ui.ws_last = { area: 'smith', tone: res.ok ? 'ok' : 'err', msg: res.msg };
+          if (res.ok) {
+            // the next item starts plain: the gem picker goes back to None, and the bar grade is re-picked if it ran short
+            ctx.ui.ws_gem = '';
+            ctx.ui.ws_gemGrade = null;
+            if (!enough(ctx.state.storage.bars[`${mat}:${grade}`], need)) ctx.ui.ws_grade = pickGrade(ctx.state.storage.bars, mat, need, grade);
+          }
           return res;
         }, { toast: true }),
       }, `Craft (${num(minutes)}m)`),
       reason ? h('span', { class: 'err ws-reason' }, reason) : h('span', { class: 'ok ws-reason' }, 'Ready to craft.')),
-    ui.ws_last && ui.ws_last.area === 'smith' ? h('p', { class: `ws-last ${ui.ws_last.ok ? '' : 'err'}` }, h('span', { class: 'muted' }, 'Last: '), ui.ws_last.msg) : null);
+    ui.ws_last && ui.ws_last.area === 'smith' ? resultBox(ui.ws_last) : null);
 
-  // ---- reference: every slot at this material/grade
+  // ---- reference (closed): every gear type at this material and grade, and the gem effects
   const mult = cfg.gear.materialMult[mat] * cfg.gear.gradeMult[grade];
   const slotRef = tbl(
-    ['Slot', { v: 'Bars', cls: 'num' }, { v: 'Time', cls: 'num' }, ...BASE_STATS.map((k) => ({ v: statLabel(k), cls: 'num' }))],
+    ['Gear type', { v: 'Bars', cls: 'num' }, { v: 'Time', cls: 'num' }, ...BASE_STATS.map((k) => ({ v: statLabel(k), cls: 'num' }))],
     SLOTS.map((sl) => {
       const st2 = gearStats({ slot: sl, material: mat, grade, gem: null }, cfg);
       return {
@@ -404,15 +397,14 @@ function smithPanel(ctx, blocked) {
       };
     }), 'ws-compact');
 
-  // ---- reference: gem effects at the chosen gem grade
   const gGrade = ui.ws_gemGrade;
   const gi = GRADES.indexOf(gGrade); // config tables are indexed D..S
   let gemRef;
   if (gem) {
     const fx = cfg.gemEffects[gem.type];
     gemRef = [
-      h('h4', {}, `${cap(gem.type)} ${gGrade} infusion by slot`),
-      h('div', { class: 'ws-scroll' }, tbl(['Slot', { v: 'Strength', cls: 'num' }, 'Bonus added'], SLOTS.map((sl) => {
+      h('h4', {}, `${cap(gem.type)} ${gGrade} infusion by gear type`),
+      h('div', { class: 'ws-scroll' }, tbl(['Gear type', { v: 'Strength', cls: 'num' }, 'Bonus added'], SLOTS.map((sl) => {
         const m = sl === 'sword' ? 1 : cfg.gear.gemArmorMult[sl];
         return {
           attrs: { class: sl === slot ? 'ws-selrow' : '' },
@@ -423,66 +415,53 @@ function smithPanel(ctx, blocked) {
   } else {
     gemRef = [
       h('h4', {}, `Gem effects at grade ${gGrade}`),
+      h('div', { class: 'ws-gbtns' }, GRADES.map((g) => h('button', {
+        class: `ws-gbtn${g === gGrade ? ' sel' : ''}`,
+        ...tip('Grade used for this table'),
+        onclick: () => pick(() => (ui.ws_gemGrade = g)),
+      }, h('b', { class: `grade-${g}` }, g)))),
       h('div', { class: 'ws-scroll' }, tbl(['Gem', 'On a sword', 'On armor (×1)'], GEMS.map((t) => [cap(t), fxText(cfg.gemEffects[t].weapon, gi), fxText(cfg.gemEffects[t].armor, gi)]), 'ws-compact')),
     ];
   }
   const armorMults = Object.entries(cfg.gear.gemArmorMult).filter(([, m]) => m !== 1).map(([sl, m]) => `${sl} ×${m}`).join(', ');
 
-  const reference = h('div', { class: 'ws-ref' },
-    h('h4', {}, `All slots at ${grade} ${cap(mat)} (stats ×${num(mult, 2)})`),
-    h('div', { class: 'ws-scroll' }, slotRef),
-    gemRef,
-    h('div', { class: 'ws-sub' }, `Armor gem effects are stronger on some slots: ${armorMults}. The gem's grade does not depend on the bars' grade.`));
+  // the panel starts closed but keeps its state in ctx.ui.ws_refOpen: picking a tile or a grade redraws the tab
+  const remember = (v) => { ui.ws_refOpen = v; };
+  const reference = h('details', { class: 'ws-refbox', open: !!ui.ws_refOpen },
+    h('summary', { onclick: () => remember(!reference.open) }, 'Compare all gear types and gem effects'),
+    h('div', { class: 'ws-ref' },
+      h('h4', {}, `All gear types at ${grade} ${cap(mat)} (stats ×${num(mult, 2)})`),
+      h('div', { class: 'ws-scroll' }, slotRef),
+      gemRef,
+      h('div', { class: 'ws-sub' }, `Armor gem effects are stronger on some gear types: ${armorMults}. The gem's grade does not depend on the bars' grade.`)));
+  // click fires before the browser toggles (so the state is saved even if a redraw follows at once); toggle also covers find-in-page
+  reference.addEventListener('toggle', () => remember(reference.open));
 
-  return section('Smith gear',
-    h('div', { class: 'ws-smith' }, h('div', {}, form, preview), reference));
+  return section('Smith gear', h('div', { class: 'ws-smith' }, form, preview), reference);
 }
 
 // --------------------------------------------------------------------- gear ----
 function gearPanel(ctx, blocked) {
   const s = ctx.state;
   const cfg = ctx.cfg;
-  const power = (g) => gearPower(g, cfg);
-  const items = [...s.gear].sort((a, b) => SLOTS.indexOf(a.slot) - SLOTS.indexOf(b.slot) || power(b) - power(a) || a.id - b.id);
-  const packedCount = items.filter((g) => g.packed).length;
-  const title = `Gear (${items.length} item${items.length === 1 ? '' : 's'}${packedCount ? `, ${packedCount} with the adventurer today` : ''})`;
-  if (!items.length) return section(title, h('p', { class: 'muted' }, 'No gear yet. Smith something above.'));
+  const packedCount = s.gear.filter((g) => g.packed).length;
+  const title = `Gear (${s.gear.length} item${s.gear.length === 1 ? '' : 's'}${packedCount ? `, ${packedCount} with the adventurer today` : ''})`;
+  if (!s.gear.length) return section(title, h('p', { class: 'muted' }, 'No gear yet. Smith something above.'));
 
-  const rows = items.map((item) => {
-    const d = item.durability;
-    const repairCell = d >= 100
-      ? h('span', { class: 'muted' }, 'Full durability')
-      : repairLine(ctx, item, { blocked: blocked ? `Workshop closed: ${blocked}` : null });
-    const scrapWhy = item.packed ? 'With the adventurer today' : blocked ? `Workshop closed: ${blocked}` : null;
-    const back = scrapReturn(item, cfg);
-    const [bm, bg] = back.key.split(':');
-    const backText = back.qty > EPS ? `${qty(back.qty)} ${cap(bm)} ${bg} bar${back.qty === 1 ? '' : 's'}` : 'nothing';
-    const scrapMath = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${durText(d)} durability`;
-    const scrapNote = `You get back ${backText} (${scrapMath}).${item.gem ? ' The gem is lost.' : ''}`;
-    return {
-      attrs: { class: item.packed ? 'ws-packed' : '' },
-      cells: [
-        h('div', {}, h('b', { class: `grade-${item.grade}` }, gearName(item)),
-          item.packed ? h('div', {}, h('span', { class: 'chip ws-chip-packed' }, 'with the adventurer today')) : null),
-        h('span', { class: 'ws-statstext' }, statLine(gearStats(item, cfg))),
-        h('div', { class: 'ws-durcell' }, bar(d, `ws-dur ${d >= 60 ? 'hi' : d >= 30 ? 'mid' : 'lo'}`), h('span', { class: 'num' }, durText(d))),
-        repairCell,
-        h('button', {
-          class: 'small ghost ws-scrap',
-          disabled: !!scrapWhy,
-          ...tip(scrapWhy || `Scrap this item. ${scrapNote}`),
-          onclick: () => {
-            if (confirm(`Scrap ${gearName(item)}? ${scrapNote}`)) ctx.act(() => scrap(ctx.state, item.id, cfg), { toast: true });
-          },
-        }, 'Scrap'),
-      ],
-    };
-  });
-
+  const all = repairAllInfo(s, cfg);
+  const rep = cfg.gear.repair;
+  // the gem is its own lever (gemFraction), not the bars' share: say it separately, and leave it out when repairs cost no gem
+  const gemShare = rep.gemFraction > 0 ? ` (and ${rep.gemFraction}% of its gem)` : '';
+  const allWhy = blocked ? `Workshop closed: ${blocked}` : !all.ids.length ? 'Nothing can be repaired right now (everything is at 100%, with the adventurer, or short of bars or time).' : null;
   return section(title,
-    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. A full repair costs ${cfg.gear.repair.materialFraction}% of the original bars (and ${cfg.gear.repair.gemFraction}% of the gem) and ${cfg.gear.repair.timeFraction}% of the smithing time, scaled by the % repaired; the repair skills make it faster. `,
-      'If you lack the item\'s own grade, the lowest higher grade you have enough of is used instead (no extra benefit). ',
-      'Repairs happen here by day, at camp, on gear the adventurer does not have: leave an item home to repair it. Scrapping gives back ',
-      `${cfg.gear.repair.materialFraction}% of the bars, scaled by the durability left (the gem is lost).`),
-    h('div', { class: 'ws-scroll' }, tbl(['Item', 'Stats', 'Durability', 'Repair to 100%', ''], rows, 'ws-gear')));
+    h('p', { class: 'ws-sub ws-intro' }, `Repairs always go back to 100%. You can repair at camp during the day, only gear the adventurer does not have today. A full repair costs ${rep.materialFraction}% of the item's bars${gemShare} and ${rep.timeFraction}% of the time it takes to smith it, scaled by the % repaired; the repair skills make it faster. `,
+      'If you lack the item\'s own grade, the lowest higher grade you have enough of is used instead (no extra benefit). Scrapping gives back ',
+      `${rep.materialFraction}% of the bars, scaled by the durability left (the gem is lost).`),
+    h('div', { class: 'row ws-repairall' }, h('button', {
+      disabled: !!allWhy,
+      id: 'ws-repair-all',
+      ...tip(allWhy || `Repair ${all.ids.length} item${all.ids.length === 1 ? '' : 's'}, best first, until the bars or the time run out.`),
+      onclick: () => ctx.act(() => repairAll(ctx.state, cfg), { toast: true }),
+    }, all.ids.length ? `Repair all (${all.ids.length}) · ${mins(all.minutes)}` : 'Repair all')),
+    gearTable(ctx, s.gear, { scrap: true, blocked }));
 }

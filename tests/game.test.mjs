@@ -4,7 +4,7 @@ import { CONFIG, ORES, GEMS, BARS, GRADES, SLOTS } from '../js/config.js';
 import * as GameModule from '../js/core/game.js';
 import {
   newGame, endDay, acknowledgeReport, validatePlan, confirmPlan, rosterView, serialize, deserialize,
-  adventurerRingTotals, logResult, addLog, packedSlotsSummary, saveKeyFor, SAVE_KEY, BEST_KEY, oldSaveKeys, MAX_LOG,
+  adventurerRingTotals, logResult, addLog, packedSlotsSummary, saveKeyFor, SAVE_KEY, BEST_KEY, oldSaveKeys, MAX_LOG, endRun,
 } from '../js/core/game.js';
 import { ringLabel } from '../js/core/rings.js';
 import { spendIntel, canSpendIntel } from '../js/core/intel.js';
@@ -68,6 +68,7 @@ test('newGame: initial state shape', () => {
   assert.deepEqual(s.stats, { score: 0, wins: { normal: 0, elite: 0, champion: 0 }, fights: 0, bestDay: 1 });
   assert.equal(s.log.length, 1);
   assert.deepEqual(s.battles, []);
+  assert.equal(s.end, null, 'the run has not ended');
   assert.equal(s.map.cells.length, CONFIG.map.size ** 2);
 });
 
@@ -160,7 +161,7 @@ test('confirmPlan: advances the day, packs gear, sets adventurer rings, new rost
   assert.equal(advA.worn, true);
   assert.equal(advB.worn, false);
   assert.equal(smith.worn, true, 'smith rings untouched');
-  assert.deepEqual(s.plan, { day: 2, enemy, gearIds: [sw.id], ringIds: [advA.id], shownEstimate: null });
+  assert.deepEqual(s.plan, { day: 2, enemy, gearIds: [sw.id], ringIds: [advA.id], shownEstimate: null, lastGearId: home.id }); // home is the highest gear id
   assert.equal(s.roster.day, 3);
   assert.notEqual(s.roster, oldRoster);
   assert.notDeepEqual(s.roster.enemies.map((e) => e.levels), oldRoster.enemies.map((e) => e.levels));
@@ -336,8 +337,13 @@ test('resolveBattle with 3 items per gear type stays bounded: the adventurer thi
 
 test('a lost fight is game over: no ring, no score', () => {
   const s = game(3);
-  toDay2(s, (st) => plan(tierIndex(st, 'champion')), LOSE);
+  const spare = addGear(s, 'sword', 'iron', 'C');
+  toDay2(s, (st) => plan(tierIndex(st, 'champion'), [spare.id]), LOSE);
   const r = endDay(s, LOSE);
+  // the report keeps what was packed: the sword was used, so it is in `used` (and nothing is in `notUsed`)
+  assert.deepEqual(r.report.used.map((g) => g.id), r.report.usedIds);
+  assert.deepEqual(r.report.notUsed, []);
+  assert.deepEqual(s.end, { reason: 'fell', day: 2, daysSurvived: 1, enemy: { name: r.report.enemy.name, tier: 'champion' }, cancelled: null });
   assert.equal(r.report.win, false);
   assert.equal(r.report.draw, false);
   assert.equal(s.phase, 'over');
@@ -345,7 +351,6 @@ test('a lost fight is game over: no ring, no score', () => {
   assert.equal(s.stats.score, 0);
   assert.equal(s.stats.fights, 1);
   assert.equal(r.report.advHp, 0);
-  assert.deepEqual(r.report.usedIds, []);
   assert.equal(acknowledgeReport(s).ok, false);
   assert.equal(endDay(s).ok, false);
   assert.match(s.log[s.log.length - 1].text, /GAME OVER/);
@@ -696,4 +701,76 @@ test('log: logResult logs successes and notes; the log is capped', () => {
   for (let i = 0; i < MAX_LOG + 50; i++) addLog(s, `x${i}`);
   assert.equal(s.log.length, MAX_LOG);
   assert.equal(s.log[s.log.length - 1].text, `x${MAX_LOG + 49}`);
+});
+
+// --------------------------------------------------------------- end run ----
+test('endRun from the work phase: the planned fight does not happen (no fight, no ring, no score), gear comes home, the run is over', () => {
+  const s = game(5);
+  const sw = addGear(s, 'sword', 'iron', 'C');
+  s.stats.score = 35;
+  s.stats.wins.normal = 1;
+  s.stats.wins.elite = 1;
+  toDay2(s, (st) => plan(tierIndex(st, 'elite'), [sw.id]), WIN);
+  const enemy = s.plan.enemy;
+  assert.equal(s.gear[0].packed, true);
+  const fights = s.stats.fights;
+  const r = endRun(s);
+  assert.equal(r.ok, true);
+  assert.equal(s.phase, 'over');
+  assert.equal(s.plan, null, 'today\'s fight is cancelled');
+  assert.equal(s.gear[0].packed, false, 'gear is unpacked');
+  assert.equal(s.stats.score, 35, 'the score is what it was');
+  assert.equal(s.stats.fights, fights);
+  assert.equal(s.rings.length, 0, 'no ring from a fight that did not happen');
+  assert.deepEqual(s.end, { reason: 'retired', day: 2, daysSurvived: 1, enemy: null, cancelled: { name: enemy.name, tier: 'elite' } });
+  assert.match(s.log[s.log.length - 1].text, /Run ended on day 2: you retired the adventurer\. Final score 35\./);
+  assert.equal(s.log.filter((l) => /Run ended/.test(l.text)).length, 1, 'logged once');
+});
+
+test('endRun from the plan and from the report phase: a finished day counts as survived', () => {
+  const a = game(5);
+  endDay(a); // day 1 -> plan
+  assert.equal(a.phase, 'plan');
+  assert.equal(endRun(a).ok, true);
+  assert.deepEqual(a.end, { reason: 'retired', day: 1, daysSurvived: 1, enemy: null, cancelled: null });
+
+  const b = game(5);
+  toDay2(b, (st) => plan(tierIndex(st, 'normal')), WIN);
+  endDay(b, WIN);
+  assert.equal(b.phase, 'report');
+  const score = b.stats.score;
+  assert.equal(endRun(b).ok, true);
+  assert.equal(b.phase, 'over');
+  assert.equal(b.stats.score, score, 'the score of the fight just won stays');
+  assert.deepEqual(b.end, { reason: 'retired', day: 2, daysSurvived: 2, enemy: null, cancelled: null });
+});
+
+test('endRun on day 1 of the work phase: no day survived yet; it works anywhere (also in a field)', () => {
+  const s = game(5);
+  const f = fieldAt(s, 1);
+  s.location = { x: f.x, y: f.y };
+  assert.equal(endRun(s).ok, true);
+  assert.equal(s.end.daysSurvived, 0);
+  assert.equal(s.end.cancelled, null);
+});
+
+test('endRun is refused when the run is over, and changes nothing', () => {
+  const s = game(5);
+  endRun(s);
+  const before = serialize(s);
+  const r = endRun(s);
+  assert.equal(r.ok, false);
+  assert.equal(serialize(s), before);
+  const lost = game(3);
+  toDay2(lost, (st) => plan(tierIndex(st, 'champion')), LOSE);
+  endDay(lost, LOSE);
+  assert.equal(lost.phase, 'over');
+  assert.equal(endRun(lost).ok, false, 'a lost run cannot be retired afterwards');
+  assert.equal(lost.end.reason, 'fell');
+});
+
+test('the end of a run survives a save and load', () => {
+  const s = game(5);
+  endRun(s);
+  assert.deepEqual(deserialize(serialize(s)).end, s.end);
 });

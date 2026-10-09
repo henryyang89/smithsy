@@ -5,17 +5,20 @@
 // Each batch adds its own text assertions here (e.g. no "regrow" anywhere, nothing seen on day 1).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CONFIG } from '../js/config.js';
-import { installFakeDom, textOf, tipsOf, withClass, findAll } from './fakedom.mjs';
+import { CONFIG, BARS, GEMS, SLOTS } from '../js/config.js';
+import { VERSION } from '../js/version.js';
+import { installFakeDom, textOf, tipsOf, withClass, findAll, countTags } from './fakedom.mjs';
 import { renderMap } from '../js/ui/mapview.js';
 import { renderWorkshop } from '../js/ui/workshop.js';
+import { LOW_DURABILITY } from '../js/ui/inventory.js';
 import { renderAdventurer } from '../js/ui/adventurer.js';
 import { renderRings } from '../js/ui/ringsview.js';
 import { renderSkills, spendIntelAction } from '../js/ui/skillsview.js';
 import { renderLog } from '../js/ui/logview.js';
 import { renderHelp } from '../js/ui/help.js';
-import { renderPlan, renderReport, renderGameOver } from '../js/ui/endday.js';
-import { endDay, confirmPlan, acknowledgeReport } from '../js/core/game.js';
+import { renderPlan, renderReport, renderRunSummary } from '../js/ui/endday.js';
+import { endDay, confirmPlan, acknowledgeReport, endRun } from '../js/core/game.js';
+import { analyzeLossSync } from '../js/core/replay.js';
 import { tip, restoreScrollLeft, isRestoredScroll } from '../js/ui/dom.js';
 import { scrapReturn, smithMinutes, repairMinutes, wearLoss } from '../js/core/gear.js';
 import { skillDefs, skillHoverText } from '../js/core/skills.js';
@@ -29,6 +32,7 @@ import { hiddenGradeOdds } from '../js/core/enemies.js';
 import { canSpendIntel } from '../js/core/intel.js';
 import { travel, search, currentField, sightValue, seenItems, expectedSearches, searchesText, searchesToFinish } from '../js/core/map.js';
 import { game, cfgWith, addGear, addRing, fieldAt, setSkillLevel, WEAK_ENEMIES, DEADLY_ENEMIES, DAY_START } from './helpers.mjs';
+import { renderCombatLog } from '../js/ui/endday.js';
 
 installFakeDom();
 
@@ -37,7 +41,7 @@ const LOSE = cfgWith(DEADLY_ENEMIES);
 
 // What the app's shell passes to every screen (js/main.js), with the side effects turned into no-ops.
 function makeCtx(state, cfg = CONFIG) {
-  return { state, cfg, ui: { estimates: 'off' }, act: (f) => f(), rerender() {}, save() {}, toast() {}, newGame() {}, setTab() {} };
+  return { state, cfg, ui: { estimates: 'off', analysis: 'off' }, act: (f) => f(), rerender() {}, save() {}, toast() {}, newGame() {}, setTab() {} };
 }
 
 function render(fn, state, cfg = CONFIG, ctx = makeCtx(state, cfg)) {
@@ -108,7 +112,7 @@ test('every work-phase screen renders on day 1 at camp and in a field after a se
 
 test('the plan, report and game-over screens render, and the reference tabs render in those phases', () => {
   const phases = [['plan', statePlan(), () => renderPlan], ['plan with an intel point', statePlan(1), () => renderPlan],
-    ['report', stateReport(), () => renderReport], ['over', stateOver(), () => renderGameOver]];
+    ['report', stateReport(), () => renderReport], ['over', stateOver(), () => renderRunSummary]];
   for (const [label, s, pick] of phases) {
     const root = render(pick(), s);
     assert.ok(textOf(root).length > 40, `${label} has no text`);
@@ -122,7 +126,7 @@ test('the plan, report and game-over screens render, and the reference tabs rend
 test('nothing a player can read mentions regrowth (R25)', () => {
   const states = [['day 1', stateDay1()], ['in a field', stateInField()], ['plan', statePlan(1)], ['report', stateReport()], ['over', stateOver()]];
   for (const [label, s] of states) {
-    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderGameOver]];
+    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderRunSummary]];
     for (const [name, fn] of screens) {
       const text = readable(render(fn, s));
       assert.doesNotMatch(text, /regrow|grow back|refill|reset overnight/i, `${name} (${label})`);
@@ -404,7 +408,7 @@ test('no screen talks about night repairs; the plan screen says repairs happen a
   };
   const states = [['day 1', worn(stateDay1())], ['in a field', worn(stateInField())], ['plan', worn(statePlan(1))], ['report', worn(stateReport())], ['over', stateOver()]];
   for (const [label, s] of states) {
-    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderGameOver]];
+    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderRunSummary]];
     for (const [name, fn] of screens) assert.doesNotMatch(readable(render(fn, s)), NIGHT_WORDS, `${name} (${label})`);
   }
   for (const [label, s] of states.filter(([, st]) => st.phase === 'plan' || st.phase === 'report')) {
@@ -439,7 +443,7 @@ test('the Workshop gear list: Repair buttons by day (time and bars), a Scrap but
   const scrapBtn = withClass(root, 'ws-scrap')[0];
   assert.match(scrapBtn.attributes.title, new RegExp(`You get back ${qtyStr.length === 3 ? qtyStr + '0' : qtyStr} Copper D bars \\(${CONFIG.gear.repair.materialFraction}% of its ${CONFIG.gear.slots.sword.bars} bars × 60% durability\\)\\. The gem is lost\\.`));
   assert.equal(scrapBtn.attributes['data-tip'], scrapBtn.attributes.title);
-  assert.match(text, /Repairs happen here by day, at camp, on gear the adventurer does not have/);
+  assert.match(text, /You can repair at camp during the day, only gear the adventurer does not have today/);
 });
 
 test('a Copper sword at 60% scrapped from the Workshop returns 0.42 bars (confirm text and the click through ctx.act)', () => {
@@ -473,7 +477,8 @@ test('the Workshop smith panel shows the skilled smithing time with its reductio
   const m = smithMinutes(s, 'sword', 'copper', false, CONFIG);
   assert.ok(m < CONFIG.gear.slots.sword.bars * CONFIG.gear.smithMinPerBar, 'the skill really makes it faster');
   assert.match(textOf(root), new RegExp(`Craft \\(${m}m\\)`));
-  assert.match(tipsOf(root), /Base [\d.]+m \(2 bars × \d+m\); your Copper smithing skill cuts it to [\d.]+m/);
+  const base = CONFIG.gear.slots.sword.bars * CONFIG.gear.smithMinPerBar;
+  assert.ok(tipsOf(root).includes(`${CONFIG.gear.slots.sword.bars} bars × ${CONFIG.gear.smithMinPerBar}m = ${base}m before your Copper smithing skill.`), 'the hover shows the time before the skill');
 });
 
 test('the map explains the Carrying skill: the load penalty per item shrinks and the base is mentioned', () => {
@@ -485,7 +490,7 @@ test('the map explains the Carrying skill: the load penalty per item shrinks and
 });
 
 // ------------------------------------------- enemies, durability, margin (batch 3) ----
-const ALL_SCREENS = (s) => (s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderGameOver]]);
+const ALL_SCREENS = (s) => (s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : s.phase === 'report' ? renderReport : renderRunSummary]]);
 
 test('enemy growth is never shown: no "Rating growth" row, no "Ratings x1.05" stat, no growth table or formula anywhere (R8)', () => {
   const plan = statePlan(1);
@@ -545,11 +550,11 @@ test('durability is shown as a whole number on every screen (never a decimal fol
   };
   const whole = /^\d+%$/;
   // Workshop gear table + Adventurer tab gear table
-  for (const [label, fn, cls] of [['Workshop', renderWorkshop, 'ws-durcell'], ['Adventurer tab', renderAdventurer, 'adv-dur']]) {
+  for (const [label, fn] of [['Workshop', renderWorkshop], ['Adventurer tab', renderAdventurer]]) {
     const root = render(fn, addWorn(stateDay1()));
-    const cells = withClass(root, cls);
-    assert.equal(cells.length, 4, `${label}: one durability cell per item`);
-    const shown = cells.map((c) => textOf(c).replace('⚠', '')); // the Adventurer tab flags an item that could break with a warning icon
+    const cells = withClass(root, 'gl-pct'); // the shared gear list: the number beside each durability bar
+    assert.equal(cells.length, 4, `${label}: one durability number per item`);
+    const shown = cells.map((c) => textOf(c));
     assert.deepEqual(shown.sort(), ['1%', '12%', '63%', '99%'], label);
     for (const t of shown) assert.match(t, whole);
     assert.doesNotMatch(readable(root), /\d\.\d+%\s*(durability|left)/i, label);
@@ -680,7 +685,7 @@ test('the plan screen has a Banner row, a banners line, a plain Defense section 
   assert.equal(findAll(root, (el) => el.classList.contains('rt-sect-names')).length, 0);
   // no screen of any phase says Estimate all
   for (const state of [stateDay1(), statePlan(1), stateReport(), stateOver()]) {
-    const screens = state.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', state.phase === 'plan' ? renderPlan : state.phase === 'report' ? renderReport : renderGameOver]];
+    const screens = state.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', state.phase === 'plan' ? renderPlan : state.phase === 'report' ? renderReport : renderRunSummary]];
     for (const [name, fn] of screens) assert.doesNotMatch(readable(render(fn, state)), /Estimate all/i, name);
   }
 });
@@ -1043,4 +1048,587 @@ test('Help has a Banners section and the intel notes (multipliers, spend first),
   assert.match(text, /Banner scouting/);
   assert.doesNotMatch(text, /Estimate all/i);
   assert.match(text, /worked out by itself/i);
+});
+
+
+// ----------------------------------------------- batch 5: score, workshop, report ----
+const byId = (root, id) => findAll(root, (el) => el.attributes.id === id)[0];
+const SCORE_NUMBERS = /\+\d+ ?pts|\d+ ?pts\b|\bscore\b/i;
+
+test('no screen shows a score while the run is going: no "Score", no points per enemy tier (R32, U3)', () => {
+  const plan = statePlan(0);
+  const states = [['day 1', stateDay1()], ['in a field', stateInField()], ['plan', plan], ['report', stateReport()]];
+  // an adventurer away fighting an enemy today
+  const away = game(7);
+  endDay(away);
+  confirmPlan(away, { enemyIndex: 0, gearIds: [], ringIds: [] });
+  states.push(['away', away]);
+  // some wins, so a score exists to hide
+  const rich = stateReport();
+  rich.stats.score = 85;
+  states.push(['with a score', rich]);
+  for (const [label, s] of states) {
+    const screens = s.phase === 'work' ? Object.entries(WORK_SCREENS) : [...Object.entries(REFERENCE_SCREENS), ['phase', s.phase === 'plan' ? renderPlan : renderReport]];
+    for (const [name, fn] of screens) {
+      const text = readable(render(fn, s));
+      if (name === 'help') assert.doesNotMatch(text, /\+\d+ ?pts|\d+ ?pts\b|score \d|\d+ points per/i, `help (${label}) has no score numbers`);
+      else assert.doesNotMatch(text, SCORE_NUMBERS, `${name} (${label})`);
+    }
+  }
+});
+
+test('Help: no regrowth, no night, no novice or master tables, no level 10, no Estimate all, no growth numbers; the promised sentences are there', () => {
+  for (const s of [stateDay1(), statePlan(1), stateReport(), stateOver()]) {
+    const text = readable(render(renderHelp, s));
+    assert.doesNotMatch(text, /regrow|night|novice|master table|level 10|lv 10|estimate all|growth|grow(s)? \d|\d+(\.\d+)?% (a|per) day/i, s.phase);
+    assert.match(text, /keep a spare of each item so you can leave one home to repair it/);
+    assert.match(text, /In a field your sight shows some of the items still in the ground; it grows with Ore sight intel and Ore sight rings/);
+    assert.match(text, /Low means the enemy does not have that ability at all/);
+    assert.match(text, /Both attack bars start the fight partly filled/);
+    assert.match(text, /Enemies get a little stronger every day/);
+    assert.match(text, /You see your score when the run ends \(End run or a lost fight\)/);
+    assert.ok(text.includes(bannersText(CONFIG)));
+    assert.match(text, /5 guesses of the hidden attributes|guesses of the hidden attributes/);
+    assert.match(text, /Skill\s*Per level\s*XP/);
+  }
+  // every section of the plan is there, in order
+  const sections = ['Time', 'World map & travel', 'Fields, searching & sight', 'Workshop', 'Gear, repairs & scrap', 'Enemies', 'Banners', 'Win estimate', 'Intel', 'Skills', 'Rings', 'Score'];
+  const root = render(renderHelp, stateDay1());
+  const titles = findAll(root, (el) => el.tagName === 'SUMMARY').map(textOf);
+  let at = -1;
+  for (const t of sections) {
+    const i = titles.indexOf(t);
+    assert.ok(i > at, `Help section "${t}" in order`);
+    at = i;
+  }
+  // intel: current value and next gain per track, no schedule
+  const intelText = textOf(root);
+  assert.match(intelText, /Next point/);
+});
+
+test('Workshop: tiles instead of drop-downs, no upgrade luck / fail / time bonus text, no novice or master tables (R17-R19)', () => {
+  const s = stateDay1();
+  s.storage.bars['copper:D'] = 3;
+  setSkillLevel(s, 'oreGrade_copper', 3);
+  setSkillLevel(s, 'oreFail_copper', 3);
+  setSkillLevel(s, 'gemGrade_ruby', 5);
+  setSkillLevel(s, 'refineTime', 4);
+  addRing(s, 'oreGrade', 'B', true);
+  const root = render(renderWorkshop, s);
+  assert.equal(countTags(root, 'select'), 0, 'no <select> anywhere');
+  const all = readable(root);
+  assert.doesNotMatch(all, /upgrade luck|−\d|-\d+(\.\d+)? ?fail|\d% time|novice|master|Grade skill lv|Cutting skill lv|level \d/i);
+  assert.equal(findAll(root, (el) => el.attributes['data-slot'] && el.tagName === 'BUTTON').length, SLOTS.length, 'a tile per gear type');
+  assert.equal(findAll(root, (el) => el.attributes['data-material'] && el.tagName === 'BUTTON').length, BARS.length, 'a tile per material');
+  assert.equal(findAll(root, (el) => el.attributes['data-gem'] && el.tagName === 'BUTTON').length, GEMS.length + 1, 'None and one tile per gem');
+  // refine / cut rows: columns Bar | Needs | Outcome chance | You can make | Time each | buttons
+  const heads = findAll(root, (el) => el.tagName === 'TABLE' && el.classList.contains('ws-process'))[0];
+  const heading = findAll(heads, (el) => el.tagName === 'TH').map((th) => textOf(th).replace(/\s+/g, ' '));
+  assert.match(heading[0], /^Bar$/);
+  assert.match(heading[1], /^Needs/);
+  assert.match(heading[2], /^Outcome chance/);
+  assert.match(heading[3], /^You can make/);
+  assert.match(heading[4], /^Time each$/);
+  // one bar and one row of numbers per row, for bars and gems alike (one "now" row per gem)
+  for (const kind of ['ws-process']) {
+    const tables = findAll(root, (el) => el.tagName === 'TABLE' && el.classList.contains(kind));
+    assert.equal(tables.length, 2);
+    for (const t of tables) for (const tr of findAll(t, (el) => el.tagName === 'TR' && findAll(el, (c) => c.tagName === 'TD').length)) {
+      assert.equal(withClass(tr, 'ws-dist-bar').length, 1);
+      assert.equal(withClass(tr, 'ws-dist-nums').length, 1);
+    }
+  }
+  // hovers: your chances next to the base chances, base minutes only (every number comes from CONFIG)
+  const hovers = tipsOf(root);
+  const shown = (v) => String(Math.round(v * 10) / 10);
+  const refineBase = CONFIG.refine[BARS[0]];
+  assert.ok(hovers.includes(`Base chances: Fail ${shown(refineBase.dist.F)}%, D ${shown(refineBase.dist.D)}%`), 'the base chances of the first bar');
+  assert.match(hovers, /Your chances: Fail [\d.]+%, D [\d.]+%.* Base chances: Fail/);
+  assert.ok(hovers.includes(`Chances for a first-time cutter: Fail ${shown(CONFIG.cut[GEMS[0]].novice.F)}%`), 'the first-time cutter chances of the first gem');
+  assert.match(hovers, /Your skills and rings make the difference \(see Skills\)\./);
+  assert.ok(hovers.includes(`Base ${refineBase.minutes}m.`), 'the base minutes of the first bar');
+});
+
+test('the result box is green when everything worked and red when any attempt failed; the toast takes the same tone (R16)', () => {
+  const run = (cfg, button) => {
+    const s = stateDay1();
+    s.storage.ore.copper = 6;
+    const ctx = makeCtx(s, cfg);
+    const root = render(renderWorkshop, s, cfg, ctx);
+    const btn = findAll(root, (el) => el.attributes['data-run'] === button)[0];
+    const res = clickOf(btn)();
+    const after = render(renderWorkshop, s, cfg, ctx);
+    return { res, box: withClass(after, 'ws-result')[0], ctx };
+  };
+  // the hand-written expectations below ("refined 5", 6 ore) assume one ore and 15 minutes per bar: pin them
+  const copper = (dist) => cfgWith({ refine: { copper: { input: { copper: 1 }, minutes: 15, dist } } });
+  const allOk = copper({ S: 0, A: 0, B: 0, C: 0, D: 100, F: 0 });
+  const allFail = copper({ S: 0, A: 0, B: 0, C: 0, D: 0, F: 100 });
+  const ok = run(allOk, 'refine:copper:5');
+  assert.equal(ok.res.tone, 'ok');
+  assert.ok(ok.box.classList.contains('ok') && !ok.box.classList.contains('err'));
+  assert.match(textOf(ok.box), /Copper: refined 5 in .*: 5 bars \(D 5\)\./);
+  const bad = run(allFail, 'refine:copper:5');
+  assert.equal(bad.res.tone, 'err');
+  assert.ok(bad.box.classList.contains('err'));
+  assert.match(textOf(bad.box), /5 of 5 failed \(ore lost\)/);
+  assert.equal(findAll(bad.box, (el) => el.tagName === 'B').map(textOf).join(), '5 of 5 failed', 'the count is bold');
+  // a single attempt too
+  assert.equal(run(allFail, 'refine:copper:1').box.classList.contains('err'), true);
+  assert.equal(run(allOk, 'refine:copper:1').box.classList.contains('ok'), true);
+  // a mixed batch (some failed) is red
+  const mixed = copper({ S: 0, A: 0, B: 0, C: 0, D: 50, F: 50 });
+  let sawErr = false;
+  for (let seed = 1; seed < 20 && !sawErr; seed++) {
+    const s = game(seed);
+    s.storage.ore.copper = 8;
+    const ctx = makeCtx(s, mixed);
+    const root = render(renderWorkshop, s, mixed, ctx);
+    const res = clickOf(findAll(root, (el) => el.attributes['data-run'] === 'refine:copper:all')[0])();
+    if (/of \d+ failed/.test(res.msg)) {
+      sawErr = true;
+      assert.equal(res.tone, 'err');
+    }
+  }
+  assert.ok(sawErr, 'a batch with some failures came up');
+});
+
+test('after a craft the gem picker is back on None (and the bar grade is re-picked when it ran short) (R26)', () => {
+  const s = stateDay1();
+  const need = CONFIG.gear.slots.sword.bars; // exactly one sword's worth of D bars, so the D bars run out
+  s.storage.bars['copper:D'] = need;
+  s.storage.bars['copper:C'] = need;
+  s.storage.cut['ruby:D'] = 1;
+  const ctx = makeCtx(s);
+  Object.assign(ctx.ui, { ws_slot: 'sword', ws_mat: 'copper', ws_grade: 'D', ws_gem: 'ruby', ws_gemGrade: 'D' });
+  const root = render(renderWorkshop, s, CONFIG, ctx);
+  assert.match(textOf(root), /Result: D Copper Sword \+Ruby D/);
+  const res = clickOf(byId(root, 'ws-craft'))();
+  assert.equal(res.ok, true);
+  assert.equal(s.gear.length, 1);
+  assert.deepEqual(s.gear[0].gem, { type: 'ruby', grade: 'D' }, 'the sword got the gem');
+  assert.equal(ctx.ui.ws_gem, '');
+  assert.equal(ctx.ui.ws_gemGrade, null);
+  assert.equal(ctx.ui.ws_grade, 'C', 'the D bars ran out: the next best grade is picked');
+  const after = render(renderWorkshop, s, CONFIG, ctx);
+  assert.match(textOf(after), /Result: C Copper Sword(?! \+)/);
+  const none = findAll(after, (el) => el.attributes['data-gem'] === 'none')[0];
+  assert.ok(none.classList.contains('sel'), 'the None tile is selected');
+  assert.equal(withClass(after, 'ws-result')[0].classList.contains('ok'), true);
+});
+
+test('the smith preview has no durability, one stats line, the cost and "Time: 37m · done at 11:20"', () => {
+  const s = stateDay1();
+  const need = CONFIG.gear.slots.sword.bars;
+  s.storage.bars['copper:D'] = need;
+  const ctx = makeCtx(s);
+  const root = render(renderWorkshop, s, CONFIG, ctx);
+  const prev = withClass(root, 'ws-preview')[0];
+  const text = textOf(prev);
+  assert.doesNotMatch(text, /durability|100%/i);
+  assert.match(text, /Result: D Copper Sword/);
+  assert.equal(withClass(prev, 'ws-statsline').length, 1);
+  assert.match(text, new RegExp(`Cost: ${need} × Copper D bars? \\(have ${need}\\)`));
+  const m = smithMinutes(s, 'sword', 'copper', false, CONFIG);
+  assert.ok(text.includes(`Time: ${m}m · done at `), text);
+  assert.match(textOf(byId(root, 'ws-craft')), new RegExp(`^Craft \\(${m}m\\)$`));
+  // the reference is a closed <details>
+  const det = findAll(root, (el) => el.tagName === 'DETAILS' && el.classList.contains('ws-refbox'))[0];
+  assert.ok(det && !det.attributes.open, 'closed by default');
+  assert.match(textOf(det), /Compare all gear types and gem effects/);
+});
+
+test('the Workshop reference panel starts closed and stays open while the player works in it (a tile or a gem grade redraws the tab)', () => {
+  const s = stateDay1();
+  const ctx = makeCtx(s);
+  const panelOf = (r) => findAll(r, (el) => el.tagName === 'DETAILS' && el.classList.contains('ws-refbox'))[0];
+  let root = render(renderWorkshop, s, CONFIG, ctx);
+  assert.ok(!panelOf(root).hasAttribute('open'), 'closed at first');
+  // a click on the summary is seen before the browser flips `open`
+  let panel = panelOf(root);
+  panel.open = false;
+  clickOf(findAll(panel, (el) => el.tagName === 'SUMMARY')[0])();
+  assert.equal(ctx.ui.ws_refOpen, true);
+  // a gem grade button inside the panel redraws the tab: the panel comes back open
+  root = render(renderWorkshop, s, CONFIG, ctx);
+  assert.ok(panelOf(root).hasAttribute('open'), 'still open after a redraw');
+  const sGrade = findAll(root, (el) => el.tagName === 'BUTTON' && el.classList.contains('ws-gbtn') && textOf(el) === 'S')[0];
+  assert.ok(sGrade, 'the gem grade buttons are in the panel');
+  assert.ok(panelOf(root).contains(sGrade));
+  clickOf(sGrade)();
+  assert.equal(ctx.ui.ws_gemGrade, 'S');
+  root = render(renderWorkshop, s, CONFIG, ctx);
+  assert.ok(panelOf(root).hasAttribute('open'), 'open after picking a grade');
+  // picking a tile (here: the None gem tile) keeps it open too
+  clickOf(findAll(root, (el) => el.attributes['data-gem'] === 'none')[0])();
+  root = render(renderWorkshop, s, CONFIG, ctx);
+  assert.ok(panelOf(root).hasAttribute('open'), 'open after picking a tile');
+  // closing it is remembered as well: by the summary click, and by the toggle event (find-in-page opens it the same way)
+  panel = panelOf(root);
+  panel.open = true;
+  clickOf(findAll(panel, (el) => el.tagName === 'SUMMARY')[0])();
+  assert.equal(ctx.ui.ws_refOpen, false);
+  panel.open = true;
+  panel.listeners.toggle[0]();
+  assert.equal(ctx.ui.ws_refOpen, true);
+  assert.ok(!panelOf(render(renderWorkshop, stateDay1(), CONFIG, makeCtx(s))).hasAttribute('open'), 'a fresh screen starts closed again');
+});
+
+test('Storage and gear: the overview lists gear by type and material with gem tags, "none yet", packed and low marks; a click picks it in the smith form (R38)', () => {
+  const s = stateDay1();
+  const a = addGear(s, 'sword', 'iron', 'C', { type: 'ruby', grade: 'B' });
+  addGear(s, 'sword', 'iron', 'D');
+  addGear(s, 'sword', 'iron', 'B');
+  addGear(s, 'sword', 'iron', 'S');
+  // always one more iron sword than the cell shows, whatever display.chipsPerCell is (the lowest grade goes last, so it is the one hidden)
+  while (s.gear.filter((g) => g.slot === 'sword' && g.material === 'iron').length <= CONFIG.display.chipsPerCell) addGear(s, 'sword', 'iron', 'D');
+  const ironSwords = s.gear.filter((g) => g.slot === 'sword' && g.material === 'iron').length;
+  const low = addGear(s, 'chest', 'copper', 'D', { type: 'topaz', grade: 'C' }, { durability: 20, packed: true });
+  s.storage.gem.ruby = 2;
+  s.storage.cut['ruby:C'] = 1;
+  const ctx = makeCtx(s);
+  const root = render(renderWorkshop, s, CONFIG, ctx);
+  const table = withClass(root, 'inv-geartable')[0];
+  const rowText = (slot) => textOf(findAll(table, (el) => el.tagName === 'TR').find((tr) => textOf(tr).startsWith(slot[0].toUpperCase() + slot.slice(1))));
+  assert.match(rowText('gloves'), /none yet/);
+  assert.match(rowText('boots'), /none yet/);
+  assert.match(rowText('sword'), /Ru/, 'the ruby tag');
+  assert.match(rowText('chest'), /To/, 'the topaz tag');
+  // at most chipsPerCell chips, then +N
+  const chips = withClass(table, 'inv-chip').filter((c) => c.attributes['data-gear'] && s.gear.find((g) => g.id === Number(c.attributes['data-gear'])).slot === 'sword');
+  assert.equal(chips.length, CONFIG.display.chipsPerCell);
+  assert.equal(textOf(withClass(table, 'inv-more')[0]), `+${ironSwords - CONFIG.display.chipsPerCell}`);
+  // the packed chest has the dotted mark, the 20% one the red dot; the hover has the whole story
+  const chest = withClass(table, 'inv-chip').find((c) => c.attributes['data-gear'] === String(low.id));
+  assert.ok(chest.classList.contains('inv-packed') && chest.classList.contains('inv-low'));
+  assert.match(chest.attributes.title, /^D Copper Chest \+Topaz C · 20% · with the adventurer today$/);
+  assert.equal(withClass(chest, 'inv-dot').length, 1);
+  // gems: Gem | Raw | D C B A S | In gear
+  const gems = withClass(root, 'inv-gemtable')[0];
+  assert.match(textOf(gems), /Gem\s*Raw\s*D\s*C\s*B\s*A\s*S\s*In gear/);
+  const ruby = findAll(gems, (el) => el.tagName === 'TR' && el.attributes['data-gem'] === 'ruby')[0];
+  assert.match(textOf(ruby), /Ruby2·1···1/, 'raw 2, one C cut, one in gear');
+  // a click on a gear cell picks the type and material in the smith form; a click on a gem row picks the gem
+  const cell = findAll(table, (el) => el.attributes['data-slot'] === 'sword' && el.attributes['data-material'] === 'iron')[0];
+  s.storage.bars['iron:C'] = 2;
+  clickOf(cell)();
+  assert.equal(ctx.ui.ws_slot, 'sword');
+  assert.equal(ctx.ui.ws_mat, 'iron');
+  assert.equal(ctx.ui.ws_grade, 'C', 'the grade you can make');
+  clickOf(ruby)();
+  assert.equal(ctx.ui.ws_gem, 'ruby');
+  assert.equal(ctx.ui.ws_gemGrade, 'C');
+  void a;
+});
+
+test('Storage and gear: the red dot follows the shown durability, not the exact one (plan 4.12)', () => {
+  const s = stateDay1();
+  const edge = addGear(s, 'chest', 'copper', 'D', null, { durability: LOW_DURABILITY + 0.4 }); // reads "30%"
+  const above = addGear(s, 'helmet', 'copper', 'D', null, { durability: LOW_DURABILITY + 1.4 }); // reads "31%"
+  const exact = addGear(s, 'gloves', 'copper', 'D', null, { durability: LOW_DURABILITY });
+  const root = render(renderWorkshop, s);
+  const chip = (item) => withClass(root, 'inv-chip').find((c) => c.attributes['data-gear'] === String(item.id));
+  assert.match(chip(edge).attributes.title, new RegExp(`· ${LOW_DURABILITY}%$`), 'the hover shows the rounded-down number');
+  assert.ok(chip(edge).classList.contains('inv-low') && withClass(chip(edge), 'inv-dot').length === 1, 'shown at the limit: red dot');
+  assert.ok(chip(exact).classList.contains('inv-low'));
+  assert.ok(!chip(above).classList.contains('inv-low') && withClass(chip(above), 'inv-dot').length === 0, 'shown above the limit: no dot');
+});
+
+test('Storage and gear: a tap re-renders the Workshop, and the scrolled gear table and gem table keep their position', () => {
+  const s = stateDay1();
+  addGear(s, 'sword', 'steel', 'C');
+  // a root whose querySelectorAll finds the scroll boxes (the fake DOM has no selectors)
+  const mount = (ctx) => {
+    const root = document.createElement('div');
+    root.querySelectorAll = (sel) => (sel === '[data-scroll]' ? findAll(root, (el) => el.attributes['data-scroll']) : []);
+    renderWorkshop(root, ctx);
+    return root;
+  };
+  const boxOf = (root, name) => findAll(root, (el) => el.attributes['data-scroll'] === name)[0];
+  const ctx = makeCtx(s);
+  const first = mount(ctx);
+  assert.ok(withClass(boxOf(first, 'gear'), 'inv-geartable').length === 1, 'the gear table is inside the gear scroll box');
+  assert.ok(withClass(boxOf(first, 'gems'), 'inv-gemtable').length === 1, 'the gem table is inside the gem scroll box');
+  assert.equal(boxOf(first, 'gear').scrollLeft || 0, 0);
+  // the player scrolls the gear table to the Steel column, then taps a cell
+  const gear = boxOf(first, 'gear');
+  gear.scrollLeft = 140;
+  for (const fn of gear.listeners.scroll || []) fn();
+  assert.equal(ctx.ui.inv_scroll.gear, 140);
+  const second = mount(ctx);
+  assert.equal(boxOf(second, 'gear').scrollLeft, 140, 'the new gear box starts where the old one was');
+  assert.ok(!boxOf(second, 'gems').scrollLeft, 'the gem table was not scrolled');
+});
+
+test('Workshop repair intro: the bars and the gem each use their own repair lever', () => {
+  const s = stateDay1();
+  addGear(s, 'sword', 'copper', 'D');
+  const intro = (repair) => textOf(withClass(render(renderWorkshop, s, cfgWith({ gear: { repair } })), 'ws-intro').pop());
+  // pinned to different numbers: the gem share is not the bars' share
+  assert.match(intro({ materialFraction: 40, gemFraction: 20 }), /A full repair costs 40% of the item's bars \(and 20% of its gem\) and /);
+  // repairs that cost no gem do not mention one
+  const free = intro({ materialFraction: 40, gemFraction: 0 });
+  assert.match(free, /A full repair costs 40% of the item's bars and /);
+  assert.doesNotMatch(free, /of its gem/);
+  // today's config: both numbers come from it
+  const now = intro({});
+  assert.ok(now.includes(`${CONFIG.gear.repair.materialFraction}% of the item's bars`), now);
+});
+
+test('the gear list (Workshop): grouped by type, the Repair button right of the durability, packed items say so, a Scrap column; Repair all', () => {
+  const s = stateDay1();
+  addGear(s, 'sword', 'iron', 'C', null, { durability: 63.4 });
+  addGear(s, 'sword', 'copper', 'D');
+  const away = addGear(s, 'chest', 'copper', 'D', null, { durability: 40, packed: true });
+  s.storage.bars['iron:C'] = 3;
+  const root = render(renderWorkshop, s);
+  const list = withClass(root, 'gl-table')[0];
+  assert.ok(list.classList.contains('gl-hasscrap'));
+  const groups = withClass(list, 'gl-group').map(textOf);
+  assert.deepEqual(groups.map((g) => g.split(' ·')[0]), ['Sword', 'Chest', 'Helmet', 'Gloves', 'Boots']);
+  assert.match(groups[0], /Sword · 2 owned/);
+  assert.match(groups[2], /Helmet · none owned/);
+  assert.deepEqual(findAll(list, (el) => el.tagName === 'TH').map(textOf), ['Item and stats', 'Durability', 'Scrap']);
+  // strongest first
+  const rows = withClass(list, 'gl-row');
+  assert.match(textOf(rows[0]), /^C Iron Sword/);
+  // the bar, the number and the Repair button sit on one line, in this order
+  const line = withClass(rows[0], 'rp-main')[0];
+  assert.deepEqual(line.children.map((c) => c.tagName + (c.classList.contains('gl-pct') ? ':pct' : '')).slice(0, 3), ['DIV', 'SPAN:pct', 'BUTTON']);
+  assert.match(textOf(line), /63%Repair \+37%/);
+  // a packed item: "63% · with the adventurer today", no Repair button, no Scrap
+  const packed = rows.find((r) => r.attributes['data-gear'] === String(away.id));
+  assert.match(textOf(packed), /40% · with the adventurer today/);
+  assert.equal(findAll(packed, (el) => el.attributes['data-repair'] !== undefined).length, 0);
+  assert.equal(withClass(packed, 'ws-scrap')[0].hasAttribute('disabled'), true);
+  assert.match(tipsOf(packed), /Repair it on a day you leave it at home\./);
+  // Repair all
+  const all = byId(root, 'ws-repair-all');
+  assert.match(textOf(all), /^Repair all \(1\) · [\d.]+m$/);
+  assert.equal(all.hasAttribute('disabled'), false);
+});
+
+test('Repair all repairs what it promised, best first, and the Adventurer tab has the same list without Scrap but with the inline Repair button', () => {
+  const s = stateDay1();
+  const sw = addGear(s, 'sword', 'iron', 'C', null, { durability: 50 });
+  const ch = addGear(s, 'chest', 'copper', 'D', null, { durability: 50 });
+  s.storage.bars['iron:C'] = 2;
+  s.storage.bars['copper:D'] = 2;
+  const ctx = makeCtx(s);
+  const root = render(renderWorkshop, s, CONFIG, ctx);
+  const res = clickOf(byId(root, 'ws-repair-all'))();
+  assert.equal(res.ok, true);
+  assert.equal(sw.durability, 100);
+  assert.equal(ch.durability, 100);
+  assert.match(res.msg, /^Repaired 2 items to 100% in [\d.]+m: C Iron Sword, D Copper Chest\./);
+  // nothing left: the button is off
+  const again = render(renderWorkshop, s, CONFIG, ctx);
+  assert.equal(byId(again, 'ws-repair-all').hasAttribute('disabled'), true);
+  // the Adventurer tab
+  s.gear[0].durability = 5;
+  const adv = render(renderAdventurer, s);
+  const list = withClass(adv, 'gl-table')[0];
+  assert.equal(list.classList.contains('gl-hasscrap'), false);
+  assert.deepEqual(findAll(list, (el) => el.tagName === 'TH').map(textOf), ['Item and stats', 'Durability']);
+  assert.equal(withClass(adv, 'ws-scrap').length, 0);
+  // the Repair button is inline here too (R24); the 5% sword can be repaired from this tab
+  const repairs = findAll(adv, (el) => el.attributes['data-repair'] !== undefined);
+  assert.equal(repairs.length, 1);
+  assert.equal(repairs[0].hasAttribute('disabled'), false);
+  assert.match(textOf(repairs[0]), /^Repair \+95%$/);
+  assert.ok(findAll(adv, (el) => el.attributes['data-flag'] === 'warn').length >= 1, 'the 5% sword could break against the toughest enemy');
+});
+
+test('the battle report: "Gear used in the fight" and "Brought but not used" are separate, home gear is never listed (R27, R39)', () => {
+  const s = game(7, WIN);
+  const used = addGear(s, 'sword', 'iron', 'C');
+  const spare = addGear(s, 'sword', 'copper', 'D');
+  const home = addGear(s, 'helmet', 'mythril', 'S', { type: 'diamond', grade: 'S' });
+  endDay(s, WIN);
+  assert.equal(confirmPlan(s, { enemyIndex: 0, gearIds: [used.id, spare.id], ringIds: [] }, WIN).ok, true);
+  const r = endDay(s, WIN).report;
+  assert.equal(r.win, true);
+  const root = render(renderReport, s, WIN);
+  const text = textOf(root);
+  assert.match(text, /Gear used in the fight \(1\)/);
+  assert.match(text, /Brought but not used \(no wear\)/i);
+  assert.equal(r.used.length, 1);
+  assert.equal(r.notUsed.length, 1);
+  const usedPanel = findAll(root, (el) => el.tagName === 'SECTION' && /^Gear used in the fight/.test(textOf(el)))[0];
+  const usedRows = findAll(usedPanel, (el) => el.tagName === 'TR' && el.attributes['data-gear']);
+  assert.deepEqual(usedRows.map((tr) => tr.attributes['data-gear']), [String(r.usedIds[0])]);
+  const chips = withClass(usedPanel, 'adv-notused')[0];
+  assert.match(textOf(chips), r.usedIds[0] === used.id ? /D Copper Sword/ : /C Iron Sword/, 'the other sword is "not used"');
+  assert.doesNotMatch(readable(root), /Mythril|Diamond/, 'gear left at home is never listed');
+  assert.doesNotMatch(text, /Packed but not used/);
+  // no tier points, the banner and the day in the header line
+  assert.doesNotMatch(text, /points|pts/i);
+  assert.match(textOf(withClass(root, 'adv-rhead')[0]), new RegExp(`Day ${r.day} · ${r.enemy.tier} · lasted [\\d.]+s`));
+  void home;
+  // nothing used: unarmed
+  const t = game(7, WIN);
+  endDay(t, WIN);
+  confirmPlan(t, { enemyIndex: 0, gearIds: [], ringIds: [] }, WIN);
+  endDay(t, WIN);
+  const none = textOf(render(renderReport, t, WIN));
+  assert.match(none, /Gear used in the fight \(0\)/);
+  assert.match(none, /No gear used: the adventurer fought unarmed\./);
+  assert.doesNotMatch(none, /Brought but not used/);
+});
+
+test('report wear: the loss is the difference of the two shown durabilities, so the numbers add up', () => {
+  const s = game(7, WIN);
+  const sw = addGear(s, 'sword', 'iron', 'C', null, { durability: 63.9 });
+  endDay(s, WIN);
+  confirmPlan(s, { enemyIndex: 0, gearIds: [sw.id], ringIds: [] }, WIN);
+  const r = endDay(s, WIN).report;
+  const row = findAll(render(renderReport, s, WIN), (el) => el.tagName === 'TR' && el.attributes['data-gear'] === String(sw.id))[0];
+  const cells = findAll(row, (el) => el.tagName === 'TD').map(textOf);
+  const before = 63;
+  const after = Number.parseInt(cells[2], 10);
+  assert.equal(cells[1], `-${before - after}%`);
+  assert.equal(r.wear.length, 1);
+});
+
+test('the combat log is a fixed-column table: Time · Attacker · Result · Effects · You · Foe, both HP on every row, the dropped one bold (R28)', () => {
+  const s = stateReport();
+  const report = s.report;
+  const root = renderCombatLog(report);
+  const table = withClass(root, 'clog')[0];
+  assert.deepEqual(findAll(table, (el) => el.tagName === 'TH').map(textOf), ['Time', 'Attacker', 'Result', 'Effects', 'You', 'Foe']);
+  assert.equal(findAll(table, (el) => el.tagName === 'COL').length, 6, 'a colgroup with a column each');
+  const rows = findAll(table, (el) => el.tagName === 'TR' && el.classList.contains('A') || el.classList.contains('E'));
+  assert.equal(rows.length, report.log.length);
+  report.log.forEach((e, i) => {
+    const tds = findAll(rows[i], (el) => el.tagName === 'TD');
+    assert.equal(tds.length, 6, 'six cells on every row');
+    assert.match(textOf(tds[4]), /^\d+\.\d$/);
+    assert.match(textOf(tds[5]), /^\d+\.\d$/);
+    const bold = tds.map((td, c) => (findAll(td, (el) => el.tagName === 'B').length ? c : -1)).filter((c) => c >= 0);
+    assert.deepEqual(bold, e.hit ? [e.side === 'A' ? 5 : 4] : [], 'on a hit the HP that dropped is bold; a miss has none');
+  });
+  assert.match(textOf(table), /Fight starts: Adventurer/);
+  assert.match(textOf(table), /is defeated after/);
+});
+
+test('a very long log is trimmed to the first 1000 and last 300 rows with a gap row', () => {
+  const log = Array.from({ length: 1500 }, (_, i) => ({ t: i / 10, side: i % 2 ? 'E' : 'A', hit: true, dmg: 1, phys: 1, magic: 0, hpA: 1000 - i / 2, hpE: 1000 - i / 2 }));
+  const report = { enemy: { name: 'Foe' }, win: true, draw: false, time: 150, advMaxHp: 1000, enemyMaxHp: 1000, log, logTrimmed: 200 };
+  const table = withClass(renderCombatLog(report), 'clog')[0];
+  assert.equal(findAll(table, (el) => el.tagName === 'TR' && (el.classList.contains('A') || el.classList.contains('E'))).length, 1300);
+  assert.match(textOf(withClass(table, 'clog-gap')[0]), /… 400 more attacks \(200 not saved: log trimmed\) …/);
+});
+
+function retiredState(score = 85, prevBest = undefined) {
+  const s = game(7);
+  s.stats.score = score;
+  s.stats.wins = { normal: 3, elite: 2, champion: 1 };
+  endRun(s);
+  if (prevBest !== undefined) s.end.prevBest = prevBest;
+  return s;
+}
+
+test('run summary: how it ended, score and days, "How your score is worked out" with points per tier, New game (R32)', () => {
+  const s = retiredState(130);
+  const root = render(renderRunSummary, s);
+  const text = textOf(root);
+  assert.match(text, /Run ended/);
+  assert.match(text, /You retired the adventurer on day 1\./);
+  assert.match(text, /How your score is worked out/);
+  assert.match(text, /Each win adds points for the enemy's tier\. Draws and losses add nothing\. Every day alive is another chance to win\./);
+  for (const tier of ['Normal', 'Elite', 'Champion']) assert.match(text, new RegExp(tier));
+  for (const t of Object.values(CONFIG.enemies.tiers)) assert.ok(text.includes(`× ${t.score}`), 'points per win');
+  assert.equal(textOf(byId(root, 'run-score')), '130');
+  assert.match(text, /days survived/);
+  assert.match(text, /fights won/);
+  assert.match(text, new RegExp(`best score \\(v${VERSION.replace('.', '\\.')}\\)`));
+  assert.equal(findAll(root, (el) => el.tagName === 'BUTTON').map(textOf).includes('New game'), true);
+  assert.doesNotMatch(text, /What went wrong|fatal battle/, 'a retired run has no fatal battle');
+  // a fight planned for today that did not happen
+  const t = game(7);
+  endDay(t);
+  confirmPlan(t, { enemyIndex: 0, gearIds: [], ringIds: [] });
+  const name = t.plan.enemy.name;
+  endRun(t);
+  assert.match(textOf(render(renderRunSummary, t)), new RegExp(`Today's fight against ${name} \\(\\w+\\) did not happen\\.`));
+  // "New best score!" only when this run beat the best from before
+  assert.match(textOf(render(renderRunSummary, retiredState(130, 50))), /New best score!/);
+  assert.doesNotMatch(textOf(render(renderRunSummary, retiredState(130, 130))), /New best score!/);
+  assert.doesNotMatch(textOf(render(renderRunSummary, retiredState(130, 500))), /New best score!/);
+  assert.doesNotMatch(textOf(render(renderRunSummary, retiredState(130))), /New best score!/, 'no best known: no claim');
+  assert.match(textOf(render(renderRunSummary, retiredState(130, 500))), /500best score/);
+});
+
+test('the run summary of a lost run: the fatal battle, the loss analysis (working, then done), and the tab is called Run summary', async () => {
+  const s = stateOver();
+  const text = textOf(render(renderRunSummary, s));
+  assert.match(text, /Game over/);
+  assert.match(text, /Your adventurer fell to .* on day 2\./);
+  assert.match(text, /The fatal battle/);
+  assert.match(text, /What went wrong\?/);
+  assert.match(text, /Working out what happened… 0%/, 'no analysis yet and the automatic start is off');
+  assert.equal(s.report.analysis, null);
+  // with the analysis cached the panel says what the plan promises
+  const a = analyzeLossSync(s, s.report, LOSE);
+  s.report.analysis = a;
+  const done = render(renderRunSummary, s, LOSE);
+  const panel = textOf(done);
+  assert.match(panel, new RegExp(`In ${CONFIG.report.replayFights} replays of this fight \\(same gear and rings, the enemy now fully known\\) the adventurer won 0%\\.`));
+  assert.match(panel, /▲ This fight: lost badly \(.* had \d+% HP left\)\./);
+  assert.match(panel, /Lost badly 100%/);
+  assert.doesNotMatch(panel, /Won easily 0%|Draw 0%/, 'zero parts are left out');
+  assert.match(panel, /Would gear left at home have helped\?/);
+  assert.match(panel, /You had no other gear at home: everything you owned was packed\./);
+  assert.match(panel, /How this was worked out/);
+  assert.equal(withClass(done, 'oc-seg').length, 1, 'one part in the bar');
+  // the analysis is shown once, not again inside the fatal battle
+  assert.equal((panel.match(/What went wrong\?/g) || []).length, 1);
+  // the automatic start (a real run): it works in the background, keeps the result on the report and re-renders
+  const live = stateOver();
+  const ctx = makeCtx(live, LOSE);
+  ctx.ui = {};
+  let renders = 0;
+  ctx.rerender = () => { renders += 1; };
+  let saves = 0;
+  ctx.save = () => { saves += 1; };
+  render(renderRunSummary, live, LOSE, ctx);
+  assert.ok(ctx.ui.loss_run && !ctx.ui.loss_run.cancelled, 'a run started');
+  for (let i = 0; i < 200 && !live.report.analysis; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.ok(live.report.analysis, 'the analysis finished');
+  assert.deepEqual(live.battles[live.battles.length - 1].analysis, live.report.analysis);
+  assert.equal(renders, 1);
+  assert.equal(saves, 1);
+  assert.equal(ctx.ui.loss_run, null);
+  // a new game cancels a run that is going
+  const other = stateOver();
+  const ctx2 = makeCtx(other, LOSE);
+  ctx2.ui = {};
+  render(renderRunSummary, other, LOSE, ctx2);
+  const run = ctx2.ui.loss_run;
+  const { cancelAnalysis } = await import('../js/ui/endday.js');
+  cancelAnalysis(ctx2);
+  assert.equal(run.cancelled, true);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(other.report.analysis, null, 'a cancelled run leaves nothing behind');
+});
+
+test('the fatal battle in the Log tab of a lost run shows the same analysis panel', () => {
+  const s = stateOver();
+  s.report.analysis = analyzeLossSync(s, s.report, LOSE);
+  s.battles[s.battles.length - 1].analysis = s.report.analysis;
+  const ctx = makeCtx(s, LOSE);
+  ctx.ui.log_open = { [s.report.day]: true };
+  assert.match(textOf(render(renderLog, s, LOSE, ctx)), /What went wrong\?/);
+});
+
+test('the roster and the enemy card show no points for a win (U3), and the Rings tab has no Score column', () => {
+  const s = statePlan(0);
+  const plan = render(renderPlan, s);
+  assert.doesNotMatch(readable(plan), /pts|points per|\+\d+ points/i);
+  const rings = textOf(render(renderRings, s));
+  assert.doesNotMatch(rings, /Score/);
+  const adv = game(7);
+  endDay(adv);
+  confirmPlan(adv, { enemyIndex: 0, gearIds: [], ringIds: [] });
+  assert.doesNotMatch(readable(render(renderAdventurer, adv)), /pts|\+\d+ points/i);
 });

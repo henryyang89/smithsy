@@ -234,7 +234,6 @@ function referencePanel(ctx) {
     return [
       h('span', { class: `tier-${tier}` }, cap(tier)),
       ...GRADES.map((g) => (w[g] > 0 ? { v: fmtPct((w[g] / total) * 100), cls: 'num' } : { v: '·', cls: 'num muted' })),
-      { v: String(cfg.enemies.tiers[tier].score), cls: 'num' },
     ];
   });
 
@@ -252,6 +251,6 @@ function referencePanel(ctx) {
         h('p', { class: 'mi-note' }, `Same-type stacking weights (best first): ${weights} ...`)),
       h('div', {},
         h('h4', {}, 'Drop odds: ring grade by enemy tier'),
-        tbl(['Tier', ...gradeHead(), { v: 'Score', cls: 'num' }], oddsRows, 'mi-compact'),
+        tbl(['Tier', ...gradeHead()], oddsRows, 'mi-compact'),
         h('p', { class: 'mi-note' }, `Every defeated enemy drops one ring. Its type is uniform: each of the ${nTypes} types has a ${fmtPct(100 / nTypes)} chance. The roster shows each enemy's reward ring if your ring scouting reveals it.`))));
 }

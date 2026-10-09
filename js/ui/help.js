@@ -8,12 +8,12 @@ import { hitChance, hitDamage, adventurerCombatant, attackInterval } from '../co
 import { STAT_LABELS, fmtStat, craftMinutes, repairInfo, scrapReturn, wearLoss } from '../core/gear.js';
 import { enemyCombatant } from '../core/enemies.js';
 import { skillDefs, xpToNext, itemXp, xpPerUnit, effectText } from '../core/skills.js';
-import { trackValueText } from '../core/intel.js';
+import { trackValueText, intelValue, nextIntelGain } from '../core/intel.js';
 import { bannersText } from '../core/groups.js';
 import { slotNoun } from '../core/pack.js';
 import { sightRange, searchesToFinish, searchesText } from '../core/map.js';
 import { simCounts } from '../core/sim.js';
-import { GRADE_ORDER, blendCutTable } from '../core/processing.js';
+import { GRADE_ORDER } from '../core/processing.js';
 import { formatClock, formatDuration, cap } from '../core/util.js';
 import { VERSION } from '../version.js';
 
@@ -110,18 +110,17 @@ function det(ctx, id, title, ...body) {
 const SECTIONS = [
   ['time', 'Time', timeSection],
   ['map', 'World map & travel', mapSection],
-  ['field', 'Fields & searching', fieldSection],
-  ['process', 'Refining & cutting', processSection],
-  ['gear', 'Gear', gearSection],
-  ['gems', 'Gem infusions', gemSection],
-  ['adventurer', 'Adventurer', adventurerSection],
-  ['combat', 'Combat formulas', combatSection],
+  ['field', 'Fields, searching & sight', fieldSection],
+  ['process', 'Workshop', workshopSection],
+  ['gear', 'Gear, repairs & scrap', gearRepairSection],
+  ['combat', 'Adventurer & combat', combatSection],
   ['enemies', 'Enemies', enemySection],
   ['banners', 'Banners', bannersSection],
-  ['rings', 'Rings', ringSection],
-  ['skills', 'Skills', skillSection],
+  ['estimate', 'Win estimate', estimateSection],
   ['intel', 'Intel', intelSection],
-  ['repair', 'Durability, repair & scrap', repairSection],
+  ['skills', 'Skills', skillSection],
+  ['rings', 'Rings', ringSection],
+  ['score', 'Score', scoreSection],
 ];
 
 export function renderHelp(root, ctx) {
@@ -161,14 +160,13 @@ function howToPlay(ctx) {
   const tiers = cfg.enemies.tiers;
   const rosterN = TIERS.reduce((a, k) => a + tiers[k].count, 0);
   const rosterMix = TIERS.map((k) => `${tiers[k].count} ${k}`).join(', ');
-  const scores = TIERS.map((k) => `${k} ${tiers[k].score}`).join(', ');
   const wear = cfg.gear.durabilityLoss;
   const tab = (id, label) => h('a', { href: '#', class: 'mi-link', onclick: (e) => { e.preventDefault(); ctx.setTab(id); } }, label);
 
   return h('section', { class: 'panel' },
     h('h3', {}, 'How to play'),
     h('p', {}, 'You are a miner and blacksmith. Your adventurer fights one enemy a day with the gear you make. ',
-      h('b', {}, 'If the adventurer loses a fight, the run is over.'), ` Each win scores points (${scores}) and drops a ring.`),
+      h('b', {}, 'If the adventurer loses a fight, the run is over.'), ' Each win scores points and drops a ring. You see your score when the run ends (End run or a lost fight); see Score below.'),
     h('ol', { class: 'mi-steps' },
       h('li', {}, h('b', {}, `Work from ${formatClock(t.dayStartMin)} to ${formatClock(t.dayEndMin)} (${dayLen} minutes). `),
         'Only actions cost time. On the ', tab('map', 'Map'), ', travel to a field and search 3x3 areas for ore and gems. ',
@@ -178,7 +176,7 @@ function howToPlay(ctx) {
       h('li', {}, h('b', {}, 'At camp, use the '), tab('workshop', 'Workshop'), ': refine ore into bars, cut gems, smith gear from bars of one material and grade (optionally infusing a cut gem), and repair worn gear (it costs bars and time). Scrap gear you no longer need to get some bars back.'),
       h('li', {}, h('b', {}, 'End the day at camp. '), 'If the adventurer fought today you first see the battle report. Then plan tomorrow: pick 1 of ',
         `${rosterN} enemies (${rosterMix}; a new roster every day), pack up to ${cfg.plan.perSlot} items per gear type (more once your adventurer has captured pack mules, see Banners below), and choose up to ${cfg.rings.maxWorn} adventurer rings. `,
-        h('b', {}, 'Keep a spare of each item so you can leave one home to repair it:'), ' repairs happen by day, at camp, on gear the adventurer does not have.'),
+        'Plan ahead: ', h('b', {}, 'keep a spare of each item so you can leave one home to repair it'), '. Repairs happen by day, at camp, on gear the adventurer does not have.'),
       h('li', {}, h('b', {}, 'The next day the adventurer is away fighting. '),
         'When the fight starts it sees the enemy\'s real attributes and uses the best packed item for each slot. Packed gear cannot be repaired that day. ',
         `It comes back at the end of the day; every item that was used loses about ${p((wear.min + wear.max) / 2, 0)} durability (${wear.min}-${wear.max}% before the modifiers below), a little more against tougher enemies (${TIERS.map((t) => `${t} x${(wear.tierMult && wear.tierMult[t]) || 1}`).join(', ')}) and a little less with the ${cfg.skills.activity.gearCare ? cfg.skills.activity.gearCare.name : 'Gear care'} skill. At 0% it is destroyed.`),
@@ -189,9 +187,10 @@ function howToPlay(ctx) {
       h('li', {}, `Your win chance against every enemy is worked out by itself, on the plan screen and on the Adventurer tab: ${simSummary(ctx.state, cfg)}, shown in the win-estimate row of the comparison table. It is a small simulation, so it is a rough guide with some risk; Battle simulation intel and a Foresight ring make it bigger.`),
       h('li', {}, 'Wear rings on the ', tab('rings', 'Rings'), ' tab. Smith rings help you right away; adventurer rings are chosen for each fight.'),
       h('li', {}, 'Skills level up on their own as you work (', tab('skills', 'Skills & Intel'), '). Farther fields are richer but cost more travel time.'),
-      h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: each gem\'s grade skill moves its cutting table from the novice table toward the master table (Workshop and Refining & cutting below).'),
+      h('li', {}, 'Every gem type is equally likely to be found. Cutting gets better with practice: the more you cut of a gem, the better its chances (Skills tab).'),
       h('li', {}, 'Grades are always listed from lowest to highest, left to right: ', OUTCOMES.map((g, i) => [i ? ' < ' : '', gradeSpan(g)]), ' (Fail is the lowest outcome).'),
-      h('li', {}, 'In a field your sight shows some of the items still in the ground (a tag on the cell). Your sight grows with Ore sight intel and Ore sight rings; on day 1 it is too low to see anything.')),
+      h('li', {}, 'In a field your sight shows some of the items still in the ground; it grows with Ore sight intel and Ore sight rings (on day 1 it is too low to see anything).'),
+      h('li', {}, 'To stop playing before a loss, press End run in the top bar: the adventurer retires and the run is scored like a lost fight would be.')),
     h('p', { class: 'mi-note mi-version' }, `Smithsy v${VERSION}. What changed in each version (and how to go back to an older one): `,
       h('a', { href: 'CHANGELOG.md', target: '_blank', rel: 'noopener', class: 'mi-link' }, 'CHANGELOG.md'), '.'));
 }
@@ -319,68 +318,46 @@ function fieldSection(cfg) {
   ];
 }
 
-// -------------------------------------------------------------- processing ----
-function processSection(cfg) {
+// ---------------------------------------------------------------- workshop ----
+// What the Workshop does and how its numbers work. The cutting chances are not listed here: the Workshop shows your
+// current chances for every gem (and a hover has the starting ones), and the Skills tab explains how practice improves them.
+function workshopSection(cfg) {
   const distCells = (dist) => OUTCOMES.map((g) => (dist[g] > 0 ? np(dist[g], 0) : { v: '·', cls: 'num muted' }));
-  const distCells1 = (dist) => OUTCOMES.map((g) => (dist[g] > 0.05 ? np(dist[g], 1) : { v: '·', cls: 'num muted' }));
   const outHead = () => OUTCOMES.map((g) => ({ v: gradeSpan(g), cls: 'num' })); // fresh nodes per table
   const sk = cfg.skills;
-  const gg = sk.perMaterial.gemGrade;
-  const gf = sk.perMaterial.gemFail;
-  const blendPerLevel = gg.effects.cutBlend; // % of the way to the master table per grade skill level
-  const cutFailPerLevel = gf.effects.cutFail; // failure points removed per cutting skill level
-  const masterLv = Math.min(sk.maxLevel, Math.ceil(100 / Math.max(blendPerLevel, 1e-9) - 1e-9));
   const gemLuck = cfg.rings.types.gemGrade;
   const barLuck = cfg.rings.types.oreGrade;
   const barRows = BARS.map((b) => {
     const r = cfg.refine[b];
     return [h('b', {}, cap(b)), Object.entries(r.input).map(([o, k]) => `${k} ${o}`).join(' + '), n(r.minutes), ...distCells(r.dist)];
   });
-  // Gems that share the same tables are listed together.
-  const groups = [];
-  for (const g of GEMS) {
-    const c = cfg.cut[g];
-    const sig = JSON.stringify([c.minutes, c.novice, c.master, c.dist]);
-    const found = groups.find((x) => x.sig === sig);
-    if (found) found.gems.push(g);
-    else groups.push({ sig, gems: [g], c });
-  }
-  const gemLabel = (gems) => (gems.length === GEMS.length ? 'All gems' : gems.map(cap).join(', '));
-  // Failure only depends on the cutting skill: the master table's failure is reached at this cutting level.
-  const failLv = (c) => Math.min(sk.maxLevel, Math.max(0, Math.ceil((c.novice.F - c.master.F) / Math.max(cutFailPerLevel, 1e-9) - 1e-9)));
-  const gemRows = groups.flatMap(({ gems, c }) => (c.novice
-    ? [
-      [h('b', {}, gemLabel(gems)), 'Novice (grade skill 0)', n(c.minutes), ...distCells(c.novice)],
-      [h('b', {}, gemLabel(gems)), `Master (grade skill ${masterLv}, cutting skill ${failLv(c)})`, n(c.minutes), ...distCells(c.master)],
-    ]
-    : [[h('b', {}, gemLabel(gems)), 'Fixed table', n(c.minutes), ...distCells(c.dist)]]));
-  // How the gem grade skill blends the table (no cutting skill, no rings), for the first tiered gem.
-  const tiered = groups.find((x) => x.c.novice);
-  const levels = [];
-  for (let l = 0; l <= sk.maxLevel; l += Math.max(1, Math.floor(sk.maxLevel / 5))) levels.push(l);
-  if (levels[levels.length - 1] !== sk.maxLevel) levels.push(sk.maxLevel);
-  const blendRows = tiered ? levels.map((l) => {
-    const t = Math.min(100, blendPerLevel * l);
-    return [n(l, 0), np(t, 0), ...distCells1(blendCutTable(tiered.c, t / 100, 0))];
-  }) : [];
+  const gemRows = GEMS.map((g) => [h('b', {}, cap(g)), `1 raw ${g}`, n(cfg.cut[g].minutes)]);
   return [
-    sub('Refining ore into bars'),
+    kv([
+      ['Storage and gear', 'The top of the Workshop lists what you own: raw ores, bars by grade, gems (raw, cut by grade, and how many pieces of gear carry each) and a table of your gear by type and material with a tag for each gem, so you can see what to make next. Click a cell of the gear table or a gem to pick it in the smith form.'],
+      ['Refining', 'Each bar rolls a grade from D (lowest) to S (highest). On a fail the ore is lost. The Workshop shows your chances now (rings and skills included); point at them for the starting chances. "Time each" is next to the buttons.'],
+      ['Cutting', 'Each cut gem rolls a grade from D to S. On a fail the gem is lost. You get better the more you cut of each gem: its Grade skill raises the chance of better grades, its Cutting skill lowers the failure chance, and General cutting helps every gem a little.'],
+      ['Result box', 'The message under a table is green when everything worked and red when any attempt failed (for example "2 of 5 failed").'],
+      ['Smithing', 'Pick a gear type, a material, a bar grade and, if you like, a gem and its grade, then press Craft. All bars in one item are the same material and grade. A new item always starts at 100% durability.'],
+    ]),
+    sub('Refining: starting chances by bar (%)'),
     tbl(['Bar', 'Needs', { v: 'Minutes', cls: 'num' }, ...outHead()], barRows),
-    sub('Cutting gems: novice and master tables'),
-    tbl(['Gem', 'Table', { v: 'Minutes', cls: 'num' }, ...outHead()], gemRows),
-    tiered ? [
-      sub(`Gem table by grade skill level (${tiered.gems.length === GEMS.length ? 'all gems' : gemLabel(tiered.gems)}; before the cutting skill and rings)`),
-      tbl([{ v: 'Grade skill level', cls: 'num' }, { v: 'Of the way to master', cls: 'num' }, ...outHead()], blendRows),
-    ] : null,
+    sub('Cutting: time per gem'),
+    tbl(['Gem', 'Needs', { v: 'Minutes', cls: 'num' }], gemRows),
     h('ul', { class: 'mi-list' },
-      h('li', {}, 'Grades read from lowest (left) to highest (right). Fail = the material is lost. The Workshop shows these chances already adjusted by your rings and skills.'),
-      h('li', {}, 'Time: Refining rings (refining and cutting) + the General refining / General cutting skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
-      h('li', {}, `Bars: ${barLuck ? `${barLuck.name} rings` : 'Rings'} + the bar grade skill (${num(sk.perMaterial.oreGrade.effects.refineUpgrade, 2)}% per level) give each successful bar that % chance to go up one grade (S stays S). Failure chance moves into grade D: ${num(sk.perMaterial.oreFail.effects.refineFail, 2)} points per level of that bar's refining skill, plus ${num(sk.activity.refineTime.effects.refineFail, 2)} points per level of General refining (every bar).`),
-      tiered ? h('li', {}, `Gems: each gem's grade skill blends its table from novice to master, ${num(blendPerLevel, 2)}% of the way per level; General cutting adds ${num(sk.activity.cutTime.effects.cutBlend, 2)}% per level to every gem. D to S follow the blend and fill whatever failure leaves. Failure = the novice failure chance minus the gem's cutting skill (${num(cutFailPerLevel, 2)} points per level). Then ${gemLuck ? `${gemLuck.name} rings` : 'gem luck rings'} give each successful cut their % chance to go up one grade, on top.`) : null),
+      h('li', {}, 'Grades read from lowest (left) to highest (right). Fail = the material is lost.'),
+      h('li', {}, 'Time: Refining rings (refining and cutting) and the General refining / General cutting skills, capped at ', p(cfg.processing.maxTimeReduction), '.'),
+      h('li', {}, `Bars: ${barLuck ? `${barLuck.name} rings` : 'Rings'} and the bar grade skill give each successful bar a chance to go up one grade (S stays S). Failure chance is lowered by the bar type's refining skill and by General refining (every bar).`),
+      h('li', {}, `Gems: ${gemLuck ? `${gemLuck.name} rings` : 'gem luck rings'} give each successful cut a chance to go up one grade, on top of the gem's own skills.`),
+      sk.activity.refineTime ? h('li', {}, `${sk.activity.refineTime.name} and ${sk.activity.cutTime.name} help every material a little; the skills of one bar or gem type count far more for that material (Skills).`) : null),
   ];
 }
 
-// -------------------------------------------------------------------- gear ----
+// ----------------------------------------------------- gear, repairs & scrap ----
+function gearRepairSection(cfg) {
+  return [sub('Gear'), ...gearSection(cfg), sub('Gem infusions'), ...gemSection(cfg), sub('Durability, repair & scrap'), ...repairSection(cfg)];
+}
+
 function gearSection(cfg) {
   const g = cfg.gear;
   const mats = Object.keys(g.materialMult);
@@ -464,6 +441,10 @@ function adventurerSection(cfg) {
 
 // ------------------------------------------------------------------ combat ----
 function combatSection(cfg) {
+  return [...adventurerSection(cfg), ...combatDetails(cfg)];
+}
+
+function combatDetails(cfg) {
   const c = cfg.combat;
   const a = cfg.adventurer;
   const [lo, hi] = c.damageRoll;
@@ -536,7 +517,6 @@ function combatSection(cfg) {
       ['Caps', `Defense ${p(c.defenseCap, 0)}. Pierce resistance, magic resistance and all stun / slow reductions ${p(c.resistCap, 0)}.`],
       ['No time limit', `A safety cap of ${num(c.safetyCapSeconds, 0)}s only stops endless loops; reaching it counts as a draw (adventurer survives, no ring).`],
       ['Gear choice', `When the fight starts the adventurer tries the combinations of packed gear (${num(c.bestGearFights, 0)} simulated fights each) and uses the best. An item that another packed item of the same type beats in every stat is skipped; if more than ${cfg.sim.maxExactCombos} combinations are left, it improves one gear type at a time instead.`],
-      ['Win-chance estimate', `Worked out by itself for the whole roster (plan screen and Adventurer tab). For each enemy: ${cfg.sim.samples} guesses of the hidden attributes (respecting the tier's low/normal/high counts) x ${cfg.sim.evalFights} fights each, after picking gear with ${cfg.sim.fightsPerLoadout} fights per combination, i.e. ${cfg.sim.samples * cfg.sim.evalFights} fights per enemy. That is small on purpose: the result is noisy, a risk you plan with. Every estimate shows its ± (for example 62% ± 14: the test fights alone could be off by about 14 points; hidden attributes can make the real chance higher or lower); more guesses and test fights shrink it. The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${cfg.intel.tracks.simDepth.gains[0]} per point, up to +${cfg.intel.tracks.simDepth.max}), and your best Foresight smith ring adds more of each (only the best one counts). Draws count as survival.`],
     ]),
     sub(`Attack bar fill time (adventurer, ${num(a.attackInterval, 2)}s base)`),
     tbl([{ v: 'Speed', cls: 'num' }, ...slows.map((sl) => ({ v: sl > 0 ? `Slowed ${p(sl, 0)}` : 'Not slowed', cls: 'num' }))], barRows),
@@ -560,7 +540,7 @@ function enemySection(cfg) {
     const d = e.tiers[t];
     const ringPct = toPct(cfg.rings.gradeWeights[t] || {});
     return [h('b', { class: `tier-${t}` }, cap(t)), n(d.count, 0), n(d.hp), n(d.damage), np(d.defense, 0),
-      LEVELS.map((lv) => d.levels[lv]).join(' / '), n(d.score, 0),
+      LEVELS.map((lv) => d.levels[lv]).join(' / '),
       Object.entries(ringPct).filter(([, v]) => v > 0).map(([g, v]) => `${g} ${p(v, 0)}`).join(', ')];
   });
   // One row per pair: offense on the left, its matching defense on the right. A value of 0 (Low specials and
@@ -577,12 +557,12 @@ function enemySection(cfg) {
       ['Roster', `${rosterN} enemies each day (${TIERS.map((t) => `${e.tiers[t].count} ${t}`).join(', ')}). You pick one for tomorrow.`],
       ['Attack bar', `fills in ${num(e.attackInterval, 2)}s at 0% speed (the Fast attribute changes speed)`],
       ['Stun / slow', `An enemy stun stops your attack bar for ${num(e.stunDuration, 2)}s; a Chilling hit makes your bar fill slower (by its Chilling %) for ${num(e.slowDuration, 2)}s. Both before your resistances; neither stacks.`],
-      ['Growth', 'Enemies get a little stronger every day.'],
+      ['Getting stronger', 'Enemies get a little stronger every day.'],
       ['Attributes', `${Object.keys(e.attributes).length} attributes, each Low / Normal / High, assigned at random to match the tier's counts. Each one is visible with your Enemy scouting chance (${p(cfg.intel.tracks.enemySight.base, 0)} base${tierMultText(cfg.intel.tracks.enemySight.tierMult, 'tier')}).`],
       ['Low', 'Low means the enemy does not have that ability at all (shown as none): a Low Magical enemy deals no magic damage, a Low Chilling enemy never slows you, a Low resistance resists nothing. Accurate, Evasion, Fast and HP are core stats and only move a little between levels.'],
     ]),
     sub('Tiers (base values on day 1; enemies grow stronger every day)'),
-    tbl(['Tier', { v: 'Per roster', cls: 'num' }, { v: 'HP', cls: 'num' }, { v: 'Damage', cls: 'num' }, { v: 'Defense', cls: 'num' }, 'Low / Normal / High', { v: 'Score', cls: 'num' }, 'Ring grade odds'], tierRows),
+    tbl(['Tier', { v: 'Per roster', cls: 'num' }, { v: 'HP', cls: 'num' }, { v: 'Damage', cls: 'num' }, { v: 'Defense', cls: 'num' }, 'Low / Normal / High', 'Ring grade odds'], tierRows),
     sub('Attributes (shown in pairs: offense | defense)'),
     tbl(['Offense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning', 'Defense', ...LEVELS.map((lv) => ({ v: cap(lv), cls: `num attr-${lv}` })), 'Meaning'], attrRows),
   ];
@@ -601,7 +581,7 @@ function ringSection(cfg) {
   return [
     kv([
       ['Source', `Each defeated enemy drops 1 ring. Type: uniform over all ${types.length} types (${p(100 / types.length)} each). Grade: by tier (below).`],
-      ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once and can be swapped at the start of a day (before your first action) or while planning at night; adventurer rings are chosen in each night's plan.`],
+      ['Wearing', `Smith and adventurer each wear up to ${r.maxWorn} rings. Smith rings apply at once and can be swapped at the start of a day (before your first action) or while you plan the next fight; adventurer rings are chosen in the plan before each fight.`],
       ['Stacking', `Same type, best first: ${weights.join(', ')}, ... (each extra ring counts ${x(r.duplicateFactor)} the previous one).${types.some(([, d]) => d.stack === false) ? ` Exception: ${types.filter(([, d]) => d.stack === false).map(([, d]) => d.name).join(', ')} counts only your best ring.` : ''}`],
       r.types.foresight ? [r.types.foresight.name, `A smith ring: your best Foresight ring adds ${r.types.foresight.values.map((v) => `+${v}`).join(' / ')} (${GRADES.join(' / ')}) guesses AND test fights per enemy to the plan screen's win-chance estimate.${r.types.foresight.stack === false ? ' Only your best Foresight ring counts; more of them add nothing.' : ''} It does nothing in the fight itself.`] : null,
     ]),
@@ -614,12 +594,8 @@ function ringSection(cfg) {
 // ------------------------------------------------------------------ skills ----
 function skillSection(cfg) {
   const s = cfg.skills;
-  const xpRow = [];
   let total = 0;
-  for (let l = 0; l < s.maxLevel; l++) {
-    xpRow.push(xpToNext(l, cfg));
-    total += xpToNext(l, cfg);
-  }
+  for (let l = 0; l < s.maxLevel; l++) total += xpToNext(l, cfg);
   const defs = skillDefs(cfg);
   // What one level of a skill gives, e.g. "0.6% less travel time"
   const levelGain = (effects) => Object.entries(effects).map(([e, v]) => `${num(v, 2)}${s.effects[e].unit === 'pts' ? ' points' : '%'} ${s.effects[e].text}`).join('; ');
@@ -643,8 +619,8 @@ function skillSection(cfg) {
     }));
   return [
     kv([
-      ['Levels', `0 to ${s.maxLevel}. Skills level up automatically from doing the activity. Point at (or tap) a skill on the Skills & Intel tab for what it gives now, what the next level gives and how to earn XP.`],
-      ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, `${xpRow.join(', ')} (total ${total.toLocaleString('en-US')} XP for the highest level)`)],
+      ['Levels', 'Skills level up automatically from doing the activity. Point at (or tap) a skill on the Skills & Intel tab for what it gives now, what the next level gives and how to earn XP.'],
+      ['XP per level', formula(`XP for level L → L+1 = ${s.xpBase} x (L + 1)`, 'Each level needs a little more XP than the one before.')],
       ['Who it works for', `Skills of an activity (Travel, Carrying, searching, General refining / cutting / repair, Gear care) work for every material. The skills of one bar type or gem type only work for that material, and count far more than the general ones: for example a bar type\'s own refining skill removes ${num(s.perMaterial.oreFail.effects.refineFail / s.activity.refineTime.effects.refineFail, 2)} times the failure chance that General refining does.`],
       ['Bonuses', `Skill bonuses add to the matching smith ring bonuses; time reductions from rings and skills together are capped at ${p(cfg.processing.maxTimeReduction)}.`],
     ]),
@@ -680,20 +656,52 @@ function bannersSection(cfg) {
 }
 
 // ------------------------------------------------------------------- intel ----
-function intelSection(cfg) {
+function intelSection(cfg, ctx) {
   const ic = cfg.intel;
-  const trackRows = Object.entries(ic.tracks).map(([k, t]) => [h('b', {}, t.name), { v: trackValueText(k, t.base, cfg), cls: 'num' }, { v: trackValueText(k, t.max, cfg), cls: 'num' }, t.desc]);
+  const st = ctx.state;
+  const trackRows = Object.entries(ic.tracks).map(([k, t]) => {
+    const gain = nextIntelGain(st, k, cfg);
+    return [h('b', {}, t.name), { v: trackValueText(k, intelValue(st, k, cfg), cfg), cls: 'num' }, { v: gain > 0 ? `+${trackValueText(k, gain, cfg).replace(/^\+/, '')}` : 'maxed', cls: 'num' }, t.desc];
+  });
   const sd = ic.tracks.simDepth;
   return [
     kv([
       ['Earning', `1 intel point at the end of every ${ordinal(ic.daysPerPoint)} day (day ${ic.daysPerPoint}, ${ic.daysPerPoint * 2}, ${ic.daysPerPoint * 3}, ...).`],
-      ['Spending', 'Each point raises one track. Every track has its own steps, and the steps get smaller as you spend more on the same track. The Skills & Intel tab shows each track\'s current value and what the next point adds. A point that can still raise a track must be spent before the next day can start (the plan screen has the buttons at the top).'],
+      ['Spending', 'Each point raises one track. Every track has its own steps, and the steps get smaller as you spend more on the same track. The table below shows each track now and what the next point adds. A point that can still raise a track must be spent before the next day can start (the plan screen has the buttons at the top).'],
       ['Elites and champions', `Enemy scouting counts for less against tougher enemies${tierMultText(ic.tracks.enemySight.tierMult, 'tier') ? `: ${tierMultText(ic.tracks.enemySight.tierMult, 'tier').replace(/^; /, '')}` : ''}. Ring grade scouting counts for less against better ring grades${tierMultText(ic.tracks.ringGradeSight.gradeMult, 'grade') ? `: ${tierMultText(ic.tracks.ringGradeSight.gradeMult, 'grade').replace(/^; /, '')}` : ''}.`],
       ['Banner scouting', `The chance to see which banner an enemy marches under (see Banners). Starts at ${trackValueText('groupSight', ic.tracks.groupSight.base, cfg)}.`],
-      ['Ore sight', `Your sight in the fields (see Fields & searching): ${trackValueText('oreSight', ic.tracks.oreSight.base, cfg)} to start with, up to ${trackValueText('oreSight', ic.tracks.oreSight.max, cfg)}. Ore sight rings add to it.`],
-      ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win-chance estimate (base ${cfg.sim.samples} guesses x ${cfg.sim.evalFights} fights). Each point gives +${sd.gains[0]}, up to +${sd.max}; every extra guess and fight also makes the estimate slower to run.`],
+      ['Ore sight', 'Your sight in the fields (see Fields, searching & sight). Ore sight rings add to it.'],
+      ['Battle simulation', `Not a chance: its value is the number of extra guesses and extra test fights per enemy in the win estimate (see Win estimate). Each point gives +${sd.gains[0]}, up to +${sd.max}; every extra guess and fight also makes the estimate slower to run.`],
     ]),
-    tbl(['Track', { v: 'Starts at', cls: 'num' }, { v: 'Max', cls: 'num' }, 'What it does'], trackRows),
+    tbl(['Track', { v: 'Now', cls: 'num' }, { v: 'Next point', cls: 'num' }, 'What it does'], trackRows),
+  ];
+}
+
+// ---------------------------------------------------------------- estimate ----
+function estimateSection(cfg, ctx) {
+  const o = cfg.sim;
+  const sd = cfg.intel.tracks.simDepth;
+  return [
+    kv([
+      ['Always on', `Your win chance against every enemy is worked out by itself, on the plan screen and on the Adventurer tab (the Win estimate row of the comparison table). Right now it is ${simSummary(ctx.state, cfg)}.`],
+      ['How', `For each enemy: ${o.samples} guesses of the hidden attributes (respecting the tier's Low / Normal / High counts) x ${o.evalFights} test fights each, after the adventurer has picked its gear with ${o.fightsPerLoadout} fights per combination. That is ${o.samples * o.evalFights} fights per enemy. Draws count as survival.`],
+      ['The ±', 'Every estimate shows a ± (for example 62% ± 14): how far the test fights alone could be off. Hidden attributes can make the real chance higher or lower. Even 25 wins out of 25 shows a ±, because a few test fights can never be sure.'],
+      ['A risk you take', 'The estimate is small on purpose: it is a rough guide, not a promise, and a lost fight ends the run. The plan shows the estimate it was made with, and the battle report reminds you of it.'],
+      ['Making it steadier', `The Battle simulation intel track adds its value as extra guesses AND extra test fights per enemy (+${sd.gains[0]} per point, up to +${sd.max}), and your best Foresight smith ring adds more of each (only the best one counts).`],
+      ['Gear', `The estimate uses the gear and rings chosen on the plan screen. On the Adventurer tab it uses your best gear (the best item of each gear type) and the rings the adventurer wears; you choose the gear when you plan. If more than ${o.maxExactCombos} gear combinations are packed, the adventurer improves one gear type at a time instead of trying them all.`],
+    ]),
+  ];
+}
+
+// ------------------------------------------------------------------- score ----
+function scoreSection() {
+  return [
+    kv([
+      ['When you see it', 'You see your score when the run ends (End run or a lost fight). There is no running score while you play, and no points are shown for any enemy.'],
+      ['How it works', 'Each win adds points for the enemy\'s tier: tougher tiers are worth more. Draws and losses add nothing, and every win drops a ring. Every day alive is another chance to win.'],
+      ['End run', 'The End run button in the top bar retires the adventurer and scores the run exactly like a lost fight would. A fight planned for today does not happen. You cannot continue the run afterwards.'],
+      ['Run summary', 'The run summary shows the score, the days survived, the fights won and your best score for this version. It lists the wins and points of each tier, and after a lost fight it replays the fight to show what went wrong and whether gear you left at home would have helped.'],
+    ]),
   ];
 }
 

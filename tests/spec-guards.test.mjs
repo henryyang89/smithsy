@@ -291,3 +291,82 @@ test('request pins (batch 4): R13 three banners, +1 pack slot per 4 wins against
   const gm = t.ringGradeSight.gradeMult;
   assert.ok(gm.D > gm.C && gm.C > gm.B && gm.B > gm.A && gm.A > gm.S, 'R22: the higher the ring grade, the harder to scout');
 });
+
+// ------------------------------------------------------------------ batch 5 ----
+const UI_FILES = filesUnder(join(ROOT, 'js', 'ui'));
+const uiSrc = (name) => read(join(ROOT, 'js', 'ui', name));
+
+test('guard: no score and no tier points on screen during a run (R32, U3): only the run summary and Help talk about the score', () => {
+  const main = read(join(ROOT, 'js', 'main.js'));
+  assert.doesNotMatch(main, /Score \$\{|best \$\{|stats\.score\}/, 'the top bar has no running score');
+  assert.deepEqual(hits(UI_FILES, /\} pts|\d pts| pts['"`)]/), [], 'no "+25 pts" anywhere');
+  assert.deepEqual(hits(UI_FILES.filter((f) => !f.endsWith('present.js')), /tiers\[[^\]]+\]\.score|tierCfg\.score|t\.score\b/), [], 'tier points are only read for the run summary (present.js scoreBreakdown)');
+  assert.doesNotMatch(uiSrc('ringsview.js'), /Score/);
+  assert.doesNotMatch(uiSrc('help.js'), /\.score\b/, 'Help does not read the tier points');
+  // the run summary is the one place that explains the formula
+  assert.match(uiSrc('endday.js'), /How your score is worked out/);
+  assert.match(uiSrc('present.js'), /export function scoreBreakdown/);
+});
+
+test('guard: the top bar has End run and New game (only when over), the work-day bar fills from dayProgress, the toast takes the action\'s tone, the best score is recorded once', () => {
+  const main = read(join(ROOT, 'js', 'main.js'));
+  assert.match(main, /'End run'/);
+  assert.match(main, /Game\.endRun\(state\)/);
+  assert.match(main, /End this run now\? Your adventurer retires and the run is scored, the same as a lost fight would score it\. You can't continue it afterwards\./);
+  assert.match(main, /state\.phase !== 'over'/);
+  assert.match(main, /dayProgress\(state, CONFIG\)/);
+  assert.match(main, /clockStatus\(state, left, CONFIG\)/, 'a finished run shows "Run over", not the work clock');
+  assert.match(main, /clock\.bar/, 'and no work-day bar');
+  assert.match(main, /res\.tone \|\| \(res\.ok \? 'ok' : 'err'\)/);
+  assert.match(main, /function recordBest\(\)/);
+  assert.match(main, /state\.end\.prevBest != null/);
+  assert.match(main, /label: 'Run summary'/);
+  assert.match(main, /cancelAnalysis\(ctx\)/);
+  assert.doesNotMatch(main, /renderGameOver|timeLabel|bestScore\(/);
+});
+
+test('guard: batch 5 deletions stay deleted (renderGameOver, storagePanel, distRefView, bonusBits, durabilityNode, the gem skill lines)', () => {
+  assert.deepEqual(hits(UI_FILES, /renderGameOver|storagePanel|distRefView|durabilityNode|Grade skill lv|Cutting skill lv|Gem luck rings \(/), []);
+  assert.deepEqual(hits(['workshop.js', 'endday.js', 'inventory.js', 'gearlist.js'].map((f) => join(ROOT, 'js', 'ui', f)), /bonusBits/), [], 'the workshop rows carry no bonus text');
+  assert.deepEqual(hits([...UI_FILES, ...filesUnder(join(ROOT, 'css'), ['.css'])], /ws-gear\b|ws-dist-l\b|ws-dist-ref\b|ws-chip-packed/), [], 'the old workshop gear list and gem rows are gone');
+});
+
+test('guard: the Workshop has no drop-downs and no upgrade luck / fail / time bonus text (R17, R19)', () => {
+  const ws = uiSrc('workshop.js') + uiSrc('inventory.js') + uiSrc('gearlist.js');
+  assert.doesNotMatch(ws, /h\('select'|h\('option'|<select/);
+  assert.doesNotMatch(ws, /upgrade luck|% time`|fail`/);
+  assert.doesNotMatch(ws, /['"`][^'"`\n]*(novice|master)[^'"`\n]*['"`]/i, 'no novice / master wording in the text (the config key novice is the first-time cutter\'s table)');
+});
+
+test('guard: Help has no novice / master tables, no regrowth, no night and never reads the growth or the tier points', () => {
+  const help = uiSrc('help.js');
+  assert.doesNotMatch(help, /novice|blendCutTable|masterLv|Estimate all|growthPerDay|growth\(/i);
+  assert.doesNotMatch(help, /night/i);
+});
+
+test('guard: the loss analysis is a screen-only feature: the game and the tools never run replays (bots never pay for it)', () => {
+  assert.doesNotMatch(read(join(ROOT, 'js', 'core', 'game.js')), /replay/);
+  assert.deepEqual(hits(TOOL_FILES, /core\/replay/), []);
+  assert.deepEqual(hits(JS_FILES.filter((f) => !/replay\.js$|endday\.js$|present\.js$/.test(f)), /from '.*replay\.js'/), [], 'only the screen (and its DOM-free helpers) import it');
+  // core/replay.js itself changes nothing in the state it is given
+  const replay = read(join(ROOT, 'js', 'core', 'replay.js'));
+  assert.doesNotMatch(replay, /state\.[a-zA-Z.]+\s*=[^=]|state\.[a-zA-Z.]+\.(push|splice)\(/, 'no writes to the game state');
+});
+
+test('guard: the report never lists home gear and has the two gear groups of R39', () => {
+  const endday = uiSrc('endday.js');
+  assert.doesNotMatch(endday, /Packed but not used|Gear the adventurer used/);
+  assert.match(endday, /Gear used in the fight/);
+  assert.match(endday, /Brought but not used \(no wear\)/);
+  assert.doesNotMatch(endday, /ctx\.state\.gear\.find\(\(x\) => x\.id === id\)/, 'the report reads the snapshots, not the gear you own now');
+});
+
+test('request pins (batch 5): R15 the work-day bar fills with time used, R28 six combat-log columns, R30 Time each right of the outcome and left of the buttons', () => {
+  const main = read(join(ROOT, 'js', 'main.js'));
+  assert.match(main, /width: `\$\{Math\.round\(day\.frac \* 1000\) \/ 10\}%`/, 'R15: the fill is the fraction used');
+  assert.doesNotMatch(main, /left \/ dayLen|frac = Math\.max\(0, Math\.min\(1, left/);
+  const css = read(join(ROOT, 'css', 'ui-adventurer.css'));
+  assert.equal((css.match(/\.clog col\.c-/g) || []).length >= 5, true, 'R28: a fixed column each for time, attacker, effects, you and foe');
+  const ws = uiSrc('workshop.js');
+  assert.match(ws, /\['Bar' \/ 'Gem'|isRefine \? 'Bar' : 'Gem', 'Needs \(you have\)', distHeader\(\), 'You can make', \{ v: 'Time each', cls: 'num' \}, ''\]/, 'R30: Bar | Needs | Outcome | You can make | Time each | buttons');
+});

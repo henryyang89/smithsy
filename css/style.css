@@ -137,8 +137,6 @@ button[data-tip]:not(:disabled), [data-tip] button:not(:disabled) { cursor: poin
 
 /* combat log */
 .combatlog { max-height: 420px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
-.combatlog .A { color: var(--accent-2); }
-.combatlog .E { color: var(--err); }
 .attr-low { color: var(--ok); }
 .attr-normal { color: var(--text); }
 .attr-high { color: var(--err); font-weight: 600; }
