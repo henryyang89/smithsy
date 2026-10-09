@@ -747,7 +747,7 @@ test('with estimates on, the Win estimate row shows "…" while it is worked out
   const later = render(renderPlan, s, CONFIG, ctx);
   const cells = findAll(row(later), (el) => el.tagName === 'TD');
   assert.equal(cells.length, s.roster.enemies.length);
-  for (const c of cells) assert.match(textOf(c), /^\d+%± \d+$/);
+  for (const c of cells) assert.match(textOf(c), /^\d+%(± \d+|\(−\d+\)|\(\+\d+\))$/);
   assert.doesNotMatch(textOf(later), /Estimating \d+ of/);
   assert.match(tipsOf(row(later)), /test fights \(could be \d+-\d+%; hidden attributes add more\)/);
   // the Adventurer tab shows the same numbers (same selection: the default pack and the worn rings)
@@ -785,7 +785,7 @@ test('the gear step: "Sword 1/2 packed" per type, pack mules raise the limit, on
   assert.equal(flagOf(worn).attributes['data-flag'], 'warn', 'a 3% helmet could break');
   assert.equal(textOf(flagOf(worn)), '⚠');
   assert.match(flagOf(worn).attributes.title, new RegExp(`Could break: against ${s.roster.enemies[2].name} it can lose up to \\d+% \\(it has 3%\\)\\. At 0% it is destroyed after the fight; it always lasts the whole fight\\.`));
-  assert.match(flagOf(worn).attributes.title, /If left home: repair ~[\d.]+m, [\d.]+ Copper D bars\./);
+  assert.match(flagOf(worn).attributes.title, /If left home: repair ~(\d+h )?[\d.]+m?, [\d.]+ Copper D bars\./);
   assert.equal(flagOf(sword).attributes['data-flag'], 'none', 'a sound sword with no gem has no icon');
   assert.equal(flagOf(plain).attributes['data-flag'], 'none');
   // a pack mule for swords: limit 3, and the header says why
@@ -1150,7 +1150,9 @@ test('Workshop: tiles instead of drop-downs, no upgrade luck / fail / time bonus
   const refineBase = CONFIG.refine[BARS[0]];
   assert.ok(hovers.includes(`Base chances: Fail ${shown(refineBase.dist.F)}%, D ${shown(refineBase.dist.D)}%`), 'the base chances of the first bar');
   assert.match(hovers, /Your chances: Fail [\d.]+%, D [\d.]+%.* Base chances: Fail/);
-  assert.ok(hovers.includes(`Chances for a first-time cutter: Fail ${shown(CONFIG.cut[GEMS[0]].novice.F)}%`), 'the first-time cutter chances of the first gem');
+  // a gem shows only the CURRENT chances (R18): no first-time cutter / novice table in any hover
+  assert.doesNotMatch(hovers, /first-time cutter|novice|master/i, 'no novice or master table for gems');
+  assert.match(hovers, new RegExp(`Your chances: Fail [\\d.]+%, D [\\d.]+%, C [\\d.]+%, B [\\d.]+%, A [\\d.]+%, S [\\d.]+%\\. Your skills and rings make the difference \\(see Skills\\)\\.`), 'the gem hover: your chances, then the pointer to Skills');
   assert.match(hovers, /Your skills and rings make the difference \(see Skills\)\./);
   assert.ok(hovers.includes(`Base ${refineBase.minutes}m.`), 'the base minutes of the first bar');
 });
@@ -1400,7 +1402,11 @@ test('the gear list (Workshop): grouped by type, the Repair button right of the 
   assert.match(textOf(rows[0]), /^C Iron Sword/);
   // the bar, the number and the Repair button sit on one line, in this order
   const line = withClass(rows[0], 'rp-main')[0];
-  assert.deepEqual(line.children.map((c) => c.tagName + (c.classList.contains('gl-pct') ? ':pct' : '')).slice(0, 3), ['DIV', 'SPAN:pct', 'BUTTON']);
+  // ... inside one group (.rp-dur) that never wraps, so the button cannot drop below the bar in a narrow cell (R24); the cost text is a sibling
+  const group = line.children[0];
+  assert.ok(group.classList.contains('rp-dur'));
+  assert.deepEqual(group.children.map((c) => c.tagName + (c.classList.contains('gl-pct') ? ':pct' : '')), ['DIV', 'SPAN:pct', 'BUTTON']);
+  assert.ok(line.children[1].classList.contains('rp-cost'), 'the cost text follows the group');
   assert.match(textOf(line), /63%Repair \+37%/);
   // a packed item: "63% · with the adventurer today", no Repair button, no Scrap
   const packed = rows.find((r) => r.attributes['data-gear'] === String(away.id));
@@ -1426,7 +1432,7 @@ test('Repair all repairs what it promised, best first, and the Adventurer tab ha
   assert.equal(res.ok, true);
   assert.equal(sw.durability, 100);
   assert.equal(ch.durability, 100);
-  assert.match(res.msg, /^Repaired 2 items to 100% in [\d.]+m: C Iron Sword, D Copper Chest\./);
+  assert.match(res.msg, /^Repaired 2 items to 100% in (\d+h )?[\d.]+m?: C Iron Sword, D Copper Chest\./);
   // nothing left: the button is off
   const again = render(renderWorkshop, s, CONFIG, ctx);
   assert.equal(byId(again, 'ws-repair-all').hasAttribute('disabled'), true);

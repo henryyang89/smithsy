@@ -70,7 +70,7 @@ export function inventoryPanel(ctx, opts = {}) {
       row.gems.length
         ? row.gems.map((g) => h('span', { class: 'inv-gemcount', ...tip(`${g.count} ${cap(row.slot)} with ${cap(g.gem)}`) }, h('span', { class: `inv-gem gem-${g.gem}` }, gemTag(g.gem)), g.count > 1 ? `×${g.count}` : ''))
         : h('span', { class: 'ws-zero' }, 'no gems'));
-    return h('tr', {}, head, cells, gems);
+    return h('tr', {}, head, gems, cells); // the gem summary sits right after the type: on a phone the box scrolls sideways, and this is the column a player wants most (R38)
   });
 
   return section('Storage and gear',
@@ -83,7 +83,7 @@ export function inventoryPanel(ctx, opts = {}) {
     h('p', { class: 'ws-sub' }, 'Each chip is one item: its grade, and its gem tag (',
       GEMS.map((g, i) => [i ? ' ' : '', h('span', { class: `inv-gem gem-${g}` }, gemTag(g))]),
       '). Click a cell to pick that gear type and material in the smith form below.'),
-    h('div', { class: 'ws-scroll', 'data-scroll': 'gear' }, smallTable([h('th', {}, 'Gear'), BARS.map((m) => h('th', {}, cap(m))), h('th', {}, 'Gems')], gearRows, 'inv-geartable')));
+    h('div', { class: 'ws-scroll', 'data-scroll': 'gear' }, smallTable([h('th', {}, 'Gear'), h('th', {}, 'Gems'), BARS.map((m) => h('th', {}, cap(m)))], gearRows, 'inv-geartable')));
 }
 
 // A tap on a gear cell or a gem row re-renders the Workshop, and the new scroll boxes start at 0: on a phone the gear table

@@ -94,6 +94,25 @@ p.mi-note { margin: 4px 0 8px; }
 .mi-intel td:first-child { min-width: 200px; }
 .mi-intel td:last-child { white-space: nowrap; }
 .mi-chance { min-width: 160px; }
+/* phone width: each intel track becomes a card (name and Spend button, what it is now, the next point), so the Spend button
+   and the next gain are on screen without a sideways scroll */
+@media (max-width: 560px) {
+  .mi-intel { min-width: 0; table-layout: auto; display: block; }
+  .mi-intel thead { display: none; }
+  .mi-intel tbody { display: block; }
+  .mi-intel tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: center; grid-template-areas: 'track spend' 'now now' 'next spent'; }
+  .mi-intel tbody td { border: none; padding: 0; min-width: 0; }
+  .mi-intel td:first-child { min-width: 0; grid-area: track; }
+  .mi-intel td:nth-child(2) { grid-area: spent; text-align: right; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .mi-intel td:nth-child(2)::before { content: 'points spent: '; }
+  .mi-intel td:nth-child(3) { grid-area: now; }
+  .mi-intel td:nth-child(3)::before { content: 'now'; display: block; font-size: 11px; color: var(--muted); }
+  .mi-intel td:nth-child(4) { grid-area: next; font-size: 13px; }
+  .mi-intel td:nth-child(4)::before { content: 'next point: '; font-size: 11px; color: var(--muted); }
+  .mi-intel td:last-child { grid-area: spend; text-align: right; }
+  .mi-chance { min-width: 0; }
+}
+.mi-spendwrap { display: inline-block; }
 
 /* help: reference tables size to their content (cards keep full width) */
 .mi-help .mi-det-body .mi-table { width: auto; min-width: min(100%, 360px); }

@@ -5,21 +5,21 @@
 // All game-state changes go through core actions inside ctx.act(). UI-only state lives in ctx.ui.plan* (the selection)
 // and ctx.ui.est_* (the automatic win estimates, ui/estimates.js).
 import { h, section, bar, num, tip, restoreScrollLeft } from './dom.js';
-import { SLOTS, GRADES, LEVELS, TIERS } from '../config.js';
+import { CONFIG, SLOTS, GRADES, LEVELS, TIERS } from '../config.js';
 import * as Game from '../core/game.js';
 import { enemyBase, enemyCombatant, knownLevels, ringTypeVisible, ringGradeVisible, groupVisible, hiddenGradeOdds, growth } from '../core/enemies.js';
 import { loadouts, simCounts, shownMargin } from '../core/sim.js';
 import { adventurerCombatant, attackInterval, hitChance, hitDamage } from '../core/combat.js';
 import { ringTotals, ringContributions, ringValue, ringDef, ringLabel, wornRings } from '../core/rings.js';
-import { gearStats, gearPower, gearName, shownDurability, wearLoss, worstWear, couldBreak, gearMatchNotes, repairPlan } from '../core/gear.js';
+import { gearStats, gearPower, gearName, shownDurability, wearLoss, worstWear, couldBreakShown, gearMatchNotes, repairPlan } from '../core/gear.js';
 import { analyzeLoss, cacheAnalysis } from '../core/replay.js';
 import { smithBonuses } from '../core/bonuses.js';
 import { intelValue, nextIntelGain, trackValueText, canSpendIntel } from '../core/intel.js';
 import { bannerLabel, bannersLine, bannersText, groupRewardText } from '../core/groups.js';
 import { packLimit, packOrder, slotNoun, defaultPack, leaveWornHome } from '../core/pack.js';
-import { cap, qtyText } from '../core/util.js';
+import { cap, qtyText, formatDuration } from '../core/util.js';
 import { spendIntelAction, intelTip } from './skillsview.js';
-import { durText, winText, winClass, winWithMargin, sortedIds, gearAnswers, combatLogRows, scoreBreakdown, outcomeSegments, fightSegment, whatIfText } from './present.js';
+import { durText, winText, winClass, winWithMargin, planEstimateText, marginPart, enemySightText, enemySightPct, segPctText, sortedIds, gearAnswers, combatLogRows, scoreBreakdown, outcomeSegments, fightSegment, whatIfText } from './present.js';
 import { VERSION } from '../version.js';
 import { scheduleEstimates, cancelEstimates, cachedEstimate, estimatesPending, estimateStatus, estimateCell } from './estimates.js';
 
@@ -147,32 +147,40 @@ const STAT_ROWS = [
   { k: 'interval', label: 'Attack bar fills in', fmt: (v) => `${f2(v)}s`, get: (c) => attackInterval(c, false, 0), always: true },
   { k: 'accuracy', label: 'Accuracy', fmt: f1, always: true },
   { k: 'dodge', label: 'Dodge', fmt: f1, always: true },
-  { k: 'defense', label: 'Defense (damage reduction)', fmt: pctf, always: true },
+  { k: 'defense', label: 'Defense (damage reduction)', fmt: pctf, always: true, cap: 'defenseCap' },
   { k: 'speed', label: 'Attack speed', fmt: signedPct },
   { k: 'magicPct', label: 'Magic damage (% of damage)', fmt: pctf },
-  { k: 'magicRes', label: 'Magic resistance', fmt: pctf },
+  { k: 'magicRes', label: 'Magic resistance', fmt: pctf, cap: 'resistCap' },
   { k: 'pierce', label: 'Piercing (% of defense ignored)', fmt: pctf },
-  { k: 'pierceRes', label: 'Pierce resistance (% of piercing ignored)', fmt: pctf },
+  { k: 'pierceRes', label: 'Pierce resistance (% of piercing ignored)', fmt: pctf, cap: 'resistCap' },
   { k: 'stunChance', label: 'Stun chance per hit', fmt: pctf },
   { k: 'stunDur', label: 'Stun duration (bar stops)', fmt: (v) => `${f2(v)}s` },
-  { k: 'stunChanceRed', label: 'Stun chance reduction', fmt: pctf },
-  { k: 'stunDurRed', label: 'Stun duration reduction', fmt: pctf },
+  { k: 'stunChanceRed', label: 'Stun chance reduction', fmt: pctf, cap: 'resistCap' },
+  { k: 'stunDurRed', label: 'Stun duration reduction', fmt: pctf, cap: 'resistCap' },
   { k: 'slowPct', label: 'Slow on hit (bar fills slower)', fmt: pctf },
   { k: 'slowDur', label: 'Slow duration', fmt: (v) => `${f2(v)}s` },
-  { k: 'slowRed', label: 'Slow strength reduction', fmt: pctf },
-  { k: 'slowDurRed', label: 'Slow duration reduction', fmt: pctf },
+  { k: 'slowRed', label: 'Slow strength reduction', fmt: pctf, cap: 'resistCap' },
+  { k: 'slowDurRed', label: 'Slow duration reduction', fmt: pctf, cap: 'resistCap' },
 ];
 
 // cols: [{ label, c }] where c is a combatant (adventurerCombatant / enemyCombatant).
 // Rows that are zero in every column are hidden (except the core ones).
-export function combatStatsTable(cols) {
+// A defence value past the cap combat applies (defenseCap, resistCap) shows the capped value and says so: gear beyond the
+// cap adds nothing, and "110.4%" of anything ignored would read as an error.
+export function combatStatsTable(cols, cfg = CONFIG) {
   const val = (r, c) => (r.get ? r.get(c) : c[r.k] || 0);
   const rows = STAT_ROWS.filter((r) => r.always || cols.some((col) => Math.abs(val(r, col.c)) > 1e-9));
+  const cell = (r, c) => {
+    const v = val(r, c);
+    const cap = r.cap ? cfg.combat[r.cap] : null;
+    if (cap != null && v > cap + 1e-9) return h('td', { class: 'num', ...tip(`Your gear and rings give ${r.fmt(v)}, but combat counts at most ${r.fmt(cap)}: anything beyond adds nothing.`) }, r.fmt(cap), h('span', { class: 'muted' }, ' (cap)'));
+    return h('td', { class: 'num' }, r.fmt(v));
+  };
   return h('table', { class: 'adv-stats' },
     h('thead', {}, h('tr', {}, h('th', {}, 'Stat'), cols.map((col) => h('th', { class: 'num' }, col.label)))),
     h('tbody', {}, rows.map((r) => h('tr', {},
       h('td', {}, r.label),
-      cols.map((col) => h('td', { class: 'num' }, r.fmt(val(r, col.c))))))));
+      cols.map((col) => cell(r, col.c))))));
 }
 
 // ------------------------------------------------------------ enemy views ----
@@ -321,8 +329,8 @@ export function rosterTable(ctx, enemies, opts = {}) {
   const baseDef = row('Defense', 'Reduces your physical damage (piercing ignores part of it)', (e, v) => `${v.base.defense}%`);
   const ring = row('Ring reward', 'The ring a win drops (hidden until your ring scouting reveals it)', (e) => ringRewardCell(ctx, e));
   const banner = row('Banner', `The banner this enemy marches under (Red, Black or Gold). Banner scouting: ${trackValueText('groupSight', intelValue(ctx.state, 'groupSight', cfg), cfg)} to see it. Wins against your most-beaten banner earn pack mules.`, (e) => bannerChip(ctx, e));
-  const hiddenRow = row('Hidden attributes', 'How many of the 12 attributes you cannot see yet, and the Low / Normal / High levels they can still have', (e, v) => (v.hidden > 0
-    ? [h('b', {}, String(v.hidden)), h('div', { class: 'muted rt-sm' }, remText(v.rem))]
+  const hiddenRow = row('Hidden attributes', `How many of the 12 attributes you cannot see yet, and the Low / Normal / High levels they can still have. Each attribute is visible with your Enemy scouting chance: ${enemySightText(ctx.state, cfg)}.`, (e, v) => (v.hidden > 0
+    ? h('div', tip(`Each attribute of this ${e.tier} is visible with a ${enemySightPct(ctx.state, e.tier, cfg)} chance (Enemy scouting ${enemySightText(ctx.state, cfg)}).`), h('b', {}, String(v.hidden)), h('div', { class: 'muted rt-sm' }, remText(v.rem)))
     : h('span', { class: 'muted' }, 'none')));
 
   const rows = [tier, baseHp, baseDmg, baseDef, ring, banner, hiddenRow];
@@ -408,7 +416,7 @@ export function renderCombatLog(report) {
     h('td', { class: 'clog-res' }, r.result,
       r.detail ? h('span', { class: 'clog-detail' }, ` (${r.detail})`) : null,
       r.effects ? h('span', { class: 'clog-fx-inline' }, ` · ${r.effects}`) : null),
-    h('td', { class: 'clog-fx', ...(r.effects ? { title: r.effects } : {}) }, r.effects),
+    h('td', { class: 'clog-fx', ...(r.effects ? tip(r.effects) : {}) }, r.effects),
     h('td', { class: 'num' }, r.hitSide === 'A' ? h('b', {}, fx1(r.hpA)) : fx1(r.hpA)),
     h('td', { class: 'num' }, r.hitSide === 'E' ? h('b', {}, fx1(r.hpE)) : fx1(r.hpE)));
   const note = (cls, text) => h('tr', { class: cls }, h('td', { colspan: 6 }, text));
@@ -507,7 +515,10 @@ function gearUsedPanel(report, ctx) {
     : null;
   return section(`Gear used in the fight (${used.length})`,
     used.length
-      ? h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'), h('th', { class: 'num' }, 'Wear'), h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows))
+      ? [h('table', { class: 'adv-stats' }, h('thead', {}, h('tr', {}, h('th', {}, 'Item'),
+        h('th', { class: 'num', ...tip('The fall in the durability shown (before and after, each rounded down), so the numbers add up on screen. It can differ by 1% from what the roll under the item name works out to.') }, 'Wear'),
+        h('th', { class: 'num' }, 'Durability'))), h('tbody', {}, wearRows)),
+      h('p', { class: 'adv-tight muted adv-small' }, 'Wear is the fall in the shown durability (each rounded down), so it can differ by 1% from the roll worked out.')]
       : h('p', { class: 'adv-tight muted' }, 'No gear used: the adventurer fought unarmed.'),
     destroyed.length ? h('p', { class: 'err adv-tight' }, `Destroyed (0% durability): ${destroyed.join(', ')}.`) : null,
     notUsed.length
@@ -553,8 +564,8 @@ function analysisNode(ctx, report, a) {
       h('div', { class: 'oc-bar' }, segs.map((sg) => (sg.count ? h('span', { class: `oc-seg oc-${sg.key}`, style: { width: `${sg.pct}%` }, ...tip(`${sg.label}: ${Math.round(sg.pct)}%`) }) : null))),
       centre != null ? h('div', { class: 'oc-mark', style: { left: `${centre}%` } }, '▲') : null),
     h('p', { class: 'adv-tight adv-small oc-here' }, `▲ This fight: ${hereSeg.label.toLowerCase()} (${en} had ${hpLeftText(a.thisFight.enemyHpPct)} HP left).`),
-    h('p', { class: 'adv-tight adv-small' }, segs.filter((sg) => sg.count > 0).map((sg, i) => [i ? ' · ' : '', h('span', { class: `oc-key oc-${sg.key}-t` }, `${sg.label} ${Math.round(sg.pct)}%`)])),
-    report.planEstimate ? h('p', { class: 'adv-tight adv-small' }, `Your plan showed ${winText(report.planEstimate.winPct)}${report.planEstimate.margin != null ? ` ± ${report.planEstimate.margin}` : ''}.`) : null,
+    h('p', { class: 'adv-tight adv-small' }, segs.filter((sg) => sg.count > 0).map((sg, i) => [i ? ' · ' : '', h('span', { class: `oc-key oc-${sg.key}-t` }, `${sg.label} ${segPctText(sg.pct)}`)])),
+    report.planEstimate ? h('p', { class: 'adv-tight adv-small' }, `Your plan showed ${planEstimateText(report.planEstimate)}.`) : null,
     h('h4', { class: 'adv-h4' }, 'Would gear left at home have helped?'),
     h('p', { class: `adv-tight loss-${w.verdict}` }, w.text),
     h('details', { class: 'adv-details' }, h('summary', {}, 'How this was worked out'),
@@ -603,7 +614,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
     opts.headline === false ? null : h('div', { class: `adv-headline adv-${kind}` }, title),
     h('div', { class: 'muted' }, `Day ${report.day} · ${tier} · lasted ${f1(report.time)}s`,
       report.enemy.group && cfg.groups.list[report.enemy.group] ? [' · Banner: ', h('b', { class: `bn bn-${report.enemy.group}` }, bannerLabel(report.enemy.group, cfg))] : null),
-    report.planEstimate ? h('div', { class: 'muted' }, `Your plan showed ${winText(report.planEstimate.winPct)}${report.planEstimate.margin != null ? ` ± ${report.planEstimate.margin}` : ''}.`) : null,
+    report.planEstimate ? h('div', { class: 'muted' }, `Your plan showed ${planEstimateText(report.planEstimate)}.`) : null,
     report.draw ? h('p', { class: 'warn' }, 'The fight reached the safety time cap: the adventurer survives, but gets no ring.') : null,
     h('div', { class: 'adv-hpbars' },
       hpRow('Adventurer', report.advHp, report.advMaxHp, 'adv-hp-a'),
@@ -619,7 +630,7 @@ export function renderBattleReport(report, ctx, opts = {}) {
     section('Summary', summaryTable(report, cfg),
       report.adv && report.enemyC
         ? h('details', { class: 'adv-details' }, h('summary', {}, 'Combat stats of both sides'),
-          combatStatsTable([{ label: 'Adventurer', c: report.adv }, { label: en, c: report.enemyC }]))
+          combatStatsTable([{ label: 'Adventurer', c: report.adv }, { label: en, c: report.enemyC }], cfg))
         : null),
   ];
   if (opts.log !== false) {
@@ -806,7 +817,7 @@ function intelPanel(ctx) {
   if (!canSpendIntel(s, cfg)) {
     return h('section', { class: 'panel adv-intel' },
       h('span', { class: 'muted' }, 'Intel: '),
-      tracks.map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, trackValueText(t, intelValue(s, t, cfg), cfg))]),
+      tracks.map((t, i) => [i ? ' · ' : '', `${cfg.intel.tracks[t].name} `, h('b', {}, t === 'enemySight' ? enemySightText(s, cfg) : trackValueText(t, intelValue(s, t, cfg), cfg))]),
       h('span', { class: 'muted' }, pts > 0 ? ' — every track is at its maximum.' : ` — no intel points (next one at the end of day ${nextDay}).`));
   }
   return h('section', { class: 'panel adv-intel adv-intel-hl' },
@@ -834,7 +845,7 @@ function gearFlag(ctx, g, sel, known) {
   const tier = sel ? sel.tier : null;
   const lines = [];
   let icon = null;
-  const risk = couldBreak(g, s, tier, cfg);
+  const risk = couldBreakShown(g, s, tier, cfg);
   if (risk) {
     icon = 'warn';
     lines.push(couldBreakText(s, cfg, g, sel ? sel.name : null, tier));
@@ -860,7 +871,7 @@ function repairHomeText(state, g, cfg) {
     const [t, gr] = k.split(':');
     parts.push(`${qtyText(n)} cut ${cap(t)} ${gr}`);
   }
-  return `If left home: repair ~${num(plan.minutes)}m${parts.length ? `, ${parts.join(' + ')}` : ''}.`;
+  return `If left home: repair ~${formatDuration(plan.minutes)}${parts.length ? `, ${parts.join(' + ')}` : ''}.`;
 }
 
 // "up to 2 per gear type (3 swords: pack mule)": the pack limit as it stands, with the types a pack mule has raised.
@@ -946,12 +957,12 @@ function ringStep(ctx, p, advRings, selRings) {
       const add = (ringTotals([...selRings, r], cfg)[r.type] || 0) - (totals[r.type] || 0);
       eff = h('span', { class: 'muted' }, `would add +${f2(add)}`);
     }
-    return h('tr', { class: on ? 'adv-on' : full ? 'adv-off' : '' },
+    // a disabled checkbox gets no tap: the reason sits on the whole row, so a tap anywhere on it opens the popover
+    return h('tr', { class: on ? 'adv-on' : full ? 'adv-off' : '', ...(!on && full ? tip(`The adventurer can wear at most ${max} rings`) : {}) },
       h('td', {}, h('input', {
         type: 'checkbox',
         checked: on,
         disabled: !on && full,
-        title: !on && full ? `The adventurer can wear at most ${max} rings` : '',
         'data-ring': r.id,
         onchange: () => changeSel(ctx, (pl) => {
           pl.ringIds = on ? pl.ringIds.filter((id) => id !== r.id) : [...pl.ringIds, r.id];
@@ -1077,7 +1088,7 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, pending, counts) {
   const left = h('div', {},
     h('h4', { class: 'adv-h4' }, 'Adventurer preview'),
     h('p', { class: 'adv-tight muted adv-small' }, 'With the strongest-looking packed item per gear type and the selected rings (the real choice is made by simulation once the enemy is known).'),
-    combatStatsTable([{ label: 'Adventurer', c: preview }]),
+    combatStatsTable([{ label: 'Adventurer', c: preview }], cfg),
     sel ? matchupTable(ctx, sel, preview, selGear) : null);
 
   let right;
@@ -1092,8 +1103,8 @@ function estimatePanel(ctx, p, sel, selGear, selRings, est, pending, counts) {
     };
     right = h('div', {},
       h('div', { class: 'adv-bignums' },
-        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, ...(shownMargin(est) != null ? tip(`± ${shownMargin(est)} is how far the test fights alone could be off. Hidden attributes can make the real chance higher or lower.`) : {}) },
-          winText(est.winPct), shownMargin(est) != null ? h('span', { class: 'adv-pm' }, ` ± ${shownMargin(est)}`) : null), h('div', { class: 'muted' }, shownMargin(est) != null ? 'win chance (± points)' : 'win chance')),
+        h('div', {}, h('div', { class: `adv-big ${winClass(est.winPct)}`, ...(shownMargin(est) != null ? tip(`${marginPart(est.winPct, shownMargin(est))} is how far the test fights alone could be off${Math.round(est.winPct) >= 100 ? ' (only downwards: 100% is the most it can be)' : Math.round(est.winPct) <= 0 ? ' (only upwards: 0% is the least it can be)' : ''}. Hidden attributes can make the real chance higher or lower.`) : {}) },
+          winText(est.winPct), shownMargin(est) != null ? h('span', { class: 'adv-pm' }, ` ${marginPart(est.winPct, shownMargin(est))}`) : null), h('div', { class: 'muted' }, shownMargin(est) != null ? 'win chance (± points)' : 'win chance')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgTime)}s`), h('div', { class: 'muted' }, 'avg fight time')),
         h('div', {}, h('div', { class: 'adv-big' }, `${f1(est.avgHpLeftPct)}%`), h('div', { class: 'muted' }, 'avg HP left (wins)'))),
       h('p', { class: 'adv-small muted' }, `${est.fights} simulated fights vs ${sel.name} (${c.samples} guesses x ${c.evalFights}).`),
@@ -1157,7 +1168,7 @@ function confirmClicked(ctx, p) {
   for (const slot of SLOTS) {
     if (st.gear.some((g) => g.slot === slot) && !plan.gearIds.some((id) => st.gear.find((g) => g.id === id)?.slot === slot)) warn.push(`No ${slot} packed, though you own one.`);
   }
-  const breaking = st.gear.filter((g) => plan.gearIds.includes(g.id) && couldBreak(g, st, sel.tier, cfg));
+  const breaking = st.gear.filter((g) => plan.gearIds.includes(g.id) && couldBreakShown(g, st, sel.tier, cfg));
   if (breaking.length) warn.push(`${breaking.length} packed item${breaking.length === 1 ? '' : 's'} could break in this fight: ${breaking.map(gearName).join(', ')}.`);
   if (!chosen) warn.push(`The win estimate for ${sel.name} is not finished yet.`);
   else if (chosen.winPct < 50) warn.push(`Estimated win chance is only ${winWithMargin(chosen)}.`);

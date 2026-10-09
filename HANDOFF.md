@@ -3,59 +3,75 @@
 Everything needed to pick this project up in a fresh session.
 
 ## What it is
-Browser game: you mine ore/gems on a 5x5 world map of 8x8 fields, refine and smith gear, and each
-night plan your adventurer's next fight (1 enemy from a roster of 7). A loss is game over; score is
-endless. Plain HTML + ES modules, no build step, hosted on GitHub Pages, **deployed from `main`**
-(<https://henryyang89.github.io/smithsy/>, folder `/ (root)`; see README). Save in localStorage.
+Browser game: you mine ore/gems on a 7x7 world map of 9x9 fields (camp in the middle, 40 fields, 8 rocks), refine and
+smith gear, repair it by day at camp, and each evening plan your adventurer's next fight (1 enemy from a roster of 7, which
+you can only partly see). A loss (or End run) ends the run; the score is only shown in the run summary. Plain HTML + ES
+modules, no build step, hosted on GitHub Pages, **deployed from `main`** (<https://henryyang89.github.io/smithsy/>, folder
+`/ (root)`; see README). Save in localStorage, one key per version.
 
-**Version:** this branch is **1.2** (`js/version.js`, shown in the top bar and Help). The live game on
-`main` is 1.1 (pull request #2) until 1.2 is merged; `release/v1.0` and `release/v1.1` exist on GitHub. What
-changed per version and how to roll back: `CHANGELOG.md`. State when this was written: 1.2 is on the work
-branch (commits e446ef7 features, cd61042 balance); the review fixes and the docs refresh are uncommitted
-changes on top (`git status`).
+**Version:** this branch is **2.0** (`js/version.js`, shown in the top bar and Help). 2.0 starts a fresh game and never reads a
+1.x save (A1). `release/v1.0` and `release/v1.1` exist on GitHub; `release/v1.2` and `release/v2.0` are created from `main`
+after each is merged. What changed per version and how to roll back: `CHANGELOG.md`. The implementation plan is
+`docs/PLAN-2.0.md` (section 1 has the user's answers U1-U3, which override defaults); the tuning record is
+`docs/TUNING-2.0.md`; where the implementation differs from the plan: "Plan deviations" below. State when this was written: the
+batches 1-7b are committed (the last commit is "v2.0 batch 7b"); the final review's fixes and the docs pass (7c) are
+uncommitted changes on top (`git status`) until they are committed.
 
 ## Where things are
 | Path | What |
 |---|---|
-| `js/config.js` | **Every tunable number.** Edit here to rebalance. |
-| `js/version.js` | `VERSION` shown in the top bar and Help ('1.2'). Bump it for every release (see "Release process"). |
-| `CHANGELOG.md` | What changed in each version (player terms) and the rollback steps. Read it, add to it each release. |
+| `js/config.js` | **Every tunable number.** Edit here to rebalance (and re-run the whole target set: `docs/TUNING-2.0.md`). |
+| `js/version.js` | `VERSION` shown in the top bar and Help ('2.0'). Bump it for every release (see "Release process"). |
+| `CHANGELOG.md` | What changed in each version (player terms), the save table and the rollback steps. Read it, add to it each release. |
+| `README.md` | How to play, the project structure, tests, the balance tool and its flags, save data. |
 | `index.html` | Page shell + a plain-script start-up diagnostics box (shows captured errors and the browser if the game has not started a few seconds after load). |
-| `docs/BALANCE.md` | Explains every number, formula, worked examples, tuning notes, current balance results (1.2). |
-| `docs/BENCHMARKS.md` | **Difficulty of each version** as a survival curve: the share of 100 fixed simulated games (careful bot) still alive at day 5, 10, ... 100, per version, plus "Is 10 x 10 too low?" (accuracy of the win estimate) and how to add a version's row. Read before changing balance; re-run `--section benchmark` after. |
-| `docs/SPEC.md` | Requirements + all design decisions agreed with the user. |
-| `js/core/` | DOM-free game logic (works in Node). `game.js` = state, day flow, battle resolution (wear via `wearLoss`, Gear care XP), save (`SAVE_KEY` `smithsy-save-v3`, `SAVE_VERSION` 3, `LEGACY_SAVE_KEYS` `smithsy-save-v2` / `smithsy-save-v1`, `migrateV1` → v2, `migrateV2` → v3, `addMissingKeys`). |
-| `js/core/map.js` | World map, fields (`generateField`: debris thickness, 1 boulder), travel (with an optional carry selection), search (depth mechanic, 35% ± 5 per cell; clears debris first via `debrisClearMult`; finds go to the field's `pile`; **fresh cells**: `cellFresh`, `freshCellCount`, `searchMinutes(state, cfg, cx, cy)` = base + `field.freshCellMin` per fresh cell, cells get `touched` when a search works on them), carrying (`defaultCarry`, `setCarry`, `moveToPile`, `takeFromPile`, `projectedLoad`, `fitsWithReturn`), `fieldProgress` (boulders excluded), nightly regrowth (off). |
-| `js/core/processing.js` | Refining/cutting, grade distributions (bars: fail reduction + upgrade luck; gems: `blendCutTable` novice → master, then Gem luck), `GRADE_ORDER` F, D, C, B, A, S (low → high). |
-| `js/core/gear.js` | Gear stats, crafting, wear (`wearLoss`, `wornDurability`: durability kept to one decimal, shared by the fight and the UI), repair (`isNight`, `repairPlan`: free at night, higher-grade substitutes; `substituteWarning`). |
-| `js/core/combat.js` | Combatant stats, hit chance S-curve, event-driven attack-bar fight sim with log. |
-| `js/core/sim.js` | Best-gear selection and win-chance estimate (samples hidden enemy attributes). 1.2: `simCounts` (10 x 10 base + Battle simulation intel + floor of the Foresight ring total), `winStandardError` (the margin: the estimate returns `se` and `perGuess`), and `estimateWinChance` stops and resolves `null` when `onProgress` returns `false`. |
-| `js/core/enemies.js` | Roster generation, attribute levels, visibility, enemy stats. |
-| `js/core/rings.js`, `skills.js`, `intel.js`, `bonuses.js` | Rings (stacking; 18 types incl. the smith ring Foresight), skills (XP; Gear care is an activity skill whose XP comes from fights), intel points (incl. the count track `simDepth` = Battle simulation), combined smith bonuses (`gearCarePct`). |
-| `js/main.js` | UI shell (top bar with version, pile count and the work-day bar (`timeBar`, a 4 px strip on the bar's bottom edge), tabs, side log, phase screens, save/load: tries `smithsy-save-v3`, else migrates `smithsy-save-v2`, else `smithsy-save-v1`; a save that can't be loaded is kept as `smithsy-save-backup-<time>` and a new game starts; a render error offers "Start a new game"; `newGame` cancels a running Estimate all). |
-| `js/ui/*.js` | One module per screen; `mapview.js` = world map (pile badges), field grid (debris numbers, boulders), pile and bag panels and the "Choose what to carry" step; `workshop.js` also shows the gem novice/master tables; `endday.js` = battle report + plan screen (incl. the roster comparison table `rosterTable`, **Estimate all** (`startEstimateAll`, `cancelRun`, `estKey`), the ± margin (`marginPts`), the Matchup table, wear text (`wearRange`, `wearText`) and night repairs); `adventurer.js` shows the same roster table; `repairui.js` = repair widgets shared by the workshop and the night screens; `skillsview.js` also holds the skill-vs-ring helpers used by Help; `dom.js` = tiny `h()` helper. |
-| `tests/` | `npm test` (= `node --test tests/*.test.mjs`), **325 tests in 16 files** (+ `helpers.mjs`); `carry.test.mjs` (1.1, 19 tests) covers piles, carry choice and the projected-load rule; `durability.test.mjs` (new in 1.2, 20 tests) covers wear, Gear care, decimal durability and the v1.0/v1.1 save upgrades; the estimate margin, cancellation, `simCounts` and Foresight/Battle simulation are in `sim.test.mjs`, `rings.test.mjs`, `skills-intel.test.mjs`, the fresh-cell rule in `field.test.mjs`, save v3 in `game.test.mjs`. |
-| `tools/balance.mjs` | Balance report: economy (incl. map size, debris effort, trips found vs carried, gem novice/master odds), power curve, bot playthrough (incl. field piles and "Map supply"), and (1.2) **benchmark** (survival curve on fixed seeds, `--jobs`, `--estimator game\|bot`), **specials** (enemy specials vs the matching defence and the adventurer's gems) and **estimator** (accuracy of the win estimate); `--set` what-ifs, `--ablate` systems, `--immortal`, `--carry value\|default`. The 2.0 tool only runs on 2.0 trees (it imports 2.0 functions); older versions are measured with the tool that shipped with them (that is how 1.1's benchmark row was made). |
+| `docs/SPEC.md` | Requirements and design decisions of 2.0 (R1-R46, A1-A4, U1-U3 cited). |
+| `docs/BALANCE.md` | Quick levers, targets and results, **Known misses**, what changed from 1.2 to 2.0, what-if commands (all 2.0); chapters 1-16 and the appendices are 1.2 reference text with a "2.0:" note under each heading. |
+| `docs/BENCHMARKS.md` | Difficulty of each version as survival curves: the 2.0 table (three personas, 100 seeds; careful at 200) and the 1.x history. Re-run `--section benchmark --jobs 4` after balance changes. |
+| `docs/TUNING-2.0.md` | The tuning log: every config value changed, why, every target and its result, the notes on the misses. |
+| `docs/PLAN-2.0.md` | The 2.0 plan: requests, answers, per-batch files and tests, targets (section 9), the 1.2 tests that had to change (section 11). |
+| `js/core/` | DOM-free game logic (works in Node). `game.js` = state, day flow, battle resolution, `endRun`, save (`SAVE_KEY` `smithsy-save-2.0`, `deserialize` refuses another version's save and a save with a broken shape: `assertShape` / `assertStructure`). |
+| `js/core/map.js` | World map (7x7, `maxDetour`), fields (`generateField`: debris, boulders, sight thresholds), travel (`loadOnArrival`: the walk home counts the destination's pile), search (30% ± 5, fresh cells), carrying, sight (`sightValue`, `seenItems`, `sightShare`). |
+| `js/core/gear.js` | Gear stats, smithing, wear (`wearLoss`, `shownDurability`), `couldBreak` (stored value) and `couldBreakShown` (the whole numbers on screen, used by the warnings), repair by day (`repairPlan`, higher-grade substitutes), scrap (bars only). |
+| `js/core/groups.js`, `pack.js` | Banners and pack mules; the packing limit per gear type and the default pack. |
+| `js/core/replay.js` | The loss analysis: 500 replays of a lost fight and "would other gear have helped?". |
+| `js/core/sim.js`, `enemies.js`, `combat.js`, `processing.js`, `rings.js`, `skills.js`, `intel.js`, `bonuses.js` | As their names say; `simCounts` = 5 x 5 + Battle simulation + Foresight; `intel.js` has per-track gains, `tierMult` / `gradeMult` and the plan gate. |
+| `js/main.js` | UI shell: top bar with the version, the work-day bar, tabs, side log, phase screens, save/load (a save that can't be loaded is kept as `smithsy-save-backup-<time>` and a new game starts; the render-error screen backs the save up before "Start a new game"; a `storage` event from another tab locks this tab), toasts that are dropped when the phase changes. |
+| `js/ui/*.js` | One module per screen; `endday.js` = battle report, plan screen, run summary; `estimates.js` the automatic win estimates; `present.js` text helpers (`marginPart`, `segPctText`, `enemySightText`); `gearlist.js` / `repairui.js` the gear list with Repair and Scrap; `inventory.js` the storage and gear overview; `dom.js` has `h()` and `tip()` (title + `data-tip`: a tap popover). |
+| `tests/` | `npm test` (= `node --test tests/*.test.mjs`), **625 tests in 25 files** (+ `helpers.mjs`, `fakedom.mjs`); `spec-guards.test.mjs` pins removed names and wording, `personas.test.mjs` the balance tool, `final-fixes*.test.mjs` the final review's fixes. |
+| `tools/balance.mjs` | Balance report: sections economy, power, day2, bot, benchmark, specials, estimator, intel; three personas (`--persona`), `--intel`, `--set` what-ifs, `--ablate`, `--immortal`, `--carry`. The 2.0 tool only runs on 2.0 trees; older versions are measured with the tool that shipped with them. |
 
 ## Release process
 1. Bump `VERSION` in `js/version.js` (tenths for small changes, ones for big ones: user decision) and add a
-   section for it to `CHANGELOG.md` in player terms (plus save notes if the save format changes).
-2. Run `npm test` (all must pass); after balance-relevant changes re-run the balance tool and refresh the
-   docs (BALANCE, SPEC, README, this file).
-3. Merge into `main` through a pull request (the user allows auto-merge when the change is easy to roll
-   back). GitHub Pages deploys from `main`.
-4. Create the branch `release/vX.Y` from `main` after the merge and push it. Branches instead of tags,
-   because git tags can't be pushed from this environment.
-5. Rolling back = the steps in `CHANGELOG.md` (pull request from `release/vX.Y` into `main`, or revert the
-   bad version's pull request).
-6. If the save format changes: bump `SAVE_VERSION`, use a new `SAVE_KEY` and add a migration like
-   `migrateV1`, so an older cached page can never overwrite a newer save.
+   section for it to `CHANGELOG.md` in player terms (plus a row in its save table).
+2. Run `npm test` (all must pass); after balance-relevant changes re-run the whole target set (the sections of
+   `docs/PLAN-2.0.md` section 9, see `docs/TUNING-2.0.md` for the commands) and refresh the docs (BALANCE, SPEC, README, this
+   file). The difficulty check is `node tools/balance.mjs --section benchmark --jobs 4` compared with `docs/BENCHMARKS.md`.
+3. Merge into `main` through a pull request (the user allows auto-merge when the change is easy to roll back). GitHub Pages
+   deploys from `main`.
+4. Create the branch `release/vX.Y` from `main` after the merge and push it. Branches instead of tags, because git tags can't
+   be pushed from this environment.
+5. Rolling back = the steps in `CHANGELOG.md` (pull request from `release/vX.Y` into `main`, or revert the bad version's pull
+   request).
+6. **Saves are per version (A1).** A new version uses its own key (`smithsy-save-<version>`, `smithsy-best-<version>`), starts
+   a fresh game and leaves older keys untouched: there are no migrations and no legacy keys (a guard test forbids them). A
+   code-only fix may keep `VERSION`. Say so in the CHANGELOG save table.
 
-The release process is unchanged in 1.2. Step 6 was followed for the new save format (key `smithsy-save-v3`,
-`LEGACY_SAVE_KEYS` = v2 then v1, `migrateV2`). For step 2, the difficulty check after a balance change is
-`node tools/balance.mjs --section benchmark --jobs 3` compared with the rows in `docs/BENCHMARKS.md`.
+## Decisions from the user for 2.0 (session 7)
+The full request list (R1-R46) and the plan's open questions are in `docs/PLAN-2.0.md`; the answers that shape everything:
+- **A1** 2.0 starts fresh; a save is only loaded by the version that wrote it (1.x saves stay in the browser and open again in
+  1.2). **A2** the win estimate is automatic, 5 guesses x 5 test fights per enemy; rings and intel only add slightly.
+  **A3** no night repairs: repairs by day, at camp, cost time, only on gear the adventurer does not have. **A4** scrap returns
+  bars only (the repair cost share of the remaining durability); the gem is lost.
+- **U1** the ranges "elite 30-50%, champion 0-25%" are for a literally unarmed adventurer on day 2; "gearing should make elites
+  75-90% and champions 50-75% depending on how well the player has found or crafted their gear". **U2** harder overall (the
+  careful bot's median life about 30-40 days, about 80% alive at day 10). **U3** no score numbers anywhere until the run summary
+  (the tier points are hidden too).
+- Everything below this block up to "Plan deviations" is the history of sessions 1-6 (versions up to 1.2): where 2.0 differs
+  (5x5 map, 8x8 fields, night repairs, regrowth, Estimate all, the Return travel skill, the 1.2 numbers) the 2.0 docs above
+  and the code are right.
 
-## Design decisions (from Q&A with the user)
+## Design decisions (from Q&A with the user, sessions 1-6, history)
 - One enemy per day from a new daily roster (2 normal, 3 elite, 2 champion). No skipping.
 - Loss = game over. Endless, score-based. No fight time limit (internal safety cap only; counts as a
   draw: survive, no ring, no score).
@@ -271,69 +287,36 @@ Interpretations in session 6 (1.2):
 - **Saves:** 1.2 reads `smithsy-save-v3`; if none exists it tries `smithsy-save-v2`, then `smithsy-save-v1`,
   converts once and from then on saves under v3 only (the older key is never touched or re-read).
 
-## Balance status (version 1.2)
-Run `node tools/balance.mjs --section economy`, `--section power`, `--section bot --seeds 40`
-(`--immortal` for how long the map lasts), `--section specials`, `--section estimator` and
-`--section benchmark --jobs 3`; details and tables in `docs/BALANCE.md` → "Balance targets and current
-results" and in `docs/BENCHMARKS.md`.
+## Balance status (version 2.0)
+Run `node tools/balance.mjs --section economy`, `--section power`, `--section day2`, `--section bot --persona careful --seeds 40`
+(`--immortal` for how long the map lasts), `--section specials`, `--section estimator`, `--section intel --jobs 4` and
+`--section benchmark --jobs 4`; the targets, the measured values and the **Known misses** are in `docs/BALANCE.md`, the reasons
+for every value in `docs/TUNING-2.0.md`, the survival curves in `docs/BENCHMARKS.md`. Summary lines of the final config (economy,
+power and estimator are unchanged by the final review's fixes and are the ones in `docs/TUNING-2.0.md`):
 
 ```
-ECONOMY SUMMARY | items/search by dist d1:1.84 d2:2.05 d3:2.22 d4:2.36 d5+:2.55 | debris % of effort d1:5 d2:5 d3:5 d4:5
-d5+:5 | one trip d1/d3: 312/348 min for 20.0/20.0 items (found 21.5/22.0, pile left 1.5/2.0) | field min per unit: copper 27,
-iron 62, steel pair 115, mythril 666, any gem 49 | full set >=D work days: copper 1.2, iron 2.1, steel 3.4, mythril 15.8 |
-gem cut skill 0: F 15% C+ 40% effect 0.77 of C | map items/run 1541 (mythril 12.4, coal 120) | regrow off
-
-POWER SUMMARY | unarmed d2 vs normal 62% (target 50-65) | day-2 ref (Copper C sword + C chest + C boots) n/e/c 100/94/65% |
-Cu D sword n/e/c 97/76/37% | last day >=90% vs normal: Copper B d10, Iron C d15, Steel C d20, Mythril C d40, Mythril S d60 |
->=70% vs elite: Copper B d5, Iron C d15, Steel C d20, Mythril C d40, Mythril S d60 | ceiling vs normal d60/d80 100/99%
-
-BOT SUMMARY | alive d10:93% d20:90% d30:73% d40:73% d50:58% d60:13% d80:0% | median life 51.5 | score 1219 | d2 typical est
-n/e/c 100/95/76 | first iron/steel/myth piece d4/10/18 | 3-slot iron/steel/myth d7/13/27 | d11-30 fights n/e/c 1/39/60% |
-mining 63% trips/day 1.3 idle 14m | repair 3.8% bars 0.0% time, 15.6 night/run (2.1 subst.) | map found d40:64% d60:91% d80:-% |
-field: 3.29 found/search, carried 56% of found (10.5/trip, 68 from old piles), piles at end 486 (9.5 worth), debris 4.0% of
-effort | gems cut 257.6/run F/D/C+ 13/35/52%, 31.0 infused
-
-SPECIALS SUMMARY (steel C, N->H loss / recovered by 3 gems + B ring) | Magic -11 / 59% | Piercing -12 / 62% | Stun -14 / 82% | Slow -13 / 103%
-
-BENCHMARK | v1.2 | seeds 100 | alive d5:97% d10:94% d15:85% d20:81% d25:77% d30:74% d40:70% d50:46% d60:13% d70:1% d80:0% d100:0% | median life 50.0 | mean score 1228 | estimator game 10x10
+DAY2 | unarmed n/e/c 85/42/18 | elite 0H/1H/2H+ 50/40/31 | champ <=1H/2H/3H 20/17/14 | kit1 n/e/c 96/70/45 | kit2 n/e/c 98/77/53 | kit3 n/e/c 98/82/66 | T-R7 in band 5/8 | T-R7 MISS 3/8 T-GEAR MISS 1/4
+SPECIALS | ref iron d12 steel d19 mythril d31 | M1 9..13 (8-20) | M2 4.7..8.8 (>=4) | M3 -4.1..-3.6 (<=-2) | M4 130..170% (>=80) | M5 C 28..45% S 26..49% (<=50/60) | M6 C max 1.3 S max 3.3 (<=3/4) | M7 -1.0 (<=0) | S-swing -8.2..-1.3 (<=0) | T-R33 ok
+BOT SUMMARY | careful | alive d10:90% d20:80% d30:70% d40:38% d50:0% d60:0% d80:0% | median life 38.0 | score 618 | d2 typical true n/e/c 99/90/76 | d10-40 true e/c 85/72 | d10-40 est e/c 85/71 | first iron/steel/myth piece d3/9/21 | 3-slot iron/steel/myth d6/13/29 | d11-30 fights n/e/c 67/21/12% | mining 59% trips/day 1.2 idle 12m | d11-40 travel 28% load 8.4% of travel | repair 2.9% bars 2.6% time (d11-40 3.5%), by day only (0.7 subst., 0.0 destroyed) | skills d30 travel/carry/repair 7.9/6.4/5.3 | answer cover d25 3.6/4 | map found d40:25% d60:-% d80:-% | field: 3.20 found/search, carried 52% of found (9.9/trip, 29 from old piles), piles at end 368 (8.3 worth), debris 4.7% of effort | gems cut 133.7/run F/D/C+ 14/39/48%, 29.9 infused | T-GEAR ok T-B1 ok T-B2 ok T-B3 ok T-B5 ok T-B4 ok
+INTEL | best only:oreSight | spread life 1.1d score 6% | default -1.3d | worst vs none -1.1d | seeds 100 days 60 | T-R42 ok
+BENCHMARK SUMMARY | v2.0 | seeds 100 | wall 1.3 min (4 jobs) | careful life 32.5 d10 84% | champion life 15.0 d10 62% | casual life 25.0 d10 90% | T-D ok T-P MISS 1/8
+BENCHMARK SUMMARY | v2.0 | seeds 200 | wall 1.0 min (4 jobs) | careful life 31.5 d10 80% | T-D ok
 ```
 
-- **Difficulty of 1.2 equals 1.1** (the point of the tuning). Benchmark, in-game estimate of each version, 200
-  seeds: alive d10 / d30 / d50 / d60 93 / 75 / 51 / 10% (1.1: 88 / 75 / 50 / 10%), median life 51.0 vs 50.0, mean
-  score 1,246 vs 1,158. 100 seeds: 94 / 74 / 46 / 13% vs 85 / 73 / 46 / 5%, median 50.0 vs 48.5. With the bot's
-  own larger estimate (`--estimator bot`): 94 / 78 / 58 / 12% vs 91 / 79 / 60 / 12%, median 52 vs 53. The shape
-  moved only at the start: no day-2 deaths (14 of 200 in 1.1) but more on days 3-19 (34 of 200 vs 23); deaths
-  before day 40 are 62 vs 59.
-- **Bot, 40 seeds (own estimate), 1.1 → 1.2:** median life 53.0 → 51.5, score 1,192 → 1,219, champion wins 14.0 →
-  13.8, first iron / steel / mythril piece day 3 / 9 / 16 → 4 / 10 / 18, 3 of 5 slots 6 / 11 / 22 → 7 / 13 / 27,
-  map found by day 40 / 50 82% / 92% → 64% / 84% (the fresh-cell time slows mining by about 15%: a trip from
-  8:00 takes 244 → 312 minutes at distance 1), repairs per run 4.8 → 15.6 (1.4% → 3.8% of the bars made), items
-  destroyed by wear 1.4 → 4.2 (4.3 of the 10 mythril bars a run), gems cut 310 → 258.
-- **Power curve:** unarmed beats a day-2 normal 62% (target 50-65%); the day-2 reference set wins 100 / 94 / 65%
-  against normal / elite / champion (1.1: 93 / 63 / 22). Plain sets last longer: the last day with 70% against
-  elites is iron C 15, steel C 20, mythril C 40, mythril S 60 (1.1: 10, 20, 30, 50). On-pace plain sets win
-  more than the session-4 targets (steel C on day 20: 99 / 89 / 56% against normal / elite / champion).
-- **Specials** (steel C, elite, day 28): Normal → High costs 11.3 / 12.2 / 14.5 / 13.1 win points for magic /
-  piercing / stun / slow; the matching armor gems (C, 3 pieces) + a B ring win back 59 / 62 / 82 / 103% (mythril
-  set: 48 / 52 / 98 / 98%); the S sword gems are 72 / 92 / 86 / 75% of the enemy's High value. Resistances take
-  about 2 win points (Low → High) off a C ruby or diamond sword gem, 4-7 off a C topaz or sapphire sword and
-  8-12 off an S gem.
-- **Estimator** (steel C vs elites, true chance ~55%): at 10 x 10 and the 10% starting scouting a press-to-press
-  wobble of 6.8 points and a typical miss of 15.0 points; 20 x 20 (one Battle simulation point) 4.2 / 14.2;
-  1.1's 40 x 30 2.7 / 13.9; with 50% of the attributes visible the miss is 11.3 and with all visible 4.6 (at
-  10 x 10), 2.5 (20 x 20). Most of the error is the hidden attributes, so scouting beats simulation size
-  (`docs/BENCHMARKS.md`, "Is 10 x 10 too low?"). The simulation size still matters for survival: a 20 x 20
-  in-game estimate (what one Battle simulation point gives) lifts the 100-seed curve by 9-12 points on days
-  20-50 (median 52 vs 50) and `--estimator bot` by 12 at day 50, so the 10 x 10 noise costs about 2 days of
-  median life. And the displayed ± margin covers the truth only 56% of the time at 10 x 10 and 10% scouting
-  (see Known concerns).
-- **Ablations** (40 seeds, `docs/BALANCE.md`): rings −4 days (median 47.5, champion wins 6.5 instead of 13.8),
-  gems −9.5 days (42.0), repair 51.0, skills 52.0, intel 53.5, `--carry default` 51.5: only rings and gems are
-  clear losses; `--set field.regrowPctPerDay=5` gives median 59.0 and 33% alive at day 60 (13% without).
-- **Map:** 64% found by day 40, 84% by day 50, 91% by day 60; with `--immortal` gear plateaus at mythril B
-  sword and 2.6 of 5 slots in mythril around day 40-60 and finds fall to 13 a day on days 51-60.
+Targets met: T-E, T-B, T-D, T-GEAR (a) and (c) as a mean, T-R33, T-A2, T-R42 and all T-P rows but one. **Not met** (details and what each
+would take in `docs/BALANCE.md` "Known misses"): T-R7 champion sub-bands (champions never reach the low end of 0-25: they never roll
+a Low special), T-GEAR (b) elite 82 vs 85-90, T-GEAR (c) by window (gear outruns the enemies for days 3-20 and falls behind after day
+30), T-MID 4 of 5, T-P careful - casual at day 20. The items marked "for the user" there (the champion low end, the early power curve,
+the uneven normal-to-elite step, the flat Battle simulation steps) need a decision before anything is changed.
 
 ## Known concerns / ideas
+**2.0 open items:** see "Balance status (version 2.0)" above and the "Final review pass" at the end of "Plan deviations" (which finding was fixed,
+which was only documented, and why). Not fixed and worth knowing: the Adventurer tab's gear list drops to the card layout whenever its box is
+narrower than 500 px (a container query), the top bar on a 360 px phone is 4 rows tall when a fight and an intel point are showing, and
+`docs/BALANCE.md` chapters 1-16 still hold 1.2's worked examples (regenerate them with the core modules when time allows).
+
+**The list below was written for 1.2** (history): the items about regrowth, night repairs, the Return travel skill, the 10 x 10 estimate and the
+1.2 numbers no longer apply to 2.0.
 - **Mythril upkeep with 10% wear.** Keeping a full mythril set whole costs about 0.39 mythril bars a fight
   (3.5% of its 11 bars); the map's ~13 ore (~12 bars) pay for about 30 fights of one set. The bot loses 4.3
   of the 10 mythril bars it makes to destroyed pieces, cannot repair a worn top item on 26.8 nights a run (no
@@ -1103,6 +1086,38 @@ what was done instead and which batch it touches.
   clock, the work-day bar and the version label opens the popover, a second tap closes it; a tap on the plan screen's ⚠ icon shows its lines (the B4 "not tapped on a touch device" FYI);
   typing in the Log filter right after leaving the Adventurer tab keeps focus and text (before: focus on BODY, one letter left).
 
+**Docs pass (7c) is done:** every "[7b] kept: the docs pass (7c)" note above is resolved by the final review pass below (README, CHANGELOG, BENCHMARKS,
+SPEC, the top of BALANCE.md, TUNING-2.0.md and this file); BALANCE.md chapters 1-16 and Appendices A-C stay 1.2 reference text with a "2.0:" note per
+chapter (the open work: regenerate their worked examples).
+
+### Final review pass (verified findings of the last review; no other balance value changed)
+Fixed (with tests where it is a real bug; `tests/final-fixes.test.mjs`, `tests/final-fixes-ui.test.mjs`, edited ui-render / carry / field tests):
+- **CORE-CFG1 / REQ-R33 (S = A on topaz and sapphire sword gems):** topaz stunChance A 26 -> 25, sapphire slowPct B 18 -> 17 and A 19 -> 18 (C and S unchanged);
+  specials and day2 output identical, so T-R33 / T-R7 / T-GEAR (a) (b) did not move (T-GEAR (c) 86.3 / 73.3 -> 85.1 / 71.6, T-D ok). A test checks every gem table rises.
+- **REQ-R24:** the durability bar, number and Repair button are one non-wrapping group (`.rp-dur`); the gear list is a container (`.gl-box`) that becomes cards below 500 px,
+  so the button is right of the durability on both tabs at 390 to 1920 px (Chromium check at 1024 and 1280 among them).
+- **REQ-R18:** a gem's outcome hover shows only your current chances. **NUM-1:** the Adventurer tab, the plan screen, the Skills tab and the roster's Hidden-attributes row
+  show scouting per tier. **NUM-2:** a defence past the cap shows the capped value with "(cap)". **E2E-8:** margins read "100% (-14)" / "0% (+10)". **E2E-9:** "<1%" instead of "0%".
+- **R28-1 / E2E-3:** the combat log's Attacker and Effects columns are wider (the Result text wraps instead of being cut at any width). **E2E-4:** the Wear column's note says it is the
+  fall in the whole numbers shown and can differ by 1% from the roll (the roll is not changed). **CORE-DUR2:** the scrap note says "its durability (shown as 66%, rounded down)" when
+  the stored value has decimals. **CORE-DUR1:** `couldBreakShown` flags by the whole numbers on screen (warnings and the confirm); `couldBreak` (stored value) stays for the real break.
+- **PLAIN-1 / E2E-10:** real plurals, "found nothing", whole debris numbers in the search and carry messages. **TIME-1:** repair times use `formatDuration`.
+- **R38-1:** the Gems column is second in the gear overview. **E2E-5:** a gem tile is dashed when no grade has a whole cut gem. **E2E-6:** the intel table is cards at 560 px and below.
+- **E2E-2:** Search area and Return to camp sit right under the field grid on phones (the 4-row top bar at 360 px is left as it is). **E2E-7:** a toast is dropped when the phase changes.
+- **TOUCH-1:** `tip()` on the rock, the field item tags, the combat log Effects cell, the disabled Spend button (on a wrapper) and the ring-limit reason (on the row).
+- **CORE-TIME1:** `loadOnArrival`: travelling into a field counts min(bag, carried + its pile) in the walk home (the travel check, the map tooltips and the carry dialog use it).
+  A search's own finds are still not counted in its reserve (small, left). **CORE-INTEL1:** no intel point on a day that ends the run; `spendIntel` refuses in `over`.
+- **CORE-SAVE1:** `assertStructure` refuses a same-version save with a broken phase, roster, map, storage, gear, plan, ...; the error screen backs the save up first.
+  **CORE-SAVE2:** a `storage` event from another tab locks the stale tab (`stale` in `js/main.js`); checked in Chromium with two tabs.
+- **CORE-CFG2 (Foresight [1,1,2,2,2]):** kept (whole-number counts, A2's cap); Help says neighbouring grades can be equal, BALANCE.md Known misses 8.
+- **DOCS-1:** README ("How to play", structure, tests, balance tool, save data), CHANGELOG (2.0 section, save table row), BENCHMARKS (2.0 rows), SPEC (rewritten for 2.0),
+  BALANCE.md top (levers, targets, Known misses, 1.2 -> 2.0 changes), TUNING-2.0.md (notes 1, 4, 5, 7, final table, final pass), this file.
+Not fixed, documented (each needs a decision or is not a defect):
+- **REQ-R7** (champions never reach the bottom of 0-25: they never roll Low specials; 10% are above 25) and **REQ-U1 / E2E-1** (gear outruns the enemies on days 3-20, falls behind after
+  day 30; one Iron D sword puts day-3 champions at 85-91%): changing them means changing the design or the economy, which the instruction for the pass forbade. Numbers and options are in
+  BALANCE.md Known misses 1 and 3 and TUNING notes 1 and 5. **REQ-R6** (uneven base steps), **REQ-R44** (flat Battle simulation steps), **REQ-R33** (late-game Chilling): Known misses 6, 7, 9.
+- Left small: the top bar on a 360 px phone (4 rows with a fight and an intel point), the search reserve not counting its own finds, `docs/BALANCE.md` chapter worked examples.
+
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
 - Session 2 (commits fb1edcc → 22b062f): attack-bar combat model (fixes slows that never applied),
@@ -1181,4 +1196,12 @@ what was done instead and which batch it touches.
   specials, estimator, bot, immortal, five ablations, the carry-default and regrowth-5% what-ifs and the
   benchmark re-run on the final config), SPEC.md, README.md and this file updated to 1.2. The refresh was
   interrupted by a usage limit and finished in a second pass.
+
+- Session 7 (version 2.0; commits 60de81b ... d7dadb0, then the final review fixes): the 46 requests R1-R46 and the answers A1-A4 / U1-U3 (see "Decisions from the
+  user for 2.0"), built in seven batches from `docs/PLAN-2.0.md` (foundation, skills / travel / repairs, enemies / combat / gems, banners and the automatic
+  estimate, player-facing UI, the balance tool's personas, tuning). Final review: a team of reviewers and verifiers checked the shipped game against the
+  requests; the verified findings were fixed (see "Final review pass" in "Plan deviations"): the topaz and sapphire sword gem tables rise to S, the Adventurer tab
+  keeps the Repair button on the durability line, the phone field screen has its search buttons under the grid, scouting is shown per tier, a defence past the
+  cap shows the capped value, margins never read past 0 and 100, the walk home counts a destination's pile, a lost fight awards no intel point, broken saves are
+  refused and backed up, a stale second tab is locked, and the docs pass 7c (README, CHANGELOG, BENCHMARKS, SPEC, BALANCE, TUNING, this file) was done.
   (Update this section each session.)

@@ -19,15 +19,17 @@ The live site is built from `main`. To put an older version back:
 To just *look at* an old version's files, switch the branch dropdown on the repo page to
 `release/vX.Y`.
 
-Branches that exist now: `release/v1.0` and `release/v1.1`. `release/v1.2` is created from `main` right
-after 1.2 is merged (see the release steps in `HANDOFF.md`); rolling 1.2 back means going to `release/v1.1`
-with the steps above. A game saved in 1.2 stays in the browser while 1.1 is live (see the save table below).
+Branches that exist now: `release/v1.0` and `release/v1.1`. `release/v1.2` and `release/v2.0` are created
+from `main` right after each is merged (see the release steps in `HANDOFF.md`); rolling 2.0 back means going to
+`release/v1.2` with the steps above. A game saved in 2.0 stays in the browser while 1.2 is live, and a game
+saved in 1.2 is still there when you come back to it (see the save table below).
 
 Saves, going back and forth (each save format has its own browser-storage key, and a newer save is never
 overwritten by an older version):
 
 | Version | Reads | Saves under |
 |---|---|---|
+| 2.0 | **only its own save** (no conversion: it starts a fresh game and says so once; a 1.x save is left alone) | `smithsy-save-2.0` (best score: `smithsy-best-2.0`) |
 | 1.2 | its own save; if there is none, converts a 1.1 save, else a 1.0 save | `smithsy-save-v3` |
 | 1.1 | its own save; if there is none, converts a 1.0 save | `smithsy-save-v2` |
 | 1.0 | its own save | `smithsy-save-v1` |
@@ -38,6 +40,79 @@ overwritten by an older version):
 - A conversion is a copy made once, the first time the newer version starts without a save of its own.
   The older save is left untouched, so progress made later in the older version is not carried over.
 - A save that can't be loaded is kept as a backup (`smithsy-save-backup-<time>`) and a new game starts.
+- **From 2.0 on, every version starts fresh** (a save is only read by the version that wrote it, tenths
+  included). Your 1.x save stays in the browser, untouched, and opens again in 1.2 (or 1.1 / 1.0 for theirs).
+
+## 2.0
+
+**2.0 starts a fresh game.** It does not read or convert a 1.x save: your 1.x run stays in the browser and opens
+again when you go back to 1.2. It is also a **harder** game: a careful player lasts about 30-40 days (the
+benchmark's median is about 32), and about 8 in 10 runs are alive at day 10.
+
+The world:
+- **A bigger map.** The world is 7x7 (camp in the middle, 40 fields, 8 blocked cells) and each field is 9x9
+  cells. Fields have 2 to 4 boulders, more the farther they are; the share of gems among the finds rises from
+  15% near camp to 25% far away. Searching is a little shallower: about four searches finish a cell.
+- **Ore sight is always on, and starts blind.** Every ore and gem has a hidden sight threshold (rarer ones are
+  higher). In the field you stand in you see the items within your sight (a tag on the cell, also under
+  debris). Sight comes from the Ore sight intel track and Ore sight rings; on day 1 it is too low to see anything.
+- **Walking has skills.** Travel (XP from the map steps you walk, both ways) replaces the old return-trip skill,
+  and a new **Carrying** skill softens the extra travel time of a heavy bag (2.5% per item).
+
+Smithing and repairs:
+- **Repairs happen by day, at camp, and cost time.** There are no night repairs. Only gear the adventurer does not
+  have can be repaired; a repair takes 2.5 times the smithing time (scaled by how much is repaired) and each bar
+  type has its own **Repair** skill, a General repair skill and a little help from its Smithing skill. The Repair
+  button now sits to the right of the item's durability, on the Workshop and the Adventurer tab.
+- **Scrap gives bars back**: 35% of the item's bars times its durability (a 60% copper sword returns 0.42 copper
+  bars). The gem is lost.
+- **New skills.** Smithing skills per bar type make crafting faster; General refining and General cutting add
+  small improvements for every material (the skills of the exact material count far more). 35 skills in all,
+  shown as cards on a phone. Hover or tap a skill to see what it gives; the number of maxed skills is no longer shown.
+- **Gems and grades.** Materials overlap a little: an S piece of one material is better than a D piece of the next
+  and worse than its C. Gem effects were retuned so crafting a variety of gems matters, and every gem grade is
+  worth more than the one below it. The Workshop shows only your current chances for a gem, not the novice and master
+  tables.
+- **Workshop and gear view.** Gear type, material, grade and gem are picked by clicking tiles instead of drop-down
+  lists. Refining and cutting show "Time each" next to the buttons and no longer mention luck or time bonuses (the
+  outcome bar and the time already include them). A failed attempt turns the result box red. After a craft the gem
+  choice goes back to "none". The gear overview shows which gem types each gear type carries and a tag for every
+  gem, and a gem tile is dashed when no grade has a whole cut gem left (repairs use parts of one).
+- **Durability is a whole number** on screen (the game keeps the decimals). A warning mark appears next to gear that
+  could break in the planned fight.
+
+Fights and planning:
+- **Enemies.** Elites are a little tougher than normals and champions a little tougher than elites. Low Magical means
+  no magic damage and Low Chilling means no slowing at all. Enemy scouting is a bit harder for elites and harder for
+  champions, and grades of rings are harder to scout the higher they are. The enemies' daily growth is hidden.
+- **Banners.** Every enemy marches under the Red, Black or Gold banner (you can learn which with Banner scouting;
+  the battle report always shows it). For every 4 fighters you beat from your most-beaten banner your adventurer
+  captures a **pack mule**: one more item of one gear type can be packed (random type, each type once).
+- **The win chance is always shown.** It is worked out by itself for every enemy (5 guesses x 5 test fights; there is no
+  Estimate all button any more) on the plan screen and the Adventurer tab. It is small on purpose, so a lost fight
+  can follow a 90% estimate, and rings or intel only make it a little steadier. A margin never reads past 0 or 100:
+  "100% (-12)".
+- **Intel.** Each intel track has its own step sizes that shrink as you spend (the old +10, +9, ... for all tracks
+  is gone), enemy scouting gains less per point, and the new **Banner scouting** track shows banners. **You must
+  spend your intel points before the next day can start.**
+- **Battle report.** It lists the gear used and the gear not used, separately, and the wear of each item. After a
+  lost fight the run summary replays the fight 500 times to show how it could have gone, and whether gear you left at
+  home would have helped. The combat log keeps its columns aligned; hover or tap an effect to read it in full.
+- **No score until the run ends.** No score or points are shown while you play. **End run** (top bar) retires the
+  adventurer; the run summary explains how the score is made up.
+
+Smaller things: the day bar fills from left to right; search and travel messages use proper plurals; times read
+like "2h 1.8m"; every hover explanation also works with a tap on a phone; the field screen has Search area and Return
+to camp right under the grid on a phone; the Skills & Intel table is a list of cards on a phone.
+
+Saves:
+- **2.0 uses its own save** (`smithsy-save-2.0`) and starts a fresh game. A save that can't be loaded (or has a
+  missing part) is kept as a backup. If the game is open in two tabs, the older tab locks itself instead of overwriting
+  the newer one.
+
+For developers: `node tools/balance.mjs` has three player personas (`--persona careful|champion|casual`), the
+benchmark now includes days 2, 3 and 4, and the new `day2` and `intel` sections check the first fight and the
+intel tracks (`docs/TUNING-2.0.md` is the tuning log; `docs/BALANCE.md` lists the targets that are not met).
 
 ## 1.2
 

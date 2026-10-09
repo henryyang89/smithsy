@@ -11,7 +11,7 @@ import { defaultPack } from '../core/pack.js';
 import { bannerLabel } from '../core/groups.js';
 import { groupVisible } from '../core/enemies.js';
 import { cap } from '../core/util.js';
-import { durText, winText } from './present.js';
+import { durText, winText, planEstimateText, enemySightText } from './present.js';
 import { scheduleEstimates, cachedEstimate, estimatesPending } from './estimates.js';
 import { gearTable } from './gearlist.js';
 import { enemyCard, rosterTable, bannersNote, gearNameNode, wearRange, wearText, bestPerSlot, combatStatsTable, ringNameNode } from './endday.js';
@@ -43,7 +43,7 @@ function todayPanel(ctx) {
         '. The result comes in when you end the day. The packed gear is away and can\'t be repaired today.'),
       h('p', { class: 'adv-tight muted adv-small' },
         groupVisible(s, e, cfg) && cfg.groups.list[e.group] ? ['Banner: ', h('b', { class: `bn bn-${e.group}` }, bannerLabel(e.group, cfg)), '. '] : 'Banner: unknown (the battle report shows it). ',
-        s.plan.shownEstimate ? `Your plan showed ${winText(s.plan.shownEstimate.winPct)}${s.plan.shownEstimate.margin != null ? ` ± ${s.plan.shownEstimate.margin}` : ''}.` : 'Your plan had no finished win estimate.'),
+        s.plan.shownEstimate ? `Your plan showed ${planEstimateText(s.plan.shownEstimate)}.` : 'Your plan had no finished win estimate.'),
       h('div', { class: 'cols' },
         enemyCard(ctx, e),
         h('div', {},
@@ -92,7 +92,7 @@ function statsPanel(ctx) {
       { label: 'Base', c: adventurerCombatant([], {}, cfg) },
       { label: "+ tonight's rings", c: adventurerCombatant([], rt, cfg) },
       { label: '+ best gear', c: adventurerCombatant(best, rt, cfg) },
-    ]),
+    ], cfg),
     h('h4', { class: 'adv-h4' }, `Worn adventurer rings (${worn.length}/${cfg.rings.maxWorn})`),
     worn.length
       ? h('table', { class: 'adv-stats' },
@@ -133,7 +133,7 @@ function rosterPanel(ctx) {
   const estimates = r.enemies.map((e, i) => cachedEstimate(ctx, scope, i));
   return section(`Tomorrow's roster (fight on day ${r.day})`,
     h('p', { class: 'adv-tight muted adv-small' },
-      'You choose one of these enemies when you end the day. Scouting: each attribute visible ', chance('enemySight'),
+      'You choose one of these enemies when you end the day. Scouting: each attribute visible ', h('b', {}, enemySightText(s, cfg)),
       ', ring type ', chance('ringTypeSight'), ', ring grade ', chance('ringGradeSight'), ', banner ', chance('groupSight'),
       '. Each column is one enemy, so a row compares one attribute across all of them. ',
       h('span', { class: 'attr-low' }, 'Green = Low'), ' (weaker), ', h('span', { class: 'attr-high' }, 'red = High'), ' (stronger), ? = hidden. Hover a row name for what it does.'),

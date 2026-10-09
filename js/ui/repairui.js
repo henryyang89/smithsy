@@ -1,11 +1,11 @@
 // Shared repair widgets for the Workshop gear list. Repairs happen by day, at camp, on gear the adventurer does not
 // have (core repair()). All numbers come from core repairPlan()/repairInfo(); all state changes go through repair()
 // in ctx.act(). CSS: css/ui-workshop.css (classes prefixed rp-).
-import { h, num, tip } from './dom.js';
+import { h, tip } from './dom.js';
 import { repairPlan, repairInfo, repair, gearName } from '../core/gear.js';
 import { atCamp } from '../core/map.js';
 import { packOrder } from '../core/pack.js';
-import { cap, qtyText, round1, EPS } from '../core/util.js';
+import { cap, qtyText, round1, formatDuration, EPS } from '../core/util.js';
 import { repairGainShown } from './present.js';
 
 // Quantities: whole numbers as-is, fractional ones (repairs use 0.01 bars) to 2 decimals.
@@ -23,7 +23,7 @@ export function repairCheck(state, item, cfg, opts = {}) {
   else if (state.phase !== 'work') why = 'Not during the work day';
   else if (!atCamp(state)) why = 'Repairs only work at camp';
   else if (!plan.ok) why = plan.reason;
-  else if (state.time + plan.minutes > cfg.time.dayEndMin + EPS) why = `Not enough time left today (needs ${num(plan.minutes)}m)`;
+  else if (state.time + plan.minutes > cfg.time.dayEndMin + EPS) why = `Not enough time left today (needs ${formatDuration(plan.minutes)})`;
   return { plan, info, why };
 }
 
@@ -72,7 +72,7 @@ export function repairButton(ctx, item, check, cls = 'small') {
     class: cls,
     disabled: !!why,
     'data-repair': item.id,
-    ...tip(why || `Repair ${gearName(item)} +${repairGainShown(item.durability)}% to 100% (${num(plan.minutes)}m)${warn ? `. ${warn}` : ''}`),
+    ...tip(why || `Repair ${gearName(item)} +${repairGainShown(item.durability)}% to 100% (${formatDuration(plan.minutes)})${warn ? `. ${warn}` : ''}`),
     onclick: () => doRepair(ctx, item),
   }, `Repair +${repairGainShown(item.durability)}%`);
 }
@@ -80,7 +80,8 @@ export function repairButton(ctx, item, check, cls = 'small') {
 // One compact block: [Repair +7%] 0.07 Iron C bars · 12m
 //                     WARNING line when a higher grade substitutes, reason line when it can't be done.
 // opts.lead: nodes placed first on the line (the gear list puts the durability bar and number there, so the button sits
-// right of the durability).
+// right of the durability). The lead and the button are one group that never wraps (R24), also in the half-width gear
+// list of the Adventurer tab; its bar gives way first when the cell is narrow.
 export function repairLine(ctx, item, opts = {}) {
   const check = repairCheck(ctx.state, item, ctx.cfg, opts);
   const { plan, info, why } = check;
@@ -88,13 +89,13 @@ export function repairLine(ctx, item, opts = {}) {
   const timeNode = h('span', {
     class: 'muted',
     ...tip(plan.minutes < info.baseMinutes - EPS
-      ? `Repairing takes ${num(info.baseMinutes)}m; your repair skills cut it to ${num(plan.minutes)}m. See the Skills tab.`
-      : `Repairing takes ${num(info.baseMinutes)}m. Repair skills (Skills tab) make it faster.`),
-  }, `${num(plan.minutes)}m`);
+      ? `Repairing takes ${formatDuration(info.baseMinutes)}; your repair skills cut it to ${formatDuration(plan.minutes)}. See the Skills tab.`
+      : `Repairing takes ${formatDuration(info.baseMinutes)}. Repair skills (Skills tab) make it faster.`),
+  }, formatDuration(plan.minutes));
   return h('div', { class: 'rp-line' },
     h('div', { class: 'rp-main' },
-      opts.lead || null,
-      repairButton(ctx, item, check),
+      // the durability and the button stay on one line (the cost text is what wraps below them)
+      h('span', { class: 'rp-dur' }, opts.lead || null, repairButton(ctx, item, check)),
       h('span', { class: 'rp-cost' }, repairCostNodes(ctx.state, item, check), ' · ', timeNode)),
     warn && !item.packed ? h('div', { class: 'rp-warn' }, h('b', {}, 'Warning: '), warn, '.') : null,
     why && why !== 'At 100%' ? h('div', { class: 'rp-why' }, why) : null);
@@ -145,6 +146,6 @@ export function repairAll(state, cfg) {
     ok: true,
     minutes,
     notes,
-    msg: `Repaired ${done.length} item${done.length === 1 ? '' : 's'} to 100% in ${num(minutes)}m: ${done.join(', ')}.${substitute ? ' Some used a higher grade (no extra benefit).' : ''}${stopped ? ` Stopped: ${stopped}` : ''}`,
+    msg: `Repaired ${done.length} item${done.length === 1 ? '' : 's'} to 100% in ${formatDuration(minutes)}: ${done.join(', ')}.${substitute ? ' Some used a higher grade (no extra benefit).' : ''}${stopped ? ` Stopped: ${stopped}` : ''}`,
   };
 }

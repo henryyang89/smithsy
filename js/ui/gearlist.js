@@ -4,7 +4,7 @@
 // Classes: gl- (css/ui-workshop.css). Repairs and scrapping go through core actions inside ctx.act().
 import { h, bar, tip } from './dom.js';
 import { SLOTS } from '../config.js';
-import { scrap, scrapReturn, couldBreak, gearName } from '../core/gear.js';
+import { scrap, scrapReturn, couldBreakShown, gearName } from '../core/gear.js';
 import { packOrder } from '../core/pack.js';
 import { cap, EPS } from '../core/util.js';
 import { qty, repairLine } from './repairui.js';
@@ -18,7 +18,9 @@ function scrapNote(item, cfg) {
   const back = scrapReturn(item, cfg);
   const [bm, bg] = back.key.split(':');
   const backText = back.qty > EPS ? `${qty(back.qty)} ${cap(bm)} ${bg} bar${back.qty === 1 ? '' : 's'}` : 'nothing';
-  const math = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${durText(item.durability)} durability`;
+  // the bars come from the exact durability; the screen shows it rounded down, so say so instead of printing sums that are off by 0.01
+  const exact = item.durability % 1 > 1e-9 && item.durability < 100;
+  const math = `${cfg.gear.repair.materialFraction}% of its ${cfg.gear.slots[item.slot].bars} bars × ${exact ? `its durability (shown as ${durText(item.durability)}, rounded down)` : `${durText(item.durability)} durability`}`;
   return `You get back ${backText} (${math}).${item.gem ? ' The gem is lost.' : ''}`;
 }
 
@@ -28,7 +30,7 @@ const durLead = (item, extra = null) => [bar(item.durability, `gl-bar ${tone(ite
 function durabilityCell(ctx, item, opts) {
   const { state, cfg } = ctx;
   // could-break flag (Adventurer tab): against the toughest enemy tier
-  const flag = opts.flags && couldBreak(item, state, null, cfg)
+  const flag = opts.flags && couldBreakShown(item, state, null, cfg)
     ? h('span', { class: 'adv-flag warn', 'data-flag': 'warn', ...tip(couldBreakText(state, cfg, item)) }, '⚠')
     : null;
   if (item.packed) {
@@ -68,7 +70,7 @@ export function gearTable(ctx, items, opts = {}) {
           : null));
     }
   }
-  return h('div', { class: 'ws-scroll' }, h('table', { class: `gl-table${o.scrap ? ' gl-hasscrap' : ''}` },
+  return h('div', { class: 'ws-scroll gl-box' }, h('table', { class: `gl-table${o.scrap ? ' gl-hasscrap' : ''}` },
     h('thead', {}, h('tr', {}, h('th', {}, 'Item and stats'), h('th', {}, 'Durability'), o.scrap ? h('th', {}, 'Scrap') : null)),
     h('tbody', {}, rows)));
 }

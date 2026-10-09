@@ -8,12 +8,12 @@ import {
   travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes, loadPenaltyPct,
   searchEfficiency, searchEfficiencyRange, expectedSearches, searchesText, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
   fieldProgress, areaCells, atCamp, currentField, mapCell, itemKind, itemType, key, timeLeft, sameLoc,
-  distanceRow, sightValue, sightRange, sightShare, seenItems,
+  distanceRow, sightValue, sightRange, sightShare, seenItems, loadOnArrival,
 } from '../core/map.js';
 import { intelValue } from '../core/intel.js';
 import { smithRingTotals } from '../core/rings.js';
 import { smithBonuses } from '../core/bonuses.js';
-import { formatClock, formatDuration, cap, round1, clamp } from '../core/util.js';
+import { formatClock, formatDuration, cap, round1, clamp, plural } from '../core/util.js';
 import { ORES, GEMS } from '../config.js';
 
 const EPS = 1e-9;
@@ -31,7 +31,6 @@ const dur = (m) => (Number.isFinite(m) ? formatDuration(Math.max(0, m)) : 'no pa
 const clock = (m) => formatClock(m);
 // "3.5%" below 10, otherwise whole numbers rounded down (so 99.6% never reads as 100%).
 const pctText = (v) => `${v > 0 && v < 10 ? round1(v) : Math.floor(v + 1e-6)}%`;
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 // Remaining debris thickness, rounded up (0.3 left still reads as 1, never as 0).
 const dn = (v) => String(Math.max(0, Math.ceil(v - 1e-6)));
 
@@ -84,7 +83,7 @@ function itemName(t) {
 
 function itemTag(t) {
   const type = itemType(t);
-  return h('span', { class: `mv-item mv-${itemKind(t)} mv-t-${type}`, title: itemName(t) }, ABBR[type] || type.slice(0, 2));
+  return h('span', { class: `mv-item mv-${itemKind(t)} mv-t-${type}`, ...tip(itemName(t)) }, ABBR[type] || type.slice(0, 2));
 }
 
 // ------------------------------------------------------------------ sight ----
@@ -332,7 +331,7 @@ function worldTile(ctx, c) {
   const load = items ? ` (carrying ${plural(items, 'item')})` : '';
   const go = (to) => (inField ? startLeave(ctx, to) : doTravel(ctx, to));
   if (c.type === 'blocked') {
-    return h('div', { class: 'cell blocked', title: 'Impassable rock: paths go around it.' }, h('span', { class: 'mv-rock' }, ''));
+    return h('div', { class: 'cell blocked', ...tip('Impassable rock: paths go around it.') }, h('span', { class: 'mv-rock' }, ''));
   }
   if (c.type === 'camp') {
     const ret = here ? 0 : returnMinutes(state, state.location, items, cfg);
@@ -348,13 +347,14 @@ function worldTile(ctx, c) {
   const field = map.fields[key(c.x, c.y)];
   const prog = fieldProgress(field);
   const there = here ? 0 : travelMinutes(state, state.location, c, items, cfg);
-  const back = travelMinutes(state, c, map.camp, items, cfg);
+  const backItems = loadOnArrival(state, c, items, cfg); // the walk home is planned with the most you could take out of that field's pile
+  const back = travelMinutes(state, c, map.camp, backItems, cfg);
   const fits = here || state.time + there + back <= cfg.time.dayEndMin + EPS;
   const pileN = pileOf(field).length;
   const title = [
     `Field (${c.x + 1},${c.y + 1}) · distance ${c.dist} from camp`,
     `Searched: ${pctText(prog)}`,
-    here ? 'You are here.' : `Travel there: ${dur(there)}, then back to camp: ${dur(back)}${load}`,
+    here ? 'You are here.' : `Travel there: ${dur(there)}${load}, then back to camp: ${dur(back)}${backItems !== items ? ` (with up to ${plural(backItems, 'item')}, counting its pile)` : ''}`,
     !here ? `Arrive ${clock(state.time + there)}${fits ? '' : ` - not enough time to get there and back by ${clock(cfg.time.dayEndMin)}`}` : null,
     pileN ? `${plural(pileN, 'item')} waiting in this field's pile` : null,
   ].filter(Boolean).join('\n');
@@ -391,7 +391,7 @@ function campHint(ctx) {
   const fields = state.map.cells.filter((c) => c.type === 'field');
   const reachable = fields.filter((c) => {
     const there = travelMinutes(state, state.location, c, 0, cfg);
-    const back = travelMinutes(state, c, state.map.camp, 0, cfg);
+    const back = travelMinutes(state, c, state.map.camp, loadOnArrival(state, c, 0, cfg), cfg);
     return state.time + there + back <= cfg.time.dayEndMin + EPS;
   }).length;
   const left = timeLeft(state, cfg);
@@ -527,8 +527,27 @@ function fieldPanel(ctx, field, fkey, sel) {
       `${plural(done, 'cell')} done · ${debrisLeft} under debris · ${plural(boulders, 'boulder')} · ${plural(seenN, 'item')} seen${f.freshCellMin > 0 ? ` · ${freshTotal} fresh` : ''} · ${pileN} in the pile `,
       sightChip(state, cfg)),
     grid,
+    quickActions(ctx, field, sel),
     h('p', { class: 'muted mv-note' },
       `Click a cell to centre the 3x3 search area on it (selected: ${cellLabel(sel, n)}); the nine plots of 3x3 cells cover the field exactly once. At distance ${d}, about ${row.loot}% of cells hold items (${Math.min(100, row.loot + f.debrisLootBonus)}% under debris). You see the items still in the ground whose sight threshold is within your sight (a tag on the cell, also under debris); everything else stays hidden until found. Numbers on brown striped cells are the debris left to clear (a seen item's tag sits above the number). Boulders (dark rocks) can never be searched.${f.freshCellMin > 0 ? ` A small dot marks a fresh cell, one nothing has worked on yet: each fresh cell in the 3x3 area adds ${f.freshCellMin}m to that search, so thoroughly finishing an area is cheaper than skipping around.` : ''}`));
+}
+
+// Phone only (css .mv-quick; hidden on wider screens, where the Actions panel sits beside the grid): the two buttons used all
+// day, right under the grid, so a search does not mean scrolling past the grid's long explanation and back. The Actions panel
+// has the full numbers; these are the same actions.
+function quickActions(ctx, field, sel) {
+  const { state, cfg } = ctx;
+  const n = cfg.field.size;
+  const cx = sel % n;
+  const cy = Math.floor(sel / n);
+  const open = areaCells(cx, cy, cfg).map((i) => field.cells[i]).filter(cellOpen);
+  const sMin = searchMinutes(state, cfg, cx, cy);
+  const fits = fitsWithReturn(state, sMin, cfg);
+  const why = !open.length ? 'Nothing left to search in this area.' : !fits ? `Not enough time to search and still be home by ${clock(cfg.time.dayEndMin)}.` : null;
+  return h('div', { class: 'mv-quick' },
+    h('button', { class: 'primary', disabled: !!why, 'data-quick': 'search', ...tip(why || `Search the 3x3 area around ${cellLabel(sel, n)}`), onclick: () => doSearch(ctx, sel) }, `Search area · ${dur(sMin)}`),
+    h('button', { 'data-quick': 'return', ...tip('Walk back to camp (you choose what to carry first)'), onclick: () => startLeave(ctx, state.map.camp) }, 'Return to camp'),
+    why ? h('div', { class: 'warn mv-why mv-quick-why' }, why) : h('div', { class: 'muted mv-quick-why' }, `${plural(open.length, 'cell')} to work on · done at ${clock(state.time + sMin)}`));
 }
 
 function fieldCell(ctx, fkey, cell, i, selected, inArea, sight) {
@@ -815,9 +834,10 @@ function carryDialog(ctx, field, leave) {
     }
     for (const g of groupCounts) g.el.textContent = `${g.idxs.filter((i) => sel[g.src].has(i)).length}/${g.idxs.length}`;
     const there = travelMinutes(state, state.location, leave.to, nSel, cfg);
-    const back = toCamp ? 0 : travelMinutes(state, leave.to, state.map.camp, nSel, cfg);
+    // the walk home from the next field is planned with as much as you could take out of it (what you bring + its pile)
+    const back = toCamp ? 0 : travelMinutes(state, leave.to, state.map.camp, loadOnArrival(state, leave.to, nSel, cfg), cfg);
     const fits = toCamp || state.time + there + back <= cfg.time.dayEndMin + EPS;
-    const fitsEmpty = toCamp || state.time + travelMinutes(state, state.location, leave.to, 0, cfg) + travelMinutes(state, leave.to, state.map.camp, 0, cfg) <= cfg.time.dayEndMin + EPS;
+    const fitsEmpty = toCamp || state.time + travelMinutes(state, state.location, leave.to, 0, cfg) + travelMinutes(state, leave.to, state.map.camp, loadOnArrival(state, leave.to, 0, cfg), cfg) <= cfg.time.dayEndMin + EPS;
     const leftBehind = total - nSel;
     clear(summary).append(...[
       h('div', {}, h('b', { class: full ? 'warn' : '' }, `Carrying ${nSel} / ${slots}`), ` · ${plural(leftBehind, 'item')} stay${leftBehind === 1 ? 's' : ''} in this field's pile`),

@@ -6,7 +6,8 @@ import { knownLevels } from '../core/enemies.js';
 import { simCounts, shownMargin } from '../core/sim.js';
 import { packOrder } from '../core/pack.js';
 import { SEGMENTS } from '../core/replay.js';
-import { clamp, formatClock, formatDuration, EPS } from '../core/util.js';
+import { clamp, formatClock, formatDuration, fmtNum, EPS } from '../core/util.js';
+import { intelValue, enemySightFor } from '../core/intel.js';
 
 // Durability as the player reads it: a whole number ("63%"), never a decimal. Costs and times use the exact value.
 export const durText = (d) => `${shownDurability(d)}%`;
@@ -17,6 +18,16 @@ export const repairGainShown = (d) => 100 - shownDurability(d);
 
 // A win chance in whole percent: "62%".
 export const winText = (v) => `${Math.round(v)}%`;
+
+// The chance to see each attribute of an enemy of `tier` (Enemy scouting x the tier's %), as the player reads it: "25.2%".
+export const enemySightPct = (state, tier, cfg = CONFIG) => `${fmtNum(enemySightFor(state, tier, cfg), 1)}%`;
+
+// Enemy scouting as one line: "28%", and when elites and champions are harder to scout "28% (elites 25.2%, champions 22.4%)".
+export function enemySightText(state, cfg = CONFIG) {
+  const base = intelValue(state, 'enemySight', cfg);
+  const harder = TIERS.filter((t) => Math.abs(enemySightFor(state, t, cfg) - base) > 1e-9);
+  return `${base}%${harder.length ? ` (${harder.map((t) => `${t}s ${enemySightPct(state, t, cfg)}`).join(', ')})` : ''}`;
+}
 
 // Item or ring ids as one sortable string: "3,7,12".
 export const sortedIds = (ids) => [...ids].sort((a, b) => a - b).join(',');
@@ -34,17 +45,24 @@ export function estimateKey(state, scope, enemyIndex, cfg = CONFIG, counts = sim
     counts.samples, counts.evalFights, counts.fightsPerLoadout].join('|');
 }
 
+// The margin next to a win %, written for the 0-100 limits: "± 14" when the chance can move both ways, "(−14)" at 100% (it
+// can only be lower) and "(+10)" at 0% (only higher), so a player never reads "100% ± 14". m = the margin in points, or null.
+export const marginPart = (winPct, m) => (m == null ? null : Math.round(winPct) >= 100 ? `(−${m})` : Math.round(winPct) <= 0 ? `(+${m})` : `± ${m}`);
+
+// "62% ± 14" / "100% (−14)" for a { winPct, margin } the plan kept (a plan's shown estimate), or just "62%" without a margin.
+export const planEstimateText = (e) => (e.margin != null ? `${winText(e.winPct)} ${marginPart(e.winPct, e.margin)}` : winText(e.winPct));
+
 // "62% ± 14 from 25 test fights (could be 48-76%; hidden attributes add more)." for the hover on an estimate.
 export function estimateTip(res) {
   const m = shownMargin(res);
   if (m == null) return `${winText(res.winPct)} from ${res.fights} test fights.`;
   const lo = Math.max(0, Math.round(res.winPct - m));
   const hi = Math.min(100, Math.round(res.winPct + m));
-  return `${winText(res.winPct)} ± ${m} from ${res.fights} test fights (could be ${lo}-${hi}%; hidden attributes add more).`;
+  return `${winText(res.winPct)} ${marginPart(res.winPct, m)} from ${res.fights} test fights (could be ${lo}-${hi}%; hidden attributes add more).`;
 }
 
 // "62% ± 14" (or just "62%" when the estimate has no fights to measure a margin from).
-export const winWithMargin = (res) => (shownMargin(res) != null ? `${winText(res.winPct)} ± ${shownMargin(res)}` : winText(res.winPct));
+export const winWithMargin = (res) => planEstimateText({ winPct: res.winPct, margin: shownMargin(res) });
 
 // Colour class of a win chance: 90 and up ok, 70 and up warn, else err.
 export const winClass = (p) => (p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'err');
@@ -212,6 +230,9 @@ const SEGMENT_LABELS = { lostBadly: 'Lost badly', lostClose: 'Lost close', draw:
 export function outcomeSegments(stats) {
   return SEGMENTS.map((key) => ({ key, label: SEGMENT_LABELS[key], count: stats.seg[key] || 0, pct: stats.n ? ((stats.seg[key] || 0) / stats.n) * 100 : 0 }));
 }
+
+// A share of the replays in whole percent; a segment that exists but rounds to 0 reads "<1%" (never "0%").
+export const segPctText = (pct) => (pct > 0 && Math.round(pct) < 1 ? '<1%' : `${Math.round(pct)}%`);
 
 // Which part of the outcome bar the real fight belongs to: 'lostBadly', 'lostClose', 'draw', 'wonClose' or 'wonEasily'.
 export function fightSegment(report, cfg = CONFIG) {

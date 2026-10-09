@@ -61,10 +61,11 @@ export function trackValueText(track, value, cfg = CONFIG) {
 
 // True when the player has a point and at least one track that it could still raise.
 export function canSpendIntel(state, cfg = CONFIG) {
-  return state.intel.points >= 1 && Object.keys(cfg.intel.tracks).some((k) => nextIntelGain(state, k, cfg) > 0);
+  return state.phase !== 'over' && state.intel.points >= 1 && Object.keys(cfg.intel.tracks).some((k) => nextIntelGain(state, k, cfg) > 0);
 }
 
 export function spendIntel(state, track, cfg = CONFIG) {
+  if (state.phase === 'over') return { ok: false, msg: 'The run is over: there is nothing left to spend intel on.' };
   if (!cfg.intel.tracks[track]) return { ok: false, msg: 'Unknown intel track.' };
   if (state.intel.points < 1) return { ok: false, msg: 'No intel points available.' };
   if (nextIntelGain(state, track, cfg) <= 0) return { ok: false, msg: 'Already at maximum.' };

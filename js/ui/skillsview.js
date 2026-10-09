@@ -7,6 +7,7 @@ import { spendIntel, intelValue, nextIntelGain, trackValueText } from '../core/i
 import { smithRingTotals } from '../core/rings.js';
 import { simCounts } from '../core/sim.js';
 import { cap } from '../core/util.js';
+import { enemySightPct } from './present.js';
 
 // ------------------------------------------------------- intel track values ----
 // Each track has a unit (config intel.tracks[..].unit): '%' (a chance), 'sight' (sight points) or 'count'
@@ -139,15 +140,20 @@ function intelPanel(ctx) {
     const spent = state.intel.spent[key] || 0;
     const cur = intelValue(state, key, cfg);
     const gain = nextIntelGain(state, key, cfg);
-    const canSpend = pts >= 1 && gain > 0;
-    const btn = h('button', {
+    const over = state.phase === 'over';
+    const canSpend = !over && pts >= 1 && gain > 0;
+    const why = over ? 'The run is over.' : gain <= 0 ? 'Already at maximum' : pts < 1 ? `No intel points. Next point ${nextText}.` : `Spend 1 point: ${val(cur)} → ${val(cur + gain)}`;
+    const spendBtn = h('button', {
       class: canSpend ? 'small primary' : 'small',
       disabled: !canSpend,
-      title: gain <= 0 ? 'Already at maximum' : pts < 1 ? `No intel points. Next point ${nextText}.` : `Spend 1 point: ${val(cur)} → ${val(cur + gain)}`,
+      title: why,
       onclick: () => ctx.act(() => spendIntelAction(ctx, key), { toast: true }),
     }, 'Spend 1 point');
+    // a disabled button gets no tap, so its reason sits on a wrapper that does
+    const btn = canSpend ? spendBtn : h('span', { class: 'mi-spendwrap', ...tip(why) }, spendBtn);
     let extra = null;
     if (key === 'oreSight' && ringReveal > 0) extra = h('div', { class: 'mi-note ok' }, `+ ${num(ringReveal, 2)} from Ore sight rings = ${num(cur + ringReveal, 2)} sight`);
+    if (key === 'enemySight' && t.tierMult) extra = h('div', { class: 'mi-note ok' }, `Against a normal enemy ${enemySightPct(state, 'normal', cfg)}, an elite ${enemySightPct(state, 'elite', cfg)}, a champion ${enemySightPct(state, 'champion', cfg)}`);
     if (t.unit === 'count') {
       const c = simCounts(state, cfg);
       extra = h('div', { class: 'mi-note ok' }, `${c.samples} guesses x ${c.evalFights} test fights per enemy now (base ${cfg.sim.samples}, +${cur} from intel${c.extra - cur > 0 ? `, +${c.extra - cur} from your best Foresight ring` : ''})`);

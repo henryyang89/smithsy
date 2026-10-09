@@ -97,7 +97,7 @@ BENCHMARK | v2.0 | casual | seeds 100 | alive d2:99% d3:98% d4:98% d5:98% d10:90
 
 ## Final table: every section-9 target on the final config
 
-ok = inside the band as the tool prints it. Numbers are from the runs pasted above (economy 100 maps, day2 600 enemies x 300 fights, bot careful 40 seeds, benchmark and intel 100 seeds).
+ok = inside the band as the tool prints it. Numbers are from the final config: the table was re-measured after the final review fixes (the topaz / sapphire sword gems, see "Final review pass" at the end), so the bot, benchmark and intel rows differ a little from the summary lines pasted above, which are the record of the tuning pass itself (economy 100 maps, day2 600 enemies x 300 fights, bot careful 40 seeds, benchmark 100 and 200 seeds, intel 100 seeds).
 
 | Id | Target | Measured | Flag | Reason for a miss |
 |---|---|---|---|---|
@@ -114,17 +114,17 @@ ok = inside the band as the tool prints it. Numbers are from the runs pasted abo
 | T-B1 | 3 of 5 slots iron 6-9 | 6.0 | ok | |
 | T-B1 | first steel piece 8-12 | 9.0 | ok | |
 | T-B1 | 3 of 5 slots steel 12-16 | 13.0 | ok | |
-| T-B1 | first mythril piece 15-21 | 19.0 | ok | |
-| T-B1 | 3 of 5 slots mythril 24-32 | 30.0 | ok | |
-| T-B2 | travel 25-35% of work time, days 11-40 | 27.8% | ok | |
-| T-B2 | load 8-15% of travel minutes | 8.5% | ok | |
-| T-B3 | repairs 3-6% of work time, days 11-40 | 3.4% | ok | |
+| T-B1 | first mythril piece 15-21 | 20.5 | ok | |
+| T-B1 | 3 of 5 slots mythril 24-32 | 29.0 | ok | |
+| T-B2 | travel 25-35% of work time, days 11-40 | 27.9% | ok | |
+| T-B2 | load 8-15% of travel minutes | 8.4% | ok | |
+| T-B3 | repairs 3-6% of work time, days 11-40 | 3.5% | ok | |
 | T-B3 | items destroyed by wear <= 5 per run | 0.0 | ok | |
-| T-B4 | Travel 6-8 at day 30 | 8.0 | ok | |
+| T-B4 | Travel 6-8 at day 30 | 7.9 | ok | |
 | T-B4 | Carrying 5-8 | 6.4 | ok | |
-| T-B4 | General repair 5-7 | 5.1 | ok | |
-| T-B4 | main-bar smithing 3-6 | 3.2 | ok | |
-| T-B4 | main-bar repair 3-6 | 3.3 | ok | |
+| T-B4 | General repair 5-7 | 5.3 | ok | |
+| T-B4 | main-bar smithing 3-6 | 3.1 | ok | |
+| T-B4 | main-bar repair 3-6 | 3.7 | ok | |
 | T-B5 | answer-gem armor cover at day 25 >= 2.5 of 4 | 3.63 | ok | |
 | T-B5 | gems used by repairs <= 25% of gems cut | 1.6% | ok | |
 | T-R7 | unarmed day 2, elite mean 38-45 | 42.4 | ok | |
@@ -141,12 +141,12 @@ ok = inside the band as the tool prints it. Numbers are from the runs pasted abo
 | T-GEAR (a) | the same, champion 50-55 | 52.8 | ok | |
 | T-GEAR (b) | kit + a matching C gem per High special, elite 85-90 | 82.1 | MISS (-2.9) | Note 2. Inside the user's 75-90. |
 | T-GEAR (b) | the same, champion 65-75 | 66.0 | ok | |
-| T-GEAR (c) | careful's packed gear vs ALL roster elites, days 10-40: 75-90 | 86.3 (true chance) | ok | In band as a mean only; by window it runs above, then below (note 5). |
-| T-GEAR (c) | vs ALL roster champions: 50-75 | 73.3 | ok | Same: note 5. |
-| T-D | careful median life 30-40 | 31.0 | ok | Thin margin: 200 seeds give 31.0 too (29.0-34.5 in neighbouring settings). |
-| T-D | alive at day 10: 75-85% | 85% | ok | Thin: 81-85% over 100-200 seeds. |
-| T-D | alive at day 2 >= 95% | 97% | ok | |
-| T-D | alive at day 4 >= 85% | 93% | ok | |
+| T-GEAR (c) | careful's packed gear vs ALL roster elites, days 10-40: 75-90 | 85.1 (true chance) | ok | In band as a mean only; by window it runs above, then below (note 5). |
+| T-GEAR (c) | vs ALL roster champions: 50-75 | 71.6 | ok | Same: note 5. |
+| T-D | careful median life 30-40 | 32.5 (100 seeds), 31.5 (200 seeds) | ok | Thin margin (29.0-34.5 in neighbouring settings). |
+| T-D | alive at day 10: 75-85% | 84% (100 seeds), 80% (200) | ok | Thin: 80-85% over 100-200 seeds. |
+| T-D | alive at day 2 >= 95% | 97% (100), 96% (200) | ok | |
+| T-D | alive at day 4 >= 85% | 93% (100), 89% (200) | ok | |
 | T-MID | copper B last day >= 70% vs typical elite 5-11 | 6 | ok | |
 | T-MID | iron C 12-18 | 10 | MISS | Note 3. |
 | T-MID | steel C 20-26 | 17 | MISS | Note 3. |
@@ -166,27 +166,29 @@ ok = inside the band as the tool prints it. Numbers are from the runs pasted abo
 | T-A2 | <= 60,000 at the max size | 34,300 | ok | |
 | T-A2 | shown margin at 5x5 about +-20 (15-25) | +-20.6 | ok | |
 | T-A2 | margin shrinks with every step | smallest drop 2.43 | ok | |
-| T-R42 | (1) best only: mode - median only: mode <= 4 days / <= 10% score | 1.4 d / 5.0% | ok | |
-| T-R42 | (2) no only: mode below none by more than 2 paired se | -0.3 to +1.1 paired se over the six tracks | ok | |
-| T-R42 | (3) persona list >= best only: - 3 days | -1.5 | ok | |
+| T-R42 | (1) best only: mode - median only: mode <= 4 days / <= 10% score | 1.1 d / 6.5% | ok | |
+| T-R42 | (2) no only: mode below none by more than 2 paired se | -1.2 to +1.0 paired se over the six tracks | ok | |
+| T-R42 | (3) persona list >= best only: - 3 days | -1.3 | ok | |
 | T-P | casual alive at day 4 >= 70% | 98% | ok | |
 | T-P | casual 0% champion fights | 0.0% | ok | |
-| T-P | careful - casual alive at day 20 >= +10 points | +7 (73 vs 66) at 100 seeds; -1 (66 vs 67) at 200 seeds | MISS (-3 at 100 seeds, -11 at 200) | Note 4: a real miss, not noise. |
-| T-P | careful - casual alive at day 40 >= +10 | +16 | ok | |
-| T-P | champion score/day >= 1.2 x careful's | 1.44x | ok | |
-| T-P | careful - champion median life >= 3 days | 15.5 | ok | |
-| T-P | champion fights >= 40% champions, days 11-40 | 85% | ok | |
-| T-P | benchmark wall time <= 15 min with --jobs 4 | 1.5 min | ok | |
+| T-P | careful - casual alive at day 20 >= +10 | +5 (71 vs 66) at 100 seeds on the final config (+7 before the gem fix); -1 (66 vs 67) at 200 seeds | MISS (-5 at 100 seeds, -11 at 200) | Note 4: a real miss, not noise. |
+| T-P | careful - casual alive at day 40 >= +10 | +18 | ok | |
+| T-P | champion score/day >= 1.2 x careful's | 1.45x | ok | |
+| T-P | careful - champion median life >= 3 days | 17.5 | ok | |
+| T-P | champion fights >= 40% champions, days 11-40 | 82% | ok | |
+| T-P | benchmark wall time <= 15 min with --jobs 4 | 1.3 min | ok | |
 
 Notes on the misses (every one is below the user's numbers in priority, or inside them):
 1. **T-R7 champion sub-bands.** A High special costs a champion and an elite the same amount on the log-odds scale, but a champion sits at 18% where a point of log-odds is worth fewer points of win chance. The plan's champion bands (18-25 with 0-1 Highs, 0-6 with 3) ask for an 18-point drop where the elite window (50 -> 30) allows 20 points for the same Highs, so the champion would need about 2.5 times the elite's effect. With the elite groups held inside the user's 30-50 the champion groups fall only from 20.4 (0-1 High) to 13.9 (3 High). Making the whole champion harder was tried on the way, and the step it needs is small: champion 90 / 10.2 (+1.1% HP, +1% damage over the final 89 / 10.1) brings the champion mean to about 16 and 3 High to about 12, but drops the day-1 kit champion to 47 (the user's geared band starts at 50) and kit3 champion to 61 (65-75); at +1.7% (90.5 / 10.25) kit2 champion is 44 and 3 High still 11.4. So the conflict with T-GEAR (a) is stronger than a step of "+1.5-2%" suggests, and the 3 High group never reaches 0-6 on any setting tried. The champion spread is only 14-20, so the user's 0-13 low end is not reached by any group. Every champion group is inside the user's 0-25 and under the hard limit of 27.
+   **The structural cause (final review).** A champion's attribute levels are 0 Low / 6 Normal / 6 High: champions never roll a Low special, so a champion special only spans Normal to High (Magical 5 to 9, Stunning 5 to 15, Chilling 5 to 12), about half the range of an elite, whose specials can also be Low (none). On the log-odds scale High against Normal costs about the same for both tiers (champion -0.21 / -0.40 / -0.37, elite -0.30 / -0.45 / -0.30 for Magical / Stunning / Chilling); the elite has the extra Low to Normal step (-0.73 / -0.69 / -0.63 from Low to High) and the champion's smaller range is compressed further at an 18% win rate. No base-stat tweak fixes it. **Measured on the final config** (600 champions x 300 fights): by number of High specials 0H 23.7, 1H 19.6, 2H 17.0, 3H 13.9 (mean 18.4); individual champions run from a minimum of 6.7% through p5 11, p10 12, p50 18 and p90 25.3 to 35.0%; 0% are below 5%, 2.5% below 10%, 12.8% below 13%, and 10.2% (mostly 0H, p90 31.7) are above the user's 25%. The user's 0-13 low end therefore never happens, and about 1 champion in 10 is above 25. An unanswered High HP is the largest single factor (-5.4 points; High Magical -0.8, Stunning -3.9, Chilling -2.6), so several of the weakest champions are weak because of HP, accuracy or speed, not because of unanswered specials. **What it would take:** let champion specials roll Low (a what-if of `levels {low 3, normal 3, high 6}` widens the spread from 30 to 17 points but lifts every group, the day-1 kit champion to about 60), or give champions their own larger High values, then re-centre champion HP and damage so that the kit champion stays at 50-55 and the 0H group at or below 25. That is a design change, not a value, and it trades against U1's geared floor of 50, so it is reported to the user (BALANCE.md "Known misses" 1) and not done.
 2. **T-GEAR (b) elite.** 37% of elites (the 0H group, 220 of 600) have no High among Magical / Stunning / Chilling and a matching gem has nothing to answer there, so they stay at the day-1 kit's own level, 83.6; kit3 gives 83.6 / 81.4 / 80.6 for 0 / 1 / 2+ High, mean 82.1. Armor gems three times as strong as the current ones would reach 85.9 for kit3 elite, but kit3 champion rises to 75.8 (above 75) and the resistances pass their cap. Raising unarmedDamage to 13.5 with the elite at 85.5 / 9.75 gives kit3 85.3 and kit2 81.4 (above 80), and the unarmed elite 0H group at 54 (above the user's 50); unarmedDamage 13 with the same elite gives kit2 81.4 but unarmed 2H+ 26.5 (below the user's 30); 13.5 with the elite at 86 / 9.8 gives kit2 80.6, kit3 84.7 and 0H 52.2. kit3 reaches 85 only when kit2 is already near 81 or more, and then the 0H / 2H+ elite groups no longer fit 30-50. So (b) conflicts with (a) and with T-R7, and neither was taken. The elite number is inside the user's 75-90; the champion half of (b) is ok.
 3. **T-MID.** The anchors are 1.2's numbers (median life about 50). The user chose Harder (U2: median life 30-40, 80% alive at day 10), and T-GEAR (c) wants the mid-game elite at 75-90. At median life 31 a full iron / steel / mythril set stops beating a typical elite (70%) after 10 / 17 / 28 days, about 30% earlier than in 1.2 (6 / 15, 17 / 23, 28 / 41, 44 / 59 days). The plan itself says T-D is tuned first, "then recheck T-MID".
-4. **T-P careful - casual at day 20.** A persona-behaviour row, not a game number, and a real miss rather than noise: +7 (73 vs 66) at 100 seeds, but -1 (careful 66% vs casual 67%) at 200 seeds against a target of at least +10, and -9 at day 10 (81 vs 90). The careful planner is not safer than the casual one until about day 20, because of early champion picks made on the noisy 5 x 5 estimate (4 of 100 runs die on day 2 against a champion it estimated at 100%); the casual's elites-only diet starts killing it after day 20 (+25 at day 30 and +16 at day 40 in the same 100 seeds). Not tuned: the only levers are bot settings (the careful minimum win 90), which the brief forbids tuning to pass a game target. The row predates tuning (-5 after B5).
+4. **T-P careful - casual at day 20.** A persona-behaviour row, not a game number, and a real miss rather than noise: +7 (73 vs 66) at 100 seeds, but -1 (careful 66% vs casual 67%) at 200 seeds against a target of at least +10, and -9 at day 10 (81 vs 90). The careful planner is not safer than the casual one until about day 20, because of early champion picks made on the noisy 5 x 5 estimate (3 to 4 of 100 runs die on day 2); the casual's elites-only diet starts killing it after day 20 (+36 at day 30 and +18 at day 40 in the same 100 seeds of the final config, where the day-20 gap is +5, 71 vs 66). Not tuned: the only levers are bot settings (the careful minimum win 90), which the brief forbids tuning to pass a game target. The row predates tuning (-5 after B5).
 
 5. **T-GEAR (c) by window.** The plan defines (c) as the mean over days 10-40, so 86.3 / 73.3 is in band, but the spread is wide (bot section, 40 seeds, true chance against every roster enemy): days 10-20 elite 96.9 / champion 90.5 (above 90 / 75); days 21-30 87.0 / 71.9 (in band); days 31-40 65.7 / 43.1 (below 75 / 50); days 3-9 about 98.6-98.8 / 94-96 (not measured as a window). For about the first 20 days of a run whose median length is about 31 days, a careful player wins about 95% against champions where the user's geared range is 50-75. This is mostly structural (linear enemy growth, stepwise gear). An untried lever: T-B1 sits at the fast edge of every band (first iron day 3 vs 3-6, 3 iron slots day 6 vs 6-9, first steel day 9 vs 8-12, 3 steel slots day 13 vs 12-16); a slower early economy plus lower growth could flatten the curve.
+   **Final review numbers (24 seeds, careful persona, true chance against every roster enemy; elite / champion):** day 2 87.8 / 73.6; days 3-5 98.8 / 94.7; days 6-9 98.9 / 96.0; days 10-20 96.7 / 90.0; days 21-30 85.6 / 69.2; days 31-40 65.6 / 43.5. Day 2 is in the user's U1 ranges (a Copper D sword + chest 77 / 53, with matching gems 82 / 66), but for about the first 20 days a careful player wins champion fights 90-96% of the time, and a single Iron D sword (makable on day 2) puts day-3 champions at 85-91%; in play the roster reads 92-100% for every enemy from about day 3 to day 12, so picking an enemy stops being a decision. **This goes against U1's "depending on how well the player has found/crafted their gear" and is for the user to decide.** Options (each needs T-D, T-R7 and T-GEAR (a) / (b) re-checked): (a) flatten the power curve (a slower early economy toward the middle of the T-B1 bands, a smaller copper-to-iron step with `gear.materialMult.iron` 1.45, or lower daily growth with stronger base enemies); (b) redefine T-GEAR (c) by window (for example days 3-20 each at or below 90 / 75) instead of the 10-40 mean; (c) accept it as it is. Not changed in the final review (balance values were frozen); BALANCE.md "Known misses" 3 carries the numbers.
 6. **Normals are much easier than in 1.2, and the power section's old bands are retired.** The elite base is +7.3% HP and +8.7% damage over the normal (plan 4.6 started at 1.25%), the champion only about +1% over the elite. An unarmed adventurer beats a day-2 normal 85-86% of the time (B5: 64; the 1.2 user answer was 50-65). Section 9 only asks for normal >= elite + 15 (T-R7 info row, ok). The reason is the careful bot's 90% minimum win: the typical elite has to sit near 85% (T-D, T-GEAR c) and every roster needs a safe fight, so normals were left easy (the careful bot fights 89% / 99% normals on days 21-30 / 31-40). `--section power` no longer prints (low) / (high) against 1.2's day-1 bands or "target 50-65" in POWER SUMMARY; the day-2 targets that count are judged by `--section day2`.
-7. **Topaz and sapphire sword gems: grade S equals grade A.** Topaz weapon stunChance [15, 20, 24, 26, 26] / stunDur [1, 1.5, 1.5, 1.5, 1.5], sapphire weapon slowPct [11, 16, 18, 19, 19] / slowDur [2, 2, 2, 2, 2]: an S gem gives nothing over A on a sword, Help's gem table shows identical columns, and sapphire's whole D-S sword range is 11-19. This is the price of the S-swing check (headroom -1.3 topaz / -1.5 sapphire), a T-R33 trade-off paid in feel, not in a number.
+7. **Topaz and sapphire sword gems: grade S used to equal grade A (fixed in the final review).** Topaz weapon stunChance was [15, 20, 24, 26, 26] / stunDur [1, 1.5, 1.5, 1.5, 1.5] and sapphire weapon slowPct [11, 16, 18, 19, 19] / slowDur [2, 2, 2, 2, 2]: an S gem gave nothing over A on a sword (and made repairs harder: a 50% "+Topaz S" sword could not be repaired from three cut topaz A), Help's gem table showed identical columns, and the first version of this note called it "a T-R33 trade-off paid in feel". The user never accepted that. **Fix, the smallest round change that keeps C and S as they are:** topaz stunChance A 26 -> 25 (now [15, 20, 24, 25, 26]) and sapphire slowPct B 18 -> 17 and A 19 -> 18 (now [11, 16, 17, 18, 19]); the durations stay flat (D-S for sapphire, C-S for topaz) because a stun or slow duration step would move M5 / M6. The specials section measures only grades C and S (M5, M6, S-swing; M2-M4 use C), so the change cannot move T-R33. **Re-run after the change** (`--section specials` and `--section day2` on the final config, and the same sections with the old arrays through `--set 'gemEffects.topaz.weapon.stunChance=[15,20,24,26,26]' --set 'gemEffects.sapphire.weapon.slowPct=[11,16,18,19,19]'`): the SPECIALS line is identical, `SPECIALS | ref iron d12 steel d19 mythril d31 | M1 9..13 | M2 4.7..8.8 | M3 -4.1..-3.6 | M4 130..170% | M5 C 28..45% S 26..49% | M6 C max 1.3 S max 3.3 | M7 -1.0 | S-swing -8.2..-1.3 | T-R33 ok`, and the DAY2 line is identical (`elite 0H/1H/2H+ 50/40/31 | champ <=1H/2H/3H 20/17/14 | kit2 n/e/c 98/77/53 | kit3 98/82/66 | T-R7 in band 5/8, MISS 3/8, T-GEAR MISS 1/4`): **T-R33, T-R7 and T-GEAR (a) / (b) did not move.** The bot uses A and B gems, so T-GEAR (c) (bot section, 40 seeds) moved inside its band, 86.3 / 73.3 -> 85.1 / 71.6, and the careful benchmark (100 seeds) from median 31.0 / alive d10 85 (200 seeds: 31.0 / 81) to 32.5 / 84 (200 seeds: 31.5 / 80): within the noise of those sample sizes, T-D still ok. A test (`tests/final-fixes.test.mjs`) now checks that every gem table rises at every grade step on at least one stat and never falls.
 8. **Repairs take longer than making the item.** `gear.repair.timeFraction` went from 100 to 250 (the plan's knob ran the other way, see section 13): a full repair takes 2.5 times the smithing time (a gemmed chest: 55 minutes to smith, 137 minutes to repair from 0 to 100 before skills). Repair time is 3.4% of work time (T-B3 3-6%, the low edge) and 0.0 items are destroyed per run (1.2: 3.9). Accepted (the only other lever, the bot's restBelow, is a bot setting), but "repairing takes longer than making it" is counter-intuitive and belongs in BALANCE.md.
 9. **Mid- and late-game feel.** Mythril arrives after it is obsolete and nobody survives past about day 50 (alive at day 50: 0% in the bot section, 1% at 200 seeds). T-MID misses 4 of 5 (iron C 10, steel C 17, mythril C 28, mythril S 44 vs 12-18 / 20-26 / 38-44 / 56-62), accepted as a consequence of T-D and T-GEAR (c) (the plan: "then recheck T-MID"). A full mythril C set stops beating a typical elite (70%) at day 28, while the careful bot reaches 3 mythril slots at day 30 (20 of 40 runs) and all 5 at day 36 (4 of 40). Per-cell T-R33 is weakest late: with the mythril set High Chilling costs 5.3 points and sapphire armor beats emerald by only 2.6, less than emerald's own 3.0 (M7), so "bring the matching gem" is not true for Chilling at mythril. These pass on the plan's means; known limits.
 10. **Several targets sit on a band edge**, so any later change can flip them and the full set has to be run again right before a value change: T-D d10 85 (the top edge at 100 seeds; 81 at 200), median life 31.0 (29.0 in neighbouring settings), elite 0H 49.9 (<= 50), elite 2H+ 30.7 (>= 30), T-GEAR (c) champion 73.3 (<= 75), T-B1 iron 3.0 / 6.0 (lower edges), T-B4 General repair 5.1 (>= 5), main-bar smithing 3.2 and repair 3.3 (>= 3). The 200-seed careful row (31.0 / 81 / 96 / 89) is the more robust T-D evidence and is what BENCHMARKS.md asks for.
@@ -212,10 +214,10 @@ Notes on the misses (every one is below the user's numbers in priority, or insid
 | enemies.attributes.magical.values.high | 12 | 9 |
 | enemies.attributes.chilling.values.high (and its description: 3s) | 15 (2.5s) | 12 (3s) |
 | gemEffects.ruby weapon magicPct / armor magicRes | [5,7,9,11,15] / [12,18,24,30,36] | [5,7,9,11,13] / [18,27,36,45,54] |
-| gemEffects.topaz weapon stunChance / stunDur | [15,20,25,30,30] / [1,1.5,1.5,1.5,2] | [15,20,24,26,26] / [1,1.5,1.5,1.5,1.5] |
+| gemEffects.topaz weapon stunChance / stunDur | [15,20,25,30,30] / [1,1.5,1.5,1.5,2] | [15,20,24,25,26] / [1,1.5,1.5,1.5,1.5] |
 | gemEffects.topaz armor stunChanceRed / stunDurRed | [10,15,20,25,30] | [15,22,30,37,45] |
 | gemEffects.emerald weapon accuracy | [20,30,40,50,60] | [28,42,56,72,90] |
-| gemEffects.sapphire weapon slowPct / slowDur | [15,20,25,30,30] / [2,2,2,2,2.5] | [11,16,18,19,19] / [2,2,2,2,2] |
+| gemEffects.sapphire weapon slowPct / slowDur | [15,20,25,30,30] / [2,2,2,2,2.5] | [11,16,17,18,19] / [2,2,2,2,2] |
 | gemEffects.sapphire armor slowRed / slowDurRed | [10,15,20,25,30] | [15,22,30,37,45] |
 | gemEffects.diamond armor pierceRes | [8,12,16,20,24] | [16,24,32,40,48] |
 
@@ -225,3 +227,12 @@ Unchanged on purpose: enemies.attributes.stunning.values.high (15), the tier def
 - tools/balance.mjs: `truePct` / `TRUTH` and `trueP` (T-GEAR (c) now judged on the true win chance of every roster enemy with the packed gear; the estimate stays as a second column; BOT SUMMARY has `d10-40 true e/c` and `d2 typical true`).
 - tests/personas.test.mjs: 3 new tests for it, 1 summary-line case, and the persona-plays test picks a survivor seed. tests/gear.test.mjs and tests/ui-render.test.mjs: 2 tests made independent of the tuned numbers and 1 real test bug fixed (roster read after the day rolled). npm test: 592 green (589 + 3 new).
 - Not touched (docs come later): README still says searches take 25 minutes (now 27); docs/BALANCE.md, SPEC.md and BENCHMARKS.md describe 1.2 numbers; the HANDOFF "Plan deviations" list should get: the new true-win measure, the 8% normal-to-elite gap, the rating growth 0.3, the day-2 numbers, and T-R7 champion / T-GEAR (b) elite / T-MID / T-P misses with the reasons above.
+
+## Final review pass (after the verified findings of the last review)
+
+Only one balance value changed: the topaz and sapphire sword gem tables (note 7; every value is in the config table above). Everything else the review found about the numbers is documented, not changed (BALANCE.md "Known misses"): the champion low end (note 1), the early-game T-GEAR spread (note 5), the uneven base steps (R6), the flat Battle simulation steps (R44), the equal neighbouring Foresight grades.
+
+Re-measured on the final config (commands in note 7; `--section intel --seeds 100 --days 60 --jobs 4`: best only oreSight, spread of life 1.1 days / score 6.5%, no track below none by more than 2 paired se (-1.2 to +1.0), the persona list 1.3 days below the best single track, T-R42 ok): `--section specials` and `--section day2` identical to the pasted lines; `--section bot --persona careful --seeds 40`: median life 38.0, alive d10 90 / d20 80 / d30 70 / d40 38 (the earlier 36.5 / 93 / 83 / 60 / 30 is the same 40 seeds on the old gem tables: the bot picks and cuts gems by their values, so a different table changes its choices and with them its random draws; the shift is noise-sized, 3 runs of 40 at day 20), T-GEAR (c) 85.1 / 71.6, all T-B rows ok; `--section benchmark --jobs 4` (100 seeds, three personas): careful median 32.5, alive d2 / d4 / d10 97 / 93 / 84, champion hunter median 15.0, casual 25.0, T-D ok, T-P MISS 1/8 (the day-20 row); `--section benchmark --persona careful --seeds 200 --jobs 4`: median 31.5, alive d2 / d4 / d10 96 / 89 / 80, T-D ok. The rows are in docs/BENCHMARKS.md.
+
+Other fixes of that review that touch the game rules (tests in `tests/final-fixes.test.mjs`, `tests/final-fixes-ui.test.mjs`): travelling into a field counts that field's pile in the walk home (no arriving empty-handed at a full pile to buy time), a lost fight on an intel day awards no point and a point cannot be spent after the run is over, a same-version save with a broken shape is refused and backed up, a stale second tab is locked out. None changes a number the tool measures; the benchmark above includes them.
+

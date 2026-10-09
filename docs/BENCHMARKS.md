@@ -54,17 +54,28 @@ Alive % at the end of day (100 seeds, each version with its own in-game estimate
 
 | version | date | persona | seeds | d2 | d3 | d4 | d5 | d10 | d15 | d20 | d25 | d30 | d40 | d50 | d60 | d70 | d80 | d100 | median life | mean score | score/day | fights n/e/c % | picked at | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | | | | | | | | | | | | | | | | |
+| 2.0 | 2026-10-09 | Careful planner | 100 | 97 | 95 | 93 | 92 | 84 | 80 | 71 | 65 | 59 | 18 | 0 | 0 | 0 | 0 | 0 | 32.5 | 691 | 24.9 | 43/28/29 | 98% | estimator game 5x5 |
+| 2.0 | 2026-10-09 | Careful planner | 200 | 96 | 93 | 89 | 88 | 80 | 72 | 65 | 60 | 54 | 19 | 1 | 0 | 0 | 0 | 0 | 31.5 | 651 | 24.4 | 44/26/30 | 98% | estimator game 5x5; the more robust T-D evidence (standard error 3.5 points at 50%) |
+| 2.0 | 2026-10-09 | Champion hunter | 100 | 86 | 81 | 77 | 76 | 62 | 49 | 34 | 21 | 14 | 6 | 0 | 0 | 0 | 0 | 0 | 15.0 | 658 | 36.1 | 7/5/87 | 94% | estimator game 5x5 |
+| 2.0 | 2026-10-09 | Casual | 100 | 99 | 98 | 98 | 98 | 90 | 83 | 66 | 47 | 23 | 0 | 0 | 0 | 0 | 0 | 0 | 25.0 | 506 | 21.5 | 10/90/0 | - | estimator no estimate |
 
 Deaths by day (runs), per persona:
 
 | version | persona | seeds | 2 | 3 | 4 | 5-9 | 10-19 | 20-29 | 30-39 | 40-49 | 50-59 | 60-79 | 80+ |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | | | | | |
+| 2.0 | Careful planner | 100 | 3 | 2 | 2 | 9 | 12 | 11 | 38 | 23 | 0 | 0 | 0 |
+| 2.0 | Careful planner | 200 | 8 | 6 | 8 | 15 | 33 | 17 | 69 | 40 | 4 | 0 | 0 |
+| 2.0 | Champion hunter | 100 | 14 | 5 | 4 | 13 | 25 | 25 | 8 | 6 | 0 | 0 | 0 |
+| 2.0 | Casual | 100 | 1 | 1 | 0 | 7 | 20 | 42 | 28 | 1 | 0 | 0 | 0 |
 
-The rows are filled by the tuning pass (batch 7), 100 seeds per persona and 200 for the careful planner. What the rows
-should show (targets T-D and T-P in `docs/PLAN-2.0.md`, section 9; `node tools/balance.mjs --section benchmark --jobs 4`
-prints a flag next to each):
+The rows are from the final 2.0 config (`node tools/balance.mjs --section benchmark --jobs 4` for the three personas at
+100 seeds, and `--section benchmark --persona careful --seeds 200 --jobs 4` for the 200-seed row). Reading them: the
+careful planner's median life is 31.5-32.5 days with 80-84% alive at day 10, 96-97% at day 2 and 89-93% at day 4 (T-D,
+all inside the bands; the 200-seed row is the safer evidence, the 100-seed day-10 value sits near the top edge of its
+band). The champion hunter lives about 15 days and scores 1.45 times the careful planner's score per day survived; the
+casual player lives 25 days and is never asked to fight a champion. One persona row is a known miss: the careful planner
+is only 5 points above the casual one at day 20 (target 10; docs/TUNING-2.0.md note 4). What the rows should show
+(targets T-D and T-P in `docs/PLAN-2.0.md`, section 9; the tool prints a flag next to each):
 
 - Careful planner: median life 30-40 days, alive at day 10 about 80% (75-85%), alive at day 2 at least 95% and at day 4 at
   least 85%.

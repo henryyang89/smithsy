@@ -113,7 +113,7 @@
 
 /* phone width: refine/cut rows and gear rows become stacked cards instead of wide tables */
 @media (max-width: 640px) {
-  .ws-process, .ws-process tbody, .gl-table, .gl-table tbody { display: block; }
+  .ws-process, .ws-process tbody { display: block; }
   .ws-process thead, .ws-process thead tr { display: block; }
   .ws-process thead th { display: none; border: none; }
   .ws-process thead th:nth-child(3) { display: block; }
@@ -133,6 +133,14 @@
   .ws-process .ws-dist { width: 100%; }
   .ws-form { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .ws-form > label, .ws-form > span { padding-top: 6px; }
+}
+
+/* the gear list becomes stacked cards when ITS box is narrow: a phone, and the half-width list on the Adventurer tab of a
+   laptop or tablet (js/ui/gearlist.js: .gl-box is the container). The durability line, with the Repair button right of the
+   durability (R24), then has the whole box instead of a 90-170 px cell. */
+.gl-box { container-type: inline-size; }
+@container (max-width: 500px) {
+  .gl-table, .gl-table tbody { display: block; }
   .gl-table thead { display: none; }
   .gl-table tr.gl-group, .gl-table tr.gl-group td { display: block; }
   .gl-table tr.gl-row {
@@ -150,6 +158,8 @@
 .rp-line { min-width: 0; }
 .rp-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .rp-main button { flex: 0 0 auto; }
+.rp-dur { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 4px 8px; flex: 0 1 auto; }
+.rp-dur .gl-bar { flex: 1 1 80px; width: auto; min-width: 28px; max-width: 80px; }
 .rp-cost { font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
 .rp-sub { color: var(--warn); font-weight: 600; }
 .rp-warn { margin-top: 3px; font-size: 12px; color: var(--warn); border-left: 3px solid var(--warn); padding: 1px 6px; background: rgba(178, 135, 4, 0.08); overflow-wrap: anywhere; }

@@ -52,7 +52,7 @@ test('setCarry: carry the chosen bag and pile items; everything else goes to thi
   assert.deepEqual(sorted(s.bag), sorted(['ore:copper', 'ore:iron', 'gem:diamond', 'ore:mythril']));
   assert.deepEqual(sorted(f.pile), sorted(['ore:coal', 'gem:ruby']));
   assert.equal(s.time, DAY_START + 100, 'free');
-  assert.match(r.msg, /Carrying 4 item\(s\); 2 left/);
+  assert.match(r.msg, /Carrying 4 items; 2 left/);
   // carry nothing: everything ends up in the pile
   assert.equal(setCarry(s, { bag: [], pile: [] }, CFG).ok, true);
   assert.deepEqual(s.bag, []);

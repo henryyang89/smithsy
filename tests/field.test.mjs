@@ -213,7 +213,7 @@ test('search clears debris first; leftover effort searches the same cell in the 
   assert.equal(r.debrisCleared, D);
   assert.equal(r.cellsCleared, 1);
   assert.equal(r.searchedCells, 9, 'the debris cell was searched too');
-  assert.match(r.msg, /Cleared 10 debris \(1 cell\(s\) now clear\)/);
+  assert.match(r.msg, /Cleared 10 debris \(1 cell now clear\)/);
   for (const i of area(2, 2)) if (i !== I(2, 2)) assert.equal(f.cells[i].searched, E);
   // the next search is a plain search
   const r2 = search(s, 2, 2, CFG);
@@ -378,7 +378,7 @@ test('a boulder in the search area is skipped and never changes (even with hand-
     const r = search(s, 2, 2, CFG);
     assert.equal(r.ok, true, r.msg);
     assert.equal(r.searchedCells, 8);
-    assert.match(r.msg, /1 cell\(s\) skipped/);
+    assert.match(r.msg, /1 cell skipped/);
     assert.deepEqual(f.cells[b], before);
   }
   assert.deepEqual(f.pile, [], 'items under a boulder are never found');

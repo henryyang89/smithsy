@@ -68,10 +68,12 @@
 /* combat log (renderCombatLog): a fixed-column table, so the numbers line up */
 .clog { table-layout: fixed; width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .clog col.c-time { width: 4.5em; }
-.clog col.c-att { width: 7em; }
-.clog col.c-fx { width: 9em; }
+.clog col.c-att { width: 10.5em; } /* "Troll Chieftain", the longest name, and "Adventurer" fit with the cell padding (12px monospace) */
+.clog col.c-fx { width: 15em; } /* "Stun 1.8s · Slow 12% 3s" */
 .clog col.c-you, .clog col.c-foe { width: 5em; }
 .clog th, .clog td { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px dotted var(--border); vertical-align: middle; }
+/* the Result text wraps instead of being cut (the muted detail of a hit is long next to a half-width log) */
+.clog td.clog-res { white-space: normal; overflow: visible; text-overflow: clip; }
 .clog thead th { position: sticky; top: 0; z-index: 1; background: var(--panel); font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; border-bottom: 1px solid var(--border); }
 .clog td.num, .clog th.num { text-align: right; }
 .clog tr.A .clog-att { color: var(--accent-2); }
@@ -83,17 +85,19 @@
 .clog tr.clog-note td { white-space: normal; }
 .clog tr.clog-gap td { font-style: italic; }
 .clog tr.clog-end td { font-weight: 700; }
-@media (max-width: 640px) {
-  /* the Effects column folds into Result, and the muted detail of a hit goes */
+@media (max-width: 900px) {
+  /* the Effects column folds into Result (which may wrap), and the muted detail of a hit goes; a name may wrap too */
   .clog col.c-fx { width: 0; }
+  .clog col.c-att { width: 7.5em; }
   .clog th.clog-fx, .clog td.clog-fx { width: 0; padding: 0; border: 0; font-size: 0; }
   .clog-fx-inline { display: inline; }
   .clog-detail { display: none; }
+  .clog td.clog-att { white-space: normal; overflow: visible; text-overflow: clip; }
+}
+@media (max-width: 640px) {
   .clog th, .clog td { padding: 1px 4px; }
   .clog col.c-time { width: 4em; }
-  .clog col.c-you, .clog col.c-foe { width: 3.7em; } /* the Attacker column keeps its 7em: "Adventurer" is on most rows and must not be cut */
-  /* the Result column takes what is left and may wrap, so a stun or slow text is not cut off */
-  .clog td.clog-res { white-space: normal; overflow: visible; text-overflow: clip; }
+  .clog col.c-you, .clog col.c-foe { width: 3.7em; } /* the Attacker column keeps its width: "Adventurer" is on most rows and must not be cut */
 }
 
 /* run summary and "What went wrong?" */

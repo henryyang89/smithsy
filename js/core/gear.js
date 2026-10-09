@@ -1,5 +1,5 @@
 import { CONFIG, GRADES, SLOTS } from '../config.js';
-import { round1, round2, EPS, cap, qtyText } from './util.js';
+import { round1, round2, EPS, cap, qtyText, formatDuration } from './util.js';
 import { smithBonuses } from './bonuses.js';
 import { addXp, skillDef, xpPerUnit } from './skills.js';
 
@@ -187,6 +187,14 @@ export function couldBreak(item, state, tier, cfg = CONFIG) {
   return worstWear(state, tier, cfg) >= item.durability - 1e-9;
 }
 
+// The same flag as the player reads it, in whole numbers: durability rounded down, the worst wear rounded up (the numbers
+// the flag text and the wear tooltips print). An item that shows no more than the wear a fight can take is always flagged,
+// so the screen never contradicts itself; it is a little stricter than couldBreak (the decimals decide what really breaks),
+// so an item can show the flag and still survive by a fraction. Used by the screens' warnings and the plan's confirm.
+export function couldBreakShown(item, state, tier, cfg = CONFIG) {
+  return shownDurability(item.durability) <= Math.ceil(worstWear(state, tier, cfg) - 1e-9);
+}
+
 // Which enemy attributes a gem is about: [the offensive special its ARMOR answers, the resistance that blunts its
 // SWORD]. Structural (a rule of the game, not a number), so it lives in code.
 export const GEM_MATCH = {
@@ -309,7 +317,7 @@ export function repair(state, id, cfg = CONFIG) {
     minutes: plan.minutes,
     substitutes: plan.substitutes,
     notes,
-    msg: `Repaired ${gearName(item)} to 100% (${plan.minutes}m).${warn ? ` ${warn}` : ''}`,
+    msg: `Repaired ${gearName(item)} to 100% (${formatDuration(plan.minutes)}).${warn ? ` ${warn}` : ''}`,
   };
 }
 

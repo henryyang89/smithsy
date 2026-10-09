@@ -122,7 +122,9 @@ export const CONFIG = {
   // resistances against their 1.2 values: ruby 4.5x, topaz and sapphire 3.75x, diamond 2.67x (pierce resistance is the
   // only piercing answer). Sword gems against 1.2: diamond unchanged, emerald accuracy 40-50% higher ([20..60] to
   // [28..90]), ruby lower at every grade, topaz and sapphire flatter at the top (S is 26 and 19 where 1.2 had 30 and 30),
-  // because the top grades are kept below the special they answer.
+  // because the top grades are kept below the special they answer. Every table still rises from D to S on at least one
+  // stat (a test checks it): the rarest cut is never worth the same as the one below it. The tool's M5 / M6 / S-swing
+  // checks only measure grades C and S, so B and A can be bent without moving them.
   // An S sword gem stays worth less in win points than the matching enemy special costs (Low to High); sapphire
   // is the tight one, so its sword gem rises only from 16% to 19%. Targets M1-M7 and the way to measure them:
   // docs/BALANCE.md and `node tools/balance.mjs --section specials` (tuned in the Batch 7 log).
@@ -132,7 +134,7 @@ export const CONFIG = {
       armor: { magicRes: [18, 27, 36, 45, 54] }, // % magic damage reduction
     },
     topaz: {
-      weapon: { stunChance: [15, 20, 24, 26, 26], stunDur: [1, 1.5, 1.5, 1.5, 1.5] }, // % per hit, seconds
+      weapon: { stunChance: [15, 20, 24, 25, 26], stunDur: [1, 1.5, 1.5, 1.5, 1.5] }, // % per hit, seconds
       armor: { stunChanceRed: [15, 22, 30, 37, 45], stunDurRed: [15, 22, 30, 37, 45] }, // % reductions
     },
     emerald: {
@@ -140,7 +142,7 @@ export const CONFIG = {
       armor: { dodge: [2, 3, 4, 5, 6] }, // dodge rating (halved: emerald armor must not beat the matching gem)
     },
     sapphire: {
-      weapon: { slowPct: [11, 16, 18, 19, 19], slowDur: [2, 2, 2, 2, 2] }, // % slower attacks, seconds
+      weapon: { slowPct: [11, 16, 17, 18, 19], slowDur: [2, 2, 2, 2, 2] }, // % slower attacks, seconds
       armor: { slowRed: [15, 22, 30, 37, 45], slowDurRed: [15, 22, 30, 37, 45] }, // % reductions
     },
     diamond: {

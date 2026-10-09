@@ -170,10 +170,10 @@ function processPanel(ctx, kind, blocked) {
       return res;
     }, { toast: true });
 
-    // your chances now; the hover adds the base chances (for a gem, the first-time cutter's)
-    const base = isRefine ? def.dist : def.novice || def.dist;
-    const baseLabel = isRefine ? 'Base chances' : 'Chances for a first-time cutter';
-    const outcomeTip = `Your chances: ${distText(dist)}. ${baseLabel}: ${distText(base)}. Your skills and rings make the difference (see Skills).`;
+    // your chances now; refining's hover adds the base chances. A gem shows only your current chances (R18): no novice or master table.
+    const outcomeTip = isRefine
+      ? `Your chances: ${distText(dist)}. Base chances: ${distText(def.dist)}. Your skills and rings make the difference (see Skills).`
+      : `Your chances: ${distText(dist)}. Your skills and rings make the difference (see Skills).`;
 
     let makeSub;
     if (byMat === 0) makeSub = h('div', { class: 'ws-sub' }, isRefine ? 'not enough ore' : 'no raw gems');
@@ -305,16 +305,20 @@ function smithPanel(ctx, blocked) {
   });
   const gemTiles = [
     tile('None', 'no gem', { sel: !gem, data: { 'data-gem': 'none' }, hover: 'No gem: a plain item.', onPick: () => pick(() => { ui.ws_gem = ''; }) }),
-    ...GEMS.map((t) => tile(cap(t), `${qty(gemTotal(t))} cut`, {
-      sel: !!gem && gem.type === t,
-      short: gemTotal(t) < EPS,
-      data: { 'data-gem': t },
-      hover: `${cap(t)}: ${qty(gemTotal(t))} cut gems in stock. Infusing adds ${cfg.gear.infuseMin}m and uses 1 cut gem.`,
-      onPick: () => pick(() => {
-        ui.ws_gem = t;
-        ui.ws_gemGrade = pickGrade(st.cut, t, 1, ui.ws_gemGrade);
-      }),
-    })),
+    ...GEMS.map((t) => {
+      // a repair uses a part of a cut gem, so the stock can be 0.82 of one: not enough to infuse (it takes a whole gem of one grade)
+      const short = !bestGrade(st.cut, t, 1);
+      return tile(cap(t), `${qty(gemTotal(t))} cut`, {
+        sel: !!gem && gem.type === t,
+        short,
+        data: { 'data-gem': t },
+        hover: `${cap(t)}: ${qty(gemTotal(t))} cut gems in stock.${short && gemTotal(t) > EPS ? ' No grade has a whole gem left (repairs use parts of one), so there is nothing to infuse.' : ''} Infusing adds ${cfg.gear.infuseMin}m and uses 1 cut gem.`,
+        onPick: () => pick(() => {
+          ui.ws_gem = t;
+          ui.ws_gemGrade = pickGrade(st.cut, t, 1, ui.ws_gemGrade);
+        }),
+      });
+    }),
   ];
 
   const form = h('div', { class: 'ws-form' },
@@ -341,7 +345,7 @@ function smithPanel(ctx, blocked) {
   const minutes = smithMinutes(s, slot, mat, !!gem, cfg);
   const cost = craftCost(spec, cfg);
   let reason = blocked ? `Workshop closed: ${blocked}` : canCraft(s, spec, cfg);
-  if (!reason && s.time + minutes > cfg.time.dayEndMin + EPS) reason = `Not enough time left today (needs ${num(minutes)}m, ${mins(Math.max(0, left))} left).`;
+  if (!reason && s.time + minutes > cfg.time.dayEndMin + EPS) reason = `Not enough time left today (needs ${mins(minutes)}, ${mins(Math.max(0, left))} left).`;
 
   const costLines = [
     ...Object.entries(cost.bars).map(([k, n]) => {
@@ -353,7 +357,7 @@ function smithPanel(ctx, blocked) {
       return { text: `${n} × cut ${cap(t)} ${g}`, have: st.cut[k] || 0, n };
     }),
   ];
-  const timeTip = `${need} bars × ${cfg.gear.smithMinPerBar}m${gem ? ` + ${cfg.gear.infuseMin}m gem` : ''} = ${num(baseMinutes)}m before your ${cap(mat)} smithing skill.`;
+  const timeTip = `${need} bars × ${cfg.gear.smithMinPerBar}m${gem ? ` + ${cfg.gear.infuseMin}m gem` : ''} = ${mins(baseMinutes)} before your ${cap(mat)} smithing skill.`;
 
   const preview = h('div', { class: 'ws-preview' },
     h('div', { class: 'ws-preview-name' }, 'Result: ', h('b', { class: `grade-${grade}` }, gearName(mock))),
@@ -361,7 +365,7 @@ function smithPanel(ctx, blocked) {
     h('div', { class: 'ws-cost' },
       h('div', {}, h('span', { class: 'muted' }, 'Cost: '), costLines.map((c, i) => [i ? ', ' : '', c.text, ' ',
         h('span', { class: enough(c.have, c.n) ? 'ok' : 'err' }, `(have ${qty(c.have)})`)])),
-      h('div', { class: 'ws-time' }, h('span', { class: 'muted' }, 'Time: '), h('b', { ...tip(timeTip) }, `${num(minutes)}m`),
+      h('div', { class: 'ws-time' }, h('span', { class: 'muted' }, 'Time: '), h('b', { ...tip(timeTip) }, mins(minutes)),
         !blocked && !reason ? h('span', { class: 'muted' }, ` · done at ${formatClock(s.time + minutes)}`) : null)),
     h('div', { class: 'row ws-craft-row' },
       h('button', {
@@ -380,7 +384,7 @@ function smithPanel(ctx, blocked) {
           }
           return res;
         }, { toast: true }),
-      }, `Craft (${num(minutes)}m)`),
+      }, `Craft (${mins(minutes)})`),
       reason ? h('span', { class: 'err ws-reason' }, reason) : h('span', { class: 'ok ws-reason' }, 'Ready to craft.')),
     ui.ws_last && ui.ws_last.area === 'smith' ? resultBox(ui.ws_last) : null);
 

@@ -372,3 +372,53 @@ test('request pins (batch 5): R15 the work-day bar fills with time used, R28 six
   const ws = uiSrc('workshop.js');
   assert.match(ws, /\['Bar' \/ 'Gem'|isRefine \? 'Bar' : 'Gem', 'Needs \(you have\)', distHeader\(\), 'You can make', \{ v: 'Time each', cls: 'num' \}, ''\]/, 'R30: Bar | Needs | Outcome | You can make | Time each | buttons');
 });
+
+// ------------------------------------------------------------ docs guards (7c) ----
+test('guard: README.md describes 2.0, not 1.2 (A3 repairs by day, R32 / U3 no score on screen, A2 automatic estimate, R9 whole numbers, R18 no novice / master tables)', async () => {
+  const { VERSION } = await import('../js/version.js');
+  const readme = read(join(ROOT, 'README.md'));
+  assert.ok(readme.includes(`Current version: **${VERSION}**`), 'README names the current version');
+  const banned = [
+    [/Estimate all/i, 'the Estimate all button is gone (A2, R12)'],
+    [/free of time/i, 'repairs are never free of time (A3)'],
+    [/repairs? (at|by) night|at night \(battle report/i, 'no night repairs (A3)'],
+    [/one decimal/i, 'durability shows whole numbers (R9)'],
+    [/novice and master tables|novice table \(Fail/i, 'no novice / master tables for the player (R18)'],
+    [/Each win scores points: normal 10/i, 'no score numbers (U3)'],
+    [/your score, and the \*\*End day\*\*/i, 'the top bar shows no score (R32)'],
+    [/a level-10 skill is as strong as a C-grade ring/i, 'no skill-at-level-10 text (R18)'],
+    [/10 guesses of the hidden attributes x 10/i, 'the estimate is 5 x 5 (A2)'],
+    [/5x5 world map|8x8|smithsy-save-v3/i, 'the 1.2 map and save key'],
+  ];
+  for (const [re, why] of banned) assert.doesNotMatch(readme, re, `README.md: ${why}`);
+  // what 2.0 says instead
+  assert.match(readme, /7x7 world map/);
+  assert.match(readme, /Repairs happen by day, at camp, and cost time/);
+  assert.match(readme, /There is no score on screen while you play/);
+  assert.match(readme, /worked out by itself/);
+  assert.match(readme, /--persona/);
+  assert.match(readme, /day2/);
+});
+
+test('guard: CHANGELOG.md has a 2.0 section in player terms with the fresh-save rule, and the save table has a 2.0 row', async () => {
+  const { VERSION } = await import('../js/version.js');
+  const section = changelogSection(VERSION);
+  assert.notEqual(section, null, `CHANGELOG.md has a "## ${VERSION}" section`);
+  assert.match(section, /starts a fresh game/i, 'the fresh-save note (A1)');
+  assert.match(section, /1\.x save/i);
+  assert.match(section, /opens\s+again/i);
+  assert.doesNotMatch(section, /free of time|one decimal|repairs? at night/i, 'the 2.0 section does not describe the 1.2 rules');
+  assert.doesNotMatch(section, /Estimate all(?! button any more)/, 'the Estimate all button is only mentioned to say it is gone');
+  const text = read(join(ROOT, 'CHANGELOG.md'));
+  assert.match(text, new RegExp(`\\|\\s*${VERSION.replace('.', '\\.')}\\s*\\|[^\\n]*smithsy-save-${VERSION.replace('.', '\\.')}`), 'the save table has a row for this version with its own key');
+});
+
+test('guard: the docs name the same save key as the code, and BENCHMARKS.md has 2.0 rows for the three personas', async () => {
+  const { SAVE_KEY } = await import('../js/core/game.js');
+  for (const f of ['README.md', 'CHANGELOG.md', 'docs/SPEC.md']) assert.ok(read(join(ROOT, f)).includes(SAVE_KEY), `${f} names ${SAVE_KEY}`);
+  const bench = read(join(ROOT, 'docs', 'BENCHMARKS.md'));
+  for (const persona of ['Careful planner', 'Champion hunter', 'Casual']) {
+    assert.match(bench, new RegExp(`\\|\\s*2\\.0\\s*\\|[^\\n]*${persona}[^\\n]*\\|\\s*\\d`), `BENCHMARKS.md has a 2.0 row for ${persona}`);
+  }
+  assert.match(bench, /\|\s*2\.0\s*\|\s*Careful planner\s*\|\s*200\s*\|/, 'and the 200-seed careful row of the deaths table');
+});

@@ -5,6 +5,8 @@ export const round1 = (v) => Math.round(v * 10) / 10;
 export const round2 = (v) => Math.round(v * 100) / 100;
 export const gradeIndex = (g) => GRADES.indexOf(g);
 export const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+// "1 cell", "2 cells", "0 items": a count with its noun (regular plurals only).
+export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // Floating point tolerance for fractional material quantities (repairs use 0.01 bars).
 export const EPS = 1e-9;

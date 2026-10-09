@@ -85,12 +85,14 @@ export function endDay(state, cfg = CONFIG) {
   state.time = Math.max(state.time, cfg.time.dayEndMin);
   let report = null;
   if (state.plan) report = resolveBattle(state, cfg);
-  if (state.day % cfg.intel.daysPerPoint === 0) {
+  const fell = !!report && !report.win && !report.draw;
+  // the point comes with a day the adventurer lives through (a lost fight ends the run: nothing is left to spend it on)
+  if (!fell && state.day % cfg.intel.daysPerPoint === 0) {
     state.intel.points += 1;
     addLog(state, `Day ${state.day} complete: +1 intel point.`);
   }
   state.report = report;
-  if (report && !report.win && !report.draw) {
+  if (fell) {
     state.phase = 'over';
     state.end = { reason: 'fell', day: state.day, daysSurvived: state.day - 1, enemy: { name: report.enemy.name, tier: report.enemy.tier }, cancelled: null };
     addLog(state, `GAME OVER on day ${state.day}. Final score ${state.stats.score}.`);
@@ -318,6 +320,34 @@ function assertShape(s, cfg) {
   sameKeys(s.intel && s.intel.spent, Object.keys(cfg.intel.tracks), 'intel tracks');
   sameKeys(s.groups && s.groups.defeats, Object.keys(cfg.groups.list), 'banners');
   sameKeys(s.groups && s.groups.extra, SLOTS, 'pack mule slots');
+  assertStructure(s, cfg);
+}
+
+// The rest of a save's shape: the parts every screen reads without checking (a missing one would be a blank page with a
+// "Render error" instead of a clear refusal, and the broken save would then be overwritten without a backup).
+function assertStructure(s, cfg) {
+  const bad = (what) => {
+    throw new Error(`Save has a broken ${what}`);
+  };
+  const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const isPos = (p) => isObj(p) && Number.isInteger(p.x) && Number.isInteger(p.y);
+  if (!['work', 'report', 'plan', 'over'].includes(s.phase)) bad('phase');
+  if (!Number.isInteger(s.day) || s.day < 1) bad('day');
+  if (!Number.isFinite(s.time)) bad('clock');
+  if (!isObj(s.rng) || !Number.isFinite(s.rng.s)) bad('random state');
+  if (!isObj(s.map) || !Array.isArray(s.map.cells) || !isObj(s.map.fields) || !isPos(s.map.camp)) bad('map');
+  if (s.map.cells.length !== s.map.size * s.map.size) bad('map');
+  if (!isPos(s.location)) bad('location');
+  if (!isObj(s.storage) || !['ore', 'gem', 'bars', 'cut'].every((k) => isObj(s.storage[k]))) bad('storage');
+  if (!Array.isArray(s.bag) || !Array.isArray(s.gear) || !Array.isArray(s.rings)) bad('bag, gear or rings');
+  if (!s.gear.every((g) => isObj(g) && SLOTS.includes(g.slot) && Number.isFinite(g.durability))) bad('gear list');
+  if (!isObj(s.roster) || !Array.isArray(s.roster.enemies) || !s.roster.enemies.length) bad('roster');
+  if (!isObj(s.stats) || !isObj(s.stats.wins)) bad('stats');
+  if (!Array.isArray(s.log) || !Array.isArray(s.battles)) bad('log');
+  if (s.plan != null && (!isObj(s.plan) || !isObj(s.plan.enemy) || !Array.isArray(s.plan.gearIds) || !Array.isArray(s.plan.ringIds))) bad('fight plan');
+  if (s.phase === 'report' && !isObj(s.report)) bad('battle report');
+  if (s.phase === 'over' && !isObj(s.end)) bad('run summary');
+  if (!Number.isInteger(s.nextId)) bad('id counter');
 }
 
 export function packedSlotsSummary(state) {

@@ -212,3 +212,11 @@ details.mv-legend-box:not([open]) > summary { margin-bottom: 0; }
   background: var(--accent); opacity: 0.6; z-index: 3; pointer-events: none;
 }
 .mv-root .grid .cell.debris.mv-fresh::before { background: #fff; opacity: 0.75; }
+
+/* phone: Search area / Return to camp right under the field grid (js/ui/mapview.js quickActions); the Actions panel is far below there */
+.mv-quick { display: none; }
+@media (max-width: 720px) {
+  .mv-quick { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 8px 0 4px; }
+  .mv-quick button { flex: 1 1 140px; }
+  .mv-quick-why { flex: 1 1 100%; font-size: 12px; }
+}

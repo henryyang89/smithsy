@@ -14,7 +14,7 @@ import { estimateWinChance, simCounts, shownMargin } from '../core/sim.js';
 import { ringTotals } from '../core/rings.js';
 import { knownLevels } from '../core/enemies.js';
 import { mixSeed } from '../core/rng.js';
-import { estimateKey, estimateTip, winText, winClass } from './present.js';
+import { estimateKey, estimateTip, winText, winClass, marginPart } from './present.js';
 
 export const DEBOUNCE_MS = 300; // a gear / ring change waits this long for the next one before a run starts
 
@@ -93,7 +93,7 @@ export function estimateCell(res, pending = false) {
     const m = shownMargin(res);
     return h('div', { class: 'rt-ec' },
       h('span', { class: `adv-badge ${winClass(res.winPct)}`, ...tip(estimateTip(res)) }, winText(res.winPct)),
-      m != null ? h('div', { class: 'muted rt-sm rt-pm' }, `± ${m}`) : null);
+      m != null ? h('div', { class: 'muted rt-sm rt-pm' }, marginPart(res.winPct, m)) : null);
   }
   if (pending) return h('span', { class: 'muted', ...tip('Working out the win chance…') }, '…');
   return h('span', { class: 'muted', ...tip('Not worked out yet.') }, '—');

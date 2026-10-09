@@ -42,6 +42,7 @@ const ctx = {
   ui,
   // Run a game action: fn() must return { ok, msg, notes? }. Logs it, toasts failures, saves, re-renders.
   act(fn, opts = {}) {
+    if (stale) return { ok: false, msg: 'This game was changed in another tab.' };
     let res;
     try {
       res = fn();
@@ -59,6 +60,7 @@ const ctx = {
   save: () => save(),
   toast: (msg, kind) => toast(msg, kind),
   newGame(seed) {
+    if (stale) return;
     clearEstimates(ctx); // the automatic win estimates belong to the old game
     cancelAnalysis(ctx); // ... and so does a loss analysis that is still being worked out
     state = Game.newGame(seed);
@@ -97,13 +99,20 @@ function load() {
     return s;
   } catch (e) {
     console.warn('Save could not be loaded', e);
-    try {
-      localStorage.setItem(`smithsy-save-backup-${Date.now()}`, text);
-    } catch (e2) {
-      /* ignore */
-    }
+    backupSave(text);
     startupNote = 'Your save could not be loaded, so a new game started (the old save was kept as a backup in browser storage).';
     return null;
+  }
+}
+
+// Keep a copy of a save under a backup key (never deleted by the game) before it is replaced. `text` defaults to the
+// stored save of this version.
+function backupSave(text) {
+  try {
+    const t = text || localStorage.getItem(Game.SAVE_KEY);
+    if (t) localStorage.setItem(`smithsy-save-backup-${Date.now()}`, t);
+  } catch (e) {
+    /* storage unavailable: nothing to keep */
   }
 }
 
@@ -120,7 +129,13 @@ function recordBest() {
   }
 }
 
+// Another tab saved this game (see the 'storage' listener at the bottom): this tab is out of date. From then on it
+// writes nothing and acts on nothing, so it can't overwrite the newer save or replay results the other tab already
+// used (every roll is a pure function of the saved random state).
+let stale = false;
+
 function save() {
+  if (stale) return;
   recordBest();
   try {
     localStorage.setItem(Game.SAVE_KEY, Game.serialize(state));
@@ -136,6 +151,17 @@ function toast(msg, kind = 'ok') {
   el.className = `show ${kind}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (el.className = ''), 3500);
+}
+
+// A toast belongs to the screen it was raised on: when the day ends or starts (the phase changes) the last workshop message
+// must not follow the player onto the plan screen, where it would sit on top of the Confirm bar.
+let toastPhase = state.phase;
+function dropStaleToast() {
+  if (state.phase === toastPhase) return;
+  toastPhase = state.phase;
+  clearTimeout(toastTimer);
+  const el = document.getElementById('toast');
+  if (el) el.className = '';
 }
 
 function locationText() {
@@ -176,7 +202,7 @@ function renderTopbar() {
     h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`,
       field && field.pile && field.pile.length ? h('span', { class: 'muted', ...tip('Items waiting in this field\'s pile') }, ` · pile ${field.pile.length}`) : null),
     !atCamp(state) && working ? h('div', { class: 'stat muted', ...tip(`Walk home with a full load (${load} items: bag + this field's pile, up to ${CONFIG.bag.slots})`) }, `Return: ${formatDuration(returnMinutes(state, state.location, load))}`) : null,
-    state.intel.points > 0 ? h('div', { class: 'stat hl' }, `${state.intel.points} intel pt`) : null,
+    state.intel.points > 0 && state.phase !== 'over' ? h('div', { class: 'stat hl' }, `${state.intel.points} intel pt`) : null,
     away ? h('div', { class: 'stat muted' }, away) : null,
     h('div', { class: 'spacer' }),
     working
@@ -248,7 +274,24 @@ function renderSideLog() {
   el.append(h('ul', { class: 'log' }, items.map((l) => h('li', {}, h('span', { class: 'muted' }, `D${l.day} ${l.time} `), l.text))));
 }
 
+// The only screen of a tab that another tab has taken over.
+function renderStale() {
+  clear(document.getElementById('topbar')).append(h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version' }, `v${VERSION}`)));
+  clear(document.getElementById('tabs'));
+  clear(document.getElementById('sidelog'));
+  clear(document.getElementById('main')).append(h('section', { class: 'panel', id: 'stale-tab' },
+    h('h3', {}, 'This game is open in another tab'),
+    h('p', {}, 'That tab saved your game after this one was opened, so what you see here is out of date. This tab has stopped saving, so it can\'t overwrite the newer game.'),
+    h('p', { class: 'muted' }, 'Carry on in the other tab, or reload this one to continue from the latest save.'),
+    h('button', { class: 'primary', onclick: () => location.reload() }, 'Reload this tab')));
+}
+
 function render() {
+  if (stale) {
+    renderStale();
+    return;
+  }
+  dropStaleToast();
   const main = clear(document.getElementById('main'));
   ui.est_screen = null; // the screen drawn below says it is the estimating one (scheduleEstimates); see ui/estimates.js
   try {
@@ -263,7 +306,12 @@ function render() {
     console.error(e);
     main.append(
       h('pre', { class: 'error' }, `Render error: ${e.message}\n${e.stack}`),
-      h('button', { onclick: () => { if (confirm('Start a new game? Your current run will be lost.')) ctx.newGame(); } }, 'Start a new game'),
+      h('button', { onclick: () => {
+        if (confirm('Start a new game? Your current run is kept as a backup in browser storage, but this game will start from day 1.')) {
+          backupSave();
+          ctx.newGame();
+        }
+      } }, 'Start a new game'),
     );
   }
 }
@@ -301,6 +349,13 @@ function installTips() {
     if (!isRestoredScroll(e.target)) hide(); // a screen putting a scroll box back after a re-render is not the player scrolling
   }, true);
 }
+
+// A save written by another tab of this game: lock this one (see `stale`). The event never fires in the tab that wrote it.
+window.addEventListener('storage', (e) => {
+  if (stale || (e.key !== null && e.key !== Game.SAVE_KEY)) return;
+  stale = true;
+  render();
+});
 
 installTips();
 render();

@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.js';
-import { clamp, reduced, round1, EPS, formatClock } from './util.js';
+import { clamp, reduced, round1, EPS, formatClock, plural } from './util.js';
 import { smithBonuses } from './bonuses.js';
 import { addXp } from './skills.js';
 import { rngFor } from './rng.js';
@@ -275,6 +275,14 @@ export function projectedLoad(state, cfg = CONFIG) {
   return Math.min(cfg.bag.slots, state.bag.length + (f ? f.pile.length : 0));
 }
 
+// The load to plan the walk home from the field at `to` with, when you arrive carrying `items`: as much as you could
+// carry out of it (what you bring plus that field's pile, up to the bag size). Picking up from a pile is free, so
+// arriving empty-handed at a full pile must not buy extra time.
+export function loadOnArrival(state, to, items, cfg = CONFIG) {
+  const f = state.map.fields[key(to.x, to.y)];
+  return Math.min(cfg.bag.slots, items + (f ? f.pile.length : 0));
+}
+
 // Can a field action of `minutes` start now and still leave time to walk home with a full load?
 export function fitsWithReturn(state, minutes, cfg = CONFIG) {
   return state.time + minutes + returnMinutes(state, state.location, projectedLoad(state, cfg), cfg) <= cfg.time.dayEndMin + EPS;
@@ -303,7 +311,7 @@ export function travel(state, to, cfg = CONFIG, carry = null) {
   if (!Number.isFinite(minutes)) return { ok: false, msg: 'No path.' };
   const toCamp = target.type === 'camp';
   if (!toCamp) {
-    const back = travelMinutes(state, to, state.map.camp, items, cfg);
+    const back = travelMinutes(state, to, state.map.camp, loadOnArrival(state, to, items, cfg), cfg);
     if (state.time + minutes + back > cfg.time.dayEndMin + EPS) {
       return { ok: false, msg: `Not enough time: ${round1(minutes)}m there + ${round1(back)}m back would pass ${endClock(cfg)}.` };
     }
@@ -395,9 +403,9 @@ export function search(state, cx, cy, cfg = CONFIG) {
   addXp(state, 'searchEff', minutes, notes, cfg);
   if (debrisCleared > 0) addXp(state, 'debris', debrisCleared, notes, cfg);
   const skipped = idxs.length - open.length;
-  let msg = `Searched ${open.length} cells (${round1(minutes)}m): found ${found.length} item(s), now in this field's pile.`;
-  if (debrisCleared > 0) msg += ` Cleared ${round1(debrisCleared)} debris${cellsCleared ? ` (${cellsCleared} cell(s) now clear)` : ''}.`;
-  if (skipped) msg += ` ${skipped} cell(s) skipped (done or boulder).`;
+  let msg = `Searched ${plural(open.length, 'cell')} (${round1(minutes)}m): ${found.length ? `found ${plural(found.length, 'item')}, now in this field's pile.` : 'found nothing.'}`;
+  if (debrisCleared > 0) msg += ` Cleared ${Math.max(1, Math.round(debrisCleared))} debris${cellsCleared ? ` (${plural(cellsCleared, 'cell')} now clear)` : ''}.`; // whole numbers, like the grid
+  if (skipped) msg += ` ${plural(skipped, 'cell')} skipped (done or boulder).`;
   return { ok: true, msg, notes, found, debrisCleared, cellsCleared, searchedCells, minutes, freshCells };
 }
 
@@ -444,7 +452,7 @@ export function setCarry(state, sel, cfg = CONFIG) {
   const newPile = [...f.pile.filter((_, i) => !pileSel.includes(i)), ...state.bag.filter((_, i) => !bagSel.includes(i))];
   state.bag = newBag;
   f.pile = newPile;
-  return { ok: true, msg: `Carrying ${newBag.length} item(s); ${newPile.length} left in this field's pile.` };
+  return { ok: true, msg: `Carrying ${plural(newBag.length, 'item')}; ${newPile.length} left in this field's pile.` };
 }
 
 // Move one carried item to this field's pile (free).
