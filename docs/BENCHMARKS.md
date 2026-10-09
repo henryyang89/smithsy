@@ -18,8 +18,9 @@ other, and a persona only with the same persona. The 1.x tables are kept at the 
   (gathering, refining, cutting, smithing, repairs by day, rings) and differ in who they fight, what they pack, how they
   spend intel and how much they work. Their settings are `PERSONAS` in the tool (tool settings, not game numbers); in
   short:
-  - **Careful planner** (`careful`): reads the automatic win estimate and fights only when it is at least 90%, taking the
-    fight with the best expected value (estimate x (score + 1,000)). Rests worn gear so it can be repaired, packs the best
+  - **Careful planner** (`careful`): reads the automatic win estimate and takes the fight with the best expected value
+    (estimate x (score + 1,000)) among the enemies it is at least 90% sure of, else the surest one (the game needs a fight
+    every day; the bot section counts these as "no-safe-option fights"). Rests worn gear so it can be repaired, packs the best
     items per gear type, wears the ring set with the most win value, spends intel on Enemy scouting (to 40%), Battle
     simulation (+3), Banner scouting (50%) and Ore sight (30), then on the track with the fewest points. Up to 5 trips a day.
   - **Champion hunter** (`champion`): goes for score. Takes a champion it is at least 70% sure of, else an elite at 80%+,

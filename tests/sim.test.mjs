@@ -353,8 +353,10 @@ test('the real fight is unaffected by Battle simulation intel and Foresight ring
     endDay(s);
     const e = s.roster.enemies.findIndex((x) => x.tier === 'normal');
     assert.equal(confirmPlan(s, { enemyIndex: e, gearIds: ids, ringIds: [] }).ok, true);
-    const { ring, ringText, ...rest } = endDay(s).report; // a won fight's reward ring gets a different id (the Foresight ring took one)
-    return rest;
+    const report = { ...endDay(s).report };
+    delete report.ring; // a won fight's reward ring gets a different id (the Foresight ring took one)
+    delete report.ringText;
+    return report;
   };
   assert.deepEqual(run(true), run(false));
 });

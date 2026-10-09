@@ -477,6 +477,27 @@ test('repair earns XP: durability points x bars in the item, to the bar type\'s 
   assert.equal(u.skills.repairTime.xp, 0);
 });
 
+test('craft and repair XP read the skill definitions: a skill\'s own xp replaces the material\'s xpPerItem, and removing repair.xp does not give NaN', () => {
+  const own = cfgWith({ skills: { xpPerItem: { copper: 25 }, perMaterial: { smith: { xp: 7 }, repair: { xp: 3 } }, activity: { repairTime: { xp: 4 } } } });
+  const s = game(1);
+  s.storage.bars['copper:D'] = 10;
+  assert.equal(craft(s, { slot: 'sword', material: 'copper', grade: 'D' }, own).ok, true);
+  assert.equal(totalXp(s, 'smith_copper', own), own.gear.slots.sword.bars * 7, 'the smithing skill\'s own xp, not xpPerItem');
+  const g = addGear(s, 'chest', 'copper', 'D', null, { durability: 80 });
+  assert.equal(repair(s, g.id, own).ok, true);
+  const points = 20 * own.gear.slots.chest.bars;
+  assert.equal(totalXp(s, 'repair_copper', own), points * 3);
+  assert.equal(totalXp(s, 'repairTime', own), points * 4);
+  // a repair skill without an xp of its own falls back to the material's xpPerItem (never NaN)
+  const bare = cfgWith({ skills: { xpPerItem: { copper: 25 }, perMaterial: { repair: { xp: null } }, activity: { repairTime: { xp: null } } } });
+  const t = game(1);
+  t.storage.bars['copper:D'] = 10;
+  const h = addGear(t, 'chest', 'copper', 'D', null, { durability: 80 });
+  assert.equal(repair(t, h.id, bare).ok, true);
+  assert.equal(totalXp(t, 'repair_copper', bare), 20 * bare.gear.slots.chest.bars * 25);
+  assert.ok(Number.isFinite(t.skills.repairTime.xp));
+});
+
 test('repair through the real day flow: used gear that is not packed again can be repaired at camp the next day; packed gear cannot', () => {
   const cfg = cfgWith(WEAK_ENEMIES);
   const s = game(5, cfg);
@@ -610,40 +631,38 @@ test('repairPlan fails with a reason when no grade at or above the needed one ha
 });
 
 test('repair consumes exactly what repairPlan chose and reports substitutes + the warning (no benefit)', () => {
-  for (const phase of ['work']) {
-    const { s, g } = subSetup({ 'iron:B': 0.1, 'iron:A': 1, 'iron:S': 1 }, { 'ruby:C': 0, 'ruby:A': 0.5, 'ruby:S': 1 });
-    const stats = gearStats(g, PG);
-    const plan = repairPlan(s, g, PG);
-    assert.equal(plan.ok, true);
-    assert.deepEqual(plan.bars, { 'iron:A': 0.21 });
-    assert.deepEqual(plan.gems, { 'ruby:A': 0.07 });
-    const before = structuredClone(s.storage);
-    const r = repair(s, g.id, PG);
-    assert.equal(r.ok, true, r.msg);
-    assert.deepEqual(r.substitutes, plan.substitutes);
-    assert.ok(r.msg.includes(substituteWarning(plan)), r.msg);
-    assert.equal(r.minutes, plan.minutes);
-    for (const store of ['bars', 'cut']) {
-      const used = store === 'bars' ? plan.bars : plan.gems;
-      for (const k of new Set([...Object.keys(before[store]), ...Object.keys(s.storage[store])])) {
-        assert.ok(approx(s.storage[store][k] || 0, (before[store][k] || 0) - (used[k] || 0), 1e-9), `${phase} ${store} ${k}`);
-      }
-    }
-    // no benefit: the item keeps its own grades and stats
-    assert.equal(g.grade, 'B');
-    assert.deepEqual(g.gem, { type: 'ruby', grade: 'C' });
-    assert.deepEqual(gearStats(g, PG), stats);
-    assert.equal(g.durability, 100);
-  }
-  // exact grade: no substitutes, no warning
-  const { s, g } = subSetup({ 'iron:B': 1, 'iron:S': 1 }, { 'ruby:C': 1 });
+  const { s, g } = subSetup({ 'iron:B': 0.1, 'iron:A': 1, 'iron:S': 1 }, { 'ruby:C': 0, 'ruby:A': 0.5, 'ruby:S': 1 });
+  const stats = gearStats(g, PG);
   const plan = repairPlan(s, g, PG);
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.bars, { 'iron:A': 0.21 });
+  assert.deepEqual(plan.gems, { 'ruby:A': 0.07 });
+  const before = structuredClone(s.storage);
   const r = repair(s, g.id, PG);
-  assert.equal(r.ok, true);
-  assert.deepEqual(r.substitutes, []);
-  assert.equal(substituteWarning(plan), null);
-  assert.equal(r.msg, `Repaired ${gearName(g)} to 100% (${plan.minutes}m).`);
-  assert.equal(s.storage.bars['iron:S'], 1);
+  assert.equal(r.ok, true, r.msg);
+  assert.deepEqual(r.substitutes, plan.substitutes);
+  assert.ok(r.msg.includes(substituteWarning(plan)), r.msg);
+  assert.equal(r.minutes, plan.minutes);
+  for (const store of ['bars', 'cut']) {
+    const used = store === 'bars' ? plan.bars : plan.gems;
+    for (const k of new Set([...Object.keys(before[store]), ...Object.keys(s.storage[store])])) {
+      assert.ok(approx(s.storage[store][k] || 0, (before[store][k] || 0) - (used[k] || 0), 1e-9), `${store} ${k}`);
+    }
+  }
+  // no benefit: the item keeps its own grades and stats
+  assert.equal(g.grade, 'B');
+  assert.deepEqual(g.gem, { type: 'ruby', grade: 'C' });
+  assert.deepEqual(gearStats(g, PG), stats);
+  assert.equal(g.durability, 100);
+  // exact grade: no substitutes, no warning
+  const exact = subSetup({ 'iron:B': 1, 'iron:S': 1 }, { 'ruby:C': 1 });
+  const exactPlan = repairPlan(exact.s, exact.g, PG);
+  const exactRepair = repair(exact.s, exact.g.id, PG);
+  assert.equal(exactRepair.ok, true);
+  assert.deepEqual(exactRepair.substitutes, []);
+  assert.equal(substituteWarning(exactPlan), null);
+  assert.equal(exactRepair.msg, `Repaired ${gearName(exact.g)} to 100% (${exactPlan.minutes}m).`);
+  assert.equal(exact.s.storage.bars['iron:S'], 1);
 });
 
 test('repairInfo still quotes the exact grade, whatever is in stock', () => {

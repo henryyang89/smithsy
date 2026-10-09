@@ -16,7 +16,7 @@ import { enemyCombatant, rollLevels } from '../js/core/enemies.js';
 import { VERSION } from '../js/version.js';
 import {
   PERSONAS, PERSONA_KEYS, PICK_KEYS, BENCH_DAYS, DEATH_BINS, parseArgs, pickEnemy, gearLevel, spendIntelPoints, botParams, valueTables, runBot,
-  choosePlan, withSets, intelModeSets, judge, mapAttempts, truePct, TRUTH,
+  choosePlan, withSets, intelModeSets, judge, targetFlags, mapAttempts, truePct, TRUTH,
 } from '../tools/balance.mjs';
 import { game, addGear, addRing } from './helpers.mjs';
 
@@ -403,6 +403,17 @@ test('judge: a value against a target range (ends included, null = open)', () =>
   assert.equal(judge(NaN, 0, 1), 'n/a');
 });
 
+test('targetFlags: n/a rows are never misses; MISS counts the LOW / HIGH rows out of the rows that could be judged', () => {
+  const row = (id, flag) => [id, 'what', '1', '1', flag];
+  assert.equal(targetFlags([row('A', 'ok'), row('A', 'ok')]), 'A ok');
+  assert.equal(targetFlags([row('A', 'ok'), row('A', 'LOW'), row('A', 'HIGH')]), 'A MISS 2/3');
+  assert.equal(targetFlags([row('A', 'LOW'), row('A', 'n/a'), row('A', 'n/a')]), 'A MISS 1/1 (2 n/a)');
+  assert.equal(targetFlags([row('A', 'ok'), row('A', 'n/a')]), 'A ok (1 n/a)');
+  assert.equal(targetFlags([row('A', 'n/a'), row('A', 'n/a')]), 'A n/a');
+  assert.equal(targetFlags([row('A', 'ok'), row('B', 'LOW'), row('A', 'ok')]), 'A ok B MISS 1/1', 'one flag per id, in the order the ids first appear');
+  assert.equal(targetFlags([]), '');
+});
+
 test('mapAttempts counts the tries generateMap needed for the seed\'s map (at least one, not many)', () => {
   const tries = [];
   for (let i = 0; i < 20; i++) tries.push(mapAttempts(mixSeed(9001, i)));
@@ -583,10 +594,32 @@ test('benchmark: a target on a day after --days prints n/a (not 0 / LOW); the ca
   assert.match(out, /careful - casual: alive at day 20 \(points\)\s+-\s+>= 10\s+n\/a/);
   assert.match(out, /careful - casual: alive at day 40 \(points\)\s+-\s+>= 10\s+n\/a/);
   assert.doesNotMatch(out, /alive at day (10|20|40)[^\n]*LOW/);
+  // a median life that --days cuts off (more than half the runs alive at the end) is only known as ">D": n/a, not judged on D + 1 or as 0.0
+  const careful = out.split('\n').find((l) => /^BENCHMARK \| .* \| careful \|/.test(l));
+  assert.match(careful, /median life >5/, 'the careful bot outlives five days on these seeds, so its median is cut off');
+  assert.match(out, /careful: median life \(days\)\s+-\s+30-40\s+n\/a/);
+  assert.match(out, /careful - champion: median life \(days\)\s+-\s+>= 3\s+n\/a/);
+  // the SUMMARY counts only LOW / HIGH rows as misses, and says how many rows were n/a
+  const summary = out.split('\n').find((l) => l.startsWith('BENCHMARK SUMMARY'));
+  assert.match(summary, /T-D MISS \d\/2 \(2 n\/a\)/, summary);
+  assert.match(summary, /T-P (ok|MISS \d\/\d) \(\d n\/a\)/, summary);
+  assert.doesNotMatch(summary, /T-D MISS 4\/4|T-P MISS \d\/8/, 'n/a rows used to count as misses (T-D MISS 4/4, T-P MISS 4/8)');
   const casual = out.split('\n').filter((l) => /casual/.test(l) && /estimator/.test(l));
   assert.ok(casual.length >= 1);
   for (const l of casual) assert.match(l, /estimator no estimate/, 'casual never reads an estimate');
   assert.match(out.split('\n').find((l) => /^BENCHMARK \| .* \| careful \|/.test(l)), /estimator game \d+x\d+/);
+});
+
+test('the economy SUMMARY labels the searches per clear cell with the bonuses CONFIG gives (skill at its top level; S ring + skill), not +12 / +32', () => {
+  const eff = CONFIG.skills.activity.searchEff.effects.searchEff;
+  const sRing = CONFIG.rings.types.searchEff.values[4];
+  const label = (out) => out.split('\n').find((l) => l.startsWith('ECONOMY SUMMARY')).match(/searches per clear cell (\+[\d./+]+)%/)[1];
+  const bonus = (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1));
+  const top = CONFIG.skills.maxLevel;
+  assert.equal(label(runTool('--section', 'economy', '--quick', '--seeds', '4')), `+0/+${bonus(eff * top)}/+${bonus(sRing + eff * top)}`);
+  // a different skill value moves the label with it
+  const out = runTool('--section', 'economy', '--quick', '--seeds', '4', '--set', 'skills.activity.searchEff.effects.searchEff=2');
+  assert.equal(label(out), `+0/+${bonus(2 * top)}/+${bonus(sRing + 2 * top)}`);
 });
 
 test('the intel section plays the same seeds in every mode and prints the INTEL line with its flags', () => {

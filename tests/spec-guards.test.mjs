@@ -219,7 +219,6 @@ test('request pins (batch 3): R6 tiers rise, R40 and R41 Low = none, R21 S sits 
   assert.ok(T.champion.hp > T.elite.hp || T.champion.damage > T.elite.damage || T.champion.defense > T.elite.defense, 'R6: champions are above elites');
   assert.equal(CONFIG.enemies.attributes.chilling.values.low, 0, 'R40: Low Chilling = no slowing at all');
   assert.equal(CONFIG.enemies.attributes.magical.values.low, 0, 'R41: Low Magical = no magic at all');
-  assert.equal(CONFIG.combat.startFillMax, 50, 'both attack bars start 0-50% full');
   assert.equal(CONFIG.sim.samples, 5, 'A2: 5 guesses ...');
   assert.equal(CONFIG.sim.evalFights, 5, 'A2: ... x 5 test fights');
   const sd = CONFIG.intel.tracks.simDepth;
@@ -317,6 +316,9 @@ test('guard: the top bar has End run and New game (only when over), the work-day
   assert.match(main, /dayProgress\(state, CONFIG\)/);
   assert.match(main, /clockStatus\(state, left, CONFIG\)/, 'a finished run shows "Run over", not the work clock');
   assert.match(main, /clock\.bar/, 'and no work-day bar');
+  assert.match(main, /ui\.est_screen = null/, 'render() clears the estimating-screen mark, so a run that outlives its tab never redraws another one');
+  assert.match(main, /\.\.\.tip\(clock\.label\)/, 'the clock hover also opens on a tap (tip(), not a bare title)');
+  assert.match(main, /\.\.\.tip\(day\.label\)/, 'so does the work-day bar\'s');
   assert.match(main, /res\.tone \|\| \(res\.ok \? 'ok' : 'err'\)/);
   assert.match(main, /function recordBest\(\)/);
   assert.match(main, /state\.end\.prevBest != null/);

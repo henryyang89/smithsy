@@ -176,8 +176,9 @@ export function timeLeft(state, cfg = CONFIG) {
 }
 
 // The extra travel time (%) each carried item adds: the base penalty less the Carrying skill's share.
-export function loadPenaltyPct(state, cfg = CONFIG) {
-  return cfg.map.loadPenaltyPerItem * (1 - smithBonuses(state, cfg).loadPenaltyRed / 100);
+// `b` is the caller's smithBonuses(state, cfg) when it already has it (travelMinutes), so it is worked out once.
+export function loadPenaltyPct(state, cfg = CONFIG, b = smithBonuses(state, cfg)) {
+  return cfg.map.loadPenaltyPerItem * (1 - b.loadPenaltyRed / 100);
 }
 
 // Minutes to walk from `from` to `to` carrying `items` items: steps x minutes per step x (1 + load penalty x items),
@@ -186,7 +187,7 @@ export function travelMinutes(state, from, to, items, cfg = CONFIG) {
   const steps = pathSteps(state.map, from, to);
   if (!Number.isFinite(steps)) return Infinity;
   const b = smithBonuses(state, cfg);
-  const penalty = cfg.map.loadPenaltyPerItem * (1 - b.loadPenaltyRed / 100);
+  const penalty = loadPenaltyPct(state, cfg, b);
   const base = steps * cfg.map.travelMinPerStep * (1 + (penalty * items) / 100);
   return round1(reduced(base, b.travelPct, cfg.processing.maxTimeReduction));
 }

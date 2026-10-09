@@ -5,7 +5,7 @@ import * as Game from './core/game.js';
 import { atCamp, timeLeft, currentField, returnMinutes, projectedLoad } from './core/map.js';
 import { formatDuration } from './core/util.js';
 import { VERSION } from './version.js';
-import { h, clear, isRestoredScroll } from './ui/dom.js';
+import { h, clear, tip, isRestoredScroll } from './ui/dom.js';
 import { renderMap } from './ui/mapview.js';
 import { renderWorkshop } from './ui/workshop.js';
 import { renderAdventurer } from './ui/adventurer.js';
@@ -154,7 +154,7 @@ function timeBar(day) {
     'aria-valuemin': 0,
     'aria-valuemax': Math.round(day.len),
     'aria-valuenow': Math.round(day.used),
-    title: day.label,
+    ...tip(day.label),
   }, h('div', { class: 'timebar-fill', style: { width: `${Math.round(day.frac * 1000) / 10}%` } }));
 }
 
@@ -169,13 +169,13 @@ function renderTopbar() {
   const load = projectedLoad(state);
   const away = state.plan ? `Adventurer is fighting ${state.plan.enemy.name} today` : state.day === 1 ? 'Adventurer rests today' : '';
   const parts = [
-    h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version', title: `Smithsy version ${VERSION} (see Help and CHANGELOG.md)` }, `v${VERSION}`)),
+    h('div', { class: 'brand' }, 'Smithsy', h('span', { class: 'version', ...tip(`Smithsy version ${VERSION} (see Help and CHANGELOG.md)`) }, `v${VERSION}`)),
     h('div', { class: 'stat' }, h('b', {}, `Day ${state.day}`)),
-    h('div', { class: 'stat timestat', title: clock.label }, clock.clock ? [h('b', {}, clock.clock), ' '] : null, h('span', { class: 'muted' }, clock.note)),
+    h('div', { class: 'stat timestat', ...tip(clock.label) }, clock.clock ? [h('b', {}, clock.clock), ' '] : null, h('span', { class: 'muted' }, clock.note)),
     h('div', { class: 'stat' }, locationText()),
     h('div', { class: 'stat' }, `Bag ${state.bag.length}/${CONFIG.bag.slots}`,
-      field && field.pile && field.pile.length ? h('span', { class: 'muted', title: 'Items waiting in this field\'s pile' }, ` · pile ${field.pile.length}`) : null),
-    !atCamp(state) && working ? h('div', { class: 'stat muted', title: `Walk home with a full load (${load} items: bag + this field's pile, up to ${CONFIG.bag.slots})` }, `Return: ${formatDuration(returnMinutes(state, state.location, load))}`) : null,
+      field && field.pile && field.pile.length ? h('span', { class: 'muted', ...tip('Items waiting in this field\'s pile') }, ` · pile ${field.pile.length}`) : null),
+    !atCamp(state) && working ? h('div', { class: 'stat muted', ...tip(`Walk home with a full load (${load} items: bag + this field's pile, up to ${CONFIG.bag.slots})`) }, `Return: ${formatDuration(returnMinutes(state, state.location, load))}`) : null,
     state.intel.points > 0 ? h('div', { class: 'stat hl' }, `${state.intel.points} intel pt`) : null,
     away ? h('div', { class: 'stat muted' }, away) : null,
     h('div', { class: 'spacer' }),
@@ -250,6 +250,7 @@ function renderSideLog() {
 
 function render() {
   const main = clear(document.getElementById('main'));
+  ui.est_screen = null; // the screen drawn below says it is the estimating one (scheduleEstimates); see ui/estimates.js
   try {
     renderTopbar();
     renderTabs();

@@ -44,7 +44,7 @@ export function repairCostNodes(state, item, check) {
     const [m, g] = k.split(':');
     const missing = !used.length;
     const sub = !missing && subUse(`${m} bars`);
-    out.push(h('span', { class: missing ? 'err' : sub ? 'rp-sub' : '', title: missing ? `Have ${qty(state.storage.bars[k] || 0)} of this grade` : `Have ${qty(state.storage.bars[k] || 0)}` },
+    out.push(h('span', { class: missing ? 'err' : sub ? 'rp-sub' : '', ...tip(missing ? `Have ${qty(state.storage.bars[k] || 0)} of this grade` : `Have ${qty(state.storage.bars[k] || 0)}`) },
       `${qty(n)} ${cap(m)} `, h('b', { class: `grade-${g}` }, g), ` bar${n === 1 ? '' : 's'}`, sub ? ` (for ${sub.need})` : ''));
   }
   if (item.gem) {
@@ -54,7 +54,7 @@ export function repairCostNodes(state, item, check) {
       const [t, g] = k.split(':');
       const missing = !usedG.length;
       const sub = !missing && subUse(`cut ${t}`);
-      out.push(h('span', { class: missing ? 'err' : sub ? 'rp-sub' : '', title: `Have ${qty(state.storage.cut[k] || 0)}` },
+      out.push(h('span', { class: missing ? 'err' : sub ? 'rp-sub' : '', ...tip(`Have ${qty(state.storage.cut[k] || 0)}`) },
         `${qty(n)} cut ${cap(t)} `, h('b', { class: `grade-${g}` }, g), sub ? ` (for ${sub.need})` : ''));
     }
   }

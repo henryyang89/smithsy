@@ -144,6 +144,47 @@ test('several quick changes cause one run: only the last selection is worked out
   assert.equal(cachedEstimate(ctx, b, 0), null);
 });
 
+test('going back to a selection that is already cached stops the run of the one just left (no stale status, no extra redraw)', async () => {
+  const { ctx, sword, chest } = setup();
+  const a = scopeOf([sword, chest]);
+  const b = scopeOf([sword]);
+  scheduleEstimates(ctx, a);
+  await whenEstimatesDone(ctx);
+  scheduleEstimates(ctx, b); // a change: waits out the debounce, then B's run starts
+  await new Promise((r) => setTimeout(r, DEBOUNCE_MS + 20));
+  const bRun = ctx.ui.est_run;
+  assert.ok(bRun && !bRun.cancelled, 'B is being worked out');
+  scheduleEstimates(ctx, a); // back to A, which is cached: nothing to work out
+  assert.equal(bRun.cancelled, true, 'the run for B is stopped');
+  assert.equal(ctx.ui.est_run, null);
+  assert.equal(estimatesPending(ctx), false);
+  assert.equal(estimateStatus(ctx), null, 'the status does not say Estimating over finished numbers');
+  const before = ctx.rerenders;
+  await whenEstimatesDone(ctx);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(ctx.rerenders, before, 'a stopped run does not redraw the screen when it ends');
+  for (let i = 0; i < n(ctx); i++) assert.ok(cachedEstimate(ctx, a, i), `A, enemy ${i}`);
+});
+
+test('a run that outlives its screen fills the cache but does not redraw whatever tab is open; coming back shows the results', async () => {
+  const { ctx, sword, chest } = setup();
+  const scope = scopeOf([sword, chest], [], { selected: 1 });
+  scheduleEstimates(ctx, scope);
+  assert.equal(ctx.ui.est_screen, 'plan', 'the screen marks itself as the one being drawn');
+  ctx.ui.est_screen = null; // main.js clears the mark at the start of every render; this render was another tab
+  await whenEstimatesDone(ctx);
+  assert.equal(ctx.rerenders, 0, 'neither the chosen enemy\'s finish nor the end of the run rebuilt the other tab');
+  for (let i = 0; i < n(ctx); i++) assert.ok(cachedEstimate(ctx, scope, i), `enemy ${i}`);
+  assert.equal(estimatesPending(ctx), false);
+  // back on the estimating screen: it renders from the cache and starts nothing
+  scheduleEstimates(ctx, scope);
+  assert.equal(ctx.ui.est_screen, 'plan');
+  assert.equal(estimatesPending(ctx), false);
+  // a new game forgets the mark with everything else
+  clearEstimates(ctx);
+  assert.equal(ctx.ui.est_screen, null);
+});
+
 test('cancelEstimates stops a pending start and a run in progress; nothing more is cached', async () => {
   const { ctx, sword } = setup();
   scheduleEstimates(ctx, scopeOf([sword]));

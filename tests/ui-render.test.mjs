@@ -150,7 +150,7 @@ test('the world map is map.size square and the camp panel explains walking, sear
   // phones hide the "dist N" line of the tiles (css/ui-map.css), so the note must not promise it everywhere
   assert.match(text, /shows how much of that field you have searched and the walk from here \(on a wider screen also its distance from camp\)/);
   assert.match(text, /Sight/);
-  assert.match(text, /Boulders \(\d+(-\d+, more far away)? per field\) can never be searched/);
+  assert.match(text, /\d+(-\d+)? boulders per field( \(more far from camp\))? can never be searched/);
   assert.doesNotMatch(text, /chance per searched cell|reveal everything/i);
   // the by-distance table is a closed <details> with one row per distance on this map and a Boulders column
   const details = findAll(root, (el) => el.tagName === 'DETAILS' && el.classList.contains('mv-odds-box'));
@@ -449,14 +449,16 @@ test('the Workshop gear list: Repair buttons by day (time and bars), a Scrap but
 test('a Copper sword at 60% scrapped from the Workshop returns 0.42 bars (confirm text and the click through ctx.act)', () => {
   const s = stateDay1();
   addGear(s, 'sword', 'copper', 'D', null, { durability: 60 });
-  const ctx = makeCtx(s);
+  // the A4 example, pinned: a 2-bar sword, 35% of its bars, 60% durability
+  const cfg = cfgWith({ gear: { slots: { sword: { bars: 2 } }, repair: { materialFraction: 35 } } });
+  const ctx = makeCtx(s, cfg);
   const confirms = [];
   globalThis.confirm = (m) => {
     confirms.push(m);
     return true;
   };
   try {
-    const root = render(renderWorkshop, s, CONFIG, ctx);
+    const root = render(renderWorkshop, s, cfg, ctx);
     const scrapBtn = withClass(root, 'ws-scrap')[0];
     assert.equal(scrapBtn.disabled, undefined);
     scrapBtn.listeners.click[0]();

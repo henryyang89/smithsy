@@ -470,14 +470,14 @@ what was done instead and which batch it touches.
 - **Batch 1 open notes**
   - [minor] Dead CSS left behind by the removed 1.2 UI: nothing in js/ uses `.mv-empty` / `.mv-done .mv-empty`
     (css/ui-map.css:103-104), `.mv-odds th.mv-group` (css/ui-map.css:192) or `.mi-sched` (css/ui-misc.css:77).
-    Check: `grep -rn "mv-empty\|mv-group\|mi-sched" js` finds nothing. Expected: delete them.
+    Check: `grep -rn "mv-empty\|mv-group\|mi-sched" js` finds nothing. Expected: delete them. **[7b]** fixed (removed in B4; `grep -rn "mv-empty\|mv-group\|mi-sched" js css` finds nothing; re-checked in 7b).
   - [minor] Camp panel Debris row reads awkwardly: js/ui/mapview.js:419 builds `Boulders (${bMin}-${bMax}, more far
     away per field) can never be searched.` Wording only, for example "2-4 boulders per field (more far from camp)
-    can never be searched."
+    can never be searched." **[7b]** fixed: the row now reads "2-4 boulders per field (more far from camp) can never be searched." (`js/ui/mapview.js`; the ui-render regex follows).
   - [minor] The 'request pins' test hard-codes CONFIG numbers (documented exception to the house rule): 
     tests/spec-guards.test.mjs:103-115 asserts map.size 7, field.size 9, boulders 2-4, gemShare 15/25,
     groupSight.base 20 and oreSight.base 0. Listed in 'Tests (B1)' as deliberate; flagged so the user can accept or
-    reject the exception.
+    reject the exception. **[7b]** kept: the documented exception (numbers the user gave in their own words, one test per batch); the user decides whether to accept it.
 
 **Tests (B1)**
 - Hand-built geometry tests (`map.test.mjs` travel / pathSteps, `carry.test.mjs`) are pinned to a 5x5 map with
@@ -528,20 +528,20 @@ what was done instead and which batch it touches.
 - **A same-version save written by the B1 tree** (25 skills) no longer passes `assertShape` (35 skills): `main.js` backs it
   up and starts a new game. No release has shipped 2.0, so nothing is lost for players.
 - **Open notes**
-  - [minor] `tests/sim.test.mjs:307` has two unused variables (`ring`, `ringText`) from 1.2; not touched here.
+  - [minor] `tests/sim.test.mjs:307` has two unused variables (`ring`, `ringText`) from 1.2; not touched here. **[7b]** fixed: the report is copied and `ring` / `ringText` are `delete`d (no unused bindings).
   - [minor] Help's skill table text for cutting reads "10% better cutting chances (of the way to a master cutter)" (the
     effect text in `skills.effects.cutBlend`); the hovers phrase it "better ruby cutting chances (30% of the way to a
-    master cutter's)". Wording only.
+    master cutter's)". Wording only. **[7b]** fixed: `skills.effects.cutBlend.text` is now "of the way to a master cutter's cutting chances", so Help's per-level column reads "10% of the way to a master cutter's cutting chances" and the hovers keep their own wording (`effectText`).
 
 - **Batch 2 open notes**
-  - [minor] Skills tab at 390 px: the 'Now' column and the Repair matrix column are cut off. `css/ui-misc.css:67` sets `.mi-skills { min-width: 540px }`; the scroll box is 328 px wide at 390 px, so 'Now' and part of the XP number sit off-screen (Bar types matrix 355/328 cuts 'Repair'). No page overflow; tapping a row shows the same info. Plan 4.4 wants the four columns to fit (narrower Progress, or Now wrapping under the name). Screenshot: scratchpad/v2/review/skills390.png.
-  - [minor] Touch popover stays open with out-of-date text after tapping an action button. `js/main.js:278-293` `installTips` opens `#tip` on every non-mouse pointerup in `[data-tip]`, buttons included; after an enabled 'Repair' tap the popover keeps the old text next to the toast. Fix: skip enabled buttons, or close the popover when `ctx.act` re-renders.
-  - [minor] `[data-tip] { cursor: help }` (`css/style.css:106`) overrides the hand cursor on enabled buttons (`button { cursor: pointer }`, lines 74-75). Fix: `button[data-tip]:not(:disabled) { cursor: pointer; }`.
-  - [minor] `craft()` and `repair()` compute XP without `xpPerUnit` (`js/core/gear.js:147`, `252-253`), so hover/Help can disagree with XP given, and removing `repair.xp` / `repairTime.xp` from config gives NaN. Use `xpPerUnit(skillDef(key))` in both.
-  - [minor] `travelMinutes` (`js/core/map.js:189`) repeats the `loadPenaltyPct` formula (`map.js:179-181`) instead of calling it; `tests/carry.test.mjs` was not moved onto it (section 11). Make `travelMinutes` call `loadPenaltyPct`.
-  - [minor] Some new tests hard-code default CONFIG numbers (`tests/ui-render.test.mjs` Copper sword scrap `0.42 ... 35% of its 2 bars x 60%` and smith panel `Base [\d.]+m (2 bars x \d+m)`). Pin with `cfgWith` or build the text from CONFIG.
-  - [minor] Leftover single-item loop `for (const phase of ['work'])` in `tests/gear.test.mjs` ('repair consumes exactly what repairPlan chose...'); unwrap it.
-  - [minor] Deferred items still visible after B2 (FYI): (1) `js/ui/workshop.js:148,187-188` and `js/ui/help.js:323-352` still show level-10 values and novice/master tables (R18, B2/B5; deferral recorded). (2) Most hovers outside B2's new elements are `title`-only, so touch users cannot see them (mapview 20, endday 17, workshop 13, skillsview intel Spend button); for B5. (3) `README.md:69,116,132,175,226` still describes free night repairs; README is B7's job.
+  - [minor] Skills tab at 390 px: the 'Now' column and the Repair matrix column are cut off. `css/ui-misc.css:67` sets `.mi-skills { min-width: 540px }`; the scroll box is 328 px wide at 390 px, so 'Now' and part of the XP number sit off-screen (Bar types matrix 355/328 cuts 'Repair'). No page overflow; tapping a row shows the same info. Plan 4.4 wants the four columns to fit (narrower Progress, or Now wrapping under the name). Screenshot: scratchpad/v2/review/skills390.png. **[7b]** fixed in B5 (cards under 560 px, tighter matrices).
+  - [minor] Touch popover stays open with out-of-date text after tapping an action button. `js/main.js:278-293` `installTips` opens `#tip` on every non-mouse pointerup in `[data-tip]`, buttons included; after an enabled 'Repair' tap the popover keeps the old text next to the toast. Fix: skip enabled buttons, or close the popover when `ctx.act` re-renders. **[7b]** fixed in B4 (`installTips` skips enabled buttons and inputs).
+  - [minor] `[data-tip] { cursor: help }` (`css/style.css:106`) overrides the hand cursor on enabled buttons (`button { cursor: pointer }`, lines 74-75). Fix: `button[data-tip]:not(:disabled) { cursor: pointer; }`. **[7b]** fixed in B4.
+  - [minor] `craft()` and `repair()` compute XP without `xpPerUnit` (`js/core/gear.js:147`, `252-253`), so hover/Help can disagree with XP given, and removing `repair.xp` / `repairTime.xp` from config gives NaN. Use `xpPerUnit(skillDef(key))` in both. **[7b]** fixed: both read `xpPerUnit(skillDef(key))` (smith_<bar>, repair_<bar>, repairTime); a new gear test sets a skill's own `xp` and a missing one (no NaN) and fails on the old code.
+  - [minor] `travelMinutes` (`js/core/map.js:189`) repeats the `loadPenaltyPct` formula (`map.js:179-181`) instead of calling it; `tests/carry.test.mjs` was not moved onto it (section 11). Make `travelMinutes` call `loadPenaltyPct`. **[7b]** fixed: `loadPenaltyPct(state, cfg, b)` takes the caller's bonuses and `travelMinutes` calls it; `carry.test.mjs` checks the 3-item walk through `loadPenaltyPct`.
+  - [minor] Some new tests hard-code default CONFIG numbers (`tests/ui-render.test.mjs` Copper sword scrap `0.42 ... 35% of its 2 bars x 60%` and smith panel `Base [\d.]+m (2 bars x \d+m)`). Pin with `cfgWith` or build the text from CONFIG. **[7b]** fixed: the smith panel test in B5; the Copper sword scrap test now pins its 2-bar sword and 35% with `cfgWith`.
+  - [minor] Leftover single-item loop `for (const phase of ['work'])` in `tests/gear.test.mjs` ('repair consumes exactly what repairPlan chose...'); unwrap it. **[7b]** fixed: unwrapped (the exact-grade half of the test got its own variable names).
+  - [minor] Deferred items still visible after B2 (FYI): (1) `js/ui/workshop.js:148,187-188` and `js/ui/help.js:323-352` still show level-10 values and novice/master tables (R18, B2/B5; deferral recorded). (2) Most hovers outside B2's new elements are `title`-only, so touch users cannot see them (mapview 20, endday 17, workshop 13, skillsview intel Spend button); for B5. (3) `README.md:69,116,132,175,226` still describes free night repairs; README is B7's job. **[7b]** (1) fixed in B5. (2) mostly fixed: B5 did the roster, report and Workshop hovers, 7b the top bar (clock, work-day bar, version, pile, return), the map's Sight chip / sight row / by-distance column headers / count chips, the Rings "+N if worn" and the repair previews' "Have N" (all `tip()`); kept for the rest: they sit on buttons or on clickable cells and rows, where a tap must do its action instead of opening a popover. (3) kept: README is the docs pass (7c).
 
 **Tests (B2)**
 - Skills: `skills-intel.test.mjs` pins its skill numbers with the effects model (`effects: { travelTime: 0.5 }` etc.);
@@ -619,37 +619,37 @@ what was done instead and which batch it touches.
   table removal, the Low = none text and the head start sentence; B5 still owns the full Help pass.
 - **Batch 3 open notes**
   - [minor] The battle report still lists the gear from `ctx.state.gear` ("Packed but not used") and the old "Gear the
-    adventurer used" panel; the snapshots (`report.used` / `notUsed`) exist but the report layout is B5.
-  - [minor] `tools/balance.mjs --section estimator` still describes 10x10 / 13x13 ... sizes (B6 rewrites it for 5x5 .. 10x10).
+    adventurer used" panel; the snapshots (`report.used` / `notUsed`) exist but the report layout is B5. **[7b]** fixed in B5 (report uses the snapshots).
+  - [minor] `tools/balance.mjs --section estimator` still describes 10x10 / 13x13 ... sizes (B6 rewrites it for 5x5 .. 10x10). **[7b]** fixed in B6.
   - [minor] The Matchup table's "Rough time to win / to lose" can read "9-9s" (the range collapses to one number printed
-    twice); pre-existing, not touched.
+    twice); pre-existing, not touched. **[7b]** fixed in B4.
   - [minor] Topaz armor fallback not applied although the measured M2 is below +4. Plan 4.7: "Topaz armor fallback if M2 < +4:
     `stunChanceRed`/`stunDurRed` `[12, 18, 24, 30, 36]`." HANDOFF records a topaz M2 mean of 3.9 (steel 3.5), below +4, but
     js/config.js gemEffects.topaz.armor stays at [10,15,20,25,30]. The deviation is written up (inside the noise, batch 7
     tunes it with the batch 6 instrument), so it is a recorded choice, but the plan's condition is strictly met. Either apply
-    the fallback, or make sure batch 7 decides it explicitly.
+    the fallback, or make sure batch 7 decides it explicitly. **[7b]** fixed in 7a: topaz armor is now [15,22,30,37,45], above the plan's fallback [12,18,24,30,36]; M2 measures +4.7 to +8.8 (docs/TUNING-2.0.md).
   - [minor] The lost-fight test was not given used/notUsed checks (section 11 row: "add `used`/`notUsed` asserts; `state.end`
     on a loss | B3, B5"). The day-2 win test got them (tests/game.test.mjs ~line 184); 'a lost fight is game over: no ring,
-    no score' is unchanged. Expected: add `assert.deepEqual(r.report.used, [])` and `notUsed` checks, with a packed item.
+    no score' is unchanged. Expected: add `assert.deepEqual(r.report.used, [])` and `notUsed` checks, with a packed item. **[7b]** fixed in B5.
   - [minor] Help attribute table shows Fast Normal as "none", unlike the roster chip. js/ui/help.js enemySection `lvCells`
     maps value 0 to 'none' for every attribute, so Fast renders "-2 / none / 2" (confirmed with tests/fakedom.mjs). The roster
-    chip says "Normal · 0%" and Fast 0 is a normal speed. Expected: leave Fast out of the 'none' rule, as attrValueText does.
+    chip says "Normal · 0%" and Fast 0 is a normal speed. Expected: leave Fast out of the 'none' rule, as attrValueText does. **[7b]** fixed in B4.
   - [minor] The 'could be destroyed' line can name a threshold that a listed-as-safe item meets. js/ui/endday.js:900 prints
     `At ${Math.ceil(maxLoss - 1e-9)}% or less, could be destroyed`, while listed items use `g.durability <= maxLoss + 1e-9`.
     Elite worst wear 13.2 and a chest at 14.9% (shown "14%"): the line reads "At 14% or less, could be destroyed if used
     against Dire Wolf: D Copper Helmet (1%)" and omits the chest. Batch 4 replaces it with the couldBreak icon; until then
-    floor the threshold, or phrase it by exact wear.
+    floor the threshold, or phrase it by exact wear. **[7b]** fixed in B4 (replaced by the icons).
   - [minor] Grammar in the estimate explanation: "1 attributes hidden". js/ui/endday.js estimateHow prints
-    `(${nHidden} attributes hidden for ${sel.name})`; singular is needed when the count is 1.
+    `(${nHidden} attributes hidden for ${sel.name})`; singular is needed when the count is 1. **[7b]** fixed in B4.
   - [minor] Request-pins test hard-codes a number the user never asked for: tests/spec-guards.test.mjs 'request pins (batch 3)'
     has `assert.equal(CONFIG.combat.startFillMax, 50, ...)`. That is one of the changes the user did not ask for (section 13),
-    so it goes beyond the documented pins exception. The other pins trace to user requests.
+    so it goes beyond the documented pins exception. The other pins trace to user requests. **[7b]** fixed: the `startFillMax` pin is gone from `spec-guards.test.mjs`; `combat.test.mjs` already checks the head start is on (`> 0`, `<= 100`) without a number.
   - [minor] Report wear numbers are rounded separately, so they may not add up. js/ui/endday.js:502-503 shows
     `-${Math.round(w.loss)}%` and `${durText(w.left)} left`, with the starting durability floored: 63.9 before shows "63%",
     loss 10.5 shows "-11%", 53.4 after shows "53% left" (63 - 11 = 52). Cosmetic; batch 5's report rework could show the loss
-    as the difference of the shown values.
+    as the difference of the shown values. **[7b]** fixed in B5 (the loss is the difference of the shown values).
   - [minor] README still describes the 1.2 estimate size: README.md:128 "(10 guesses of the hidden attributes x 10 test
-    fights each)" and line 237 "estimator (v1.2) ... at 10 x 10"; the game now uses 5 x 5. Reminder for batch 7's docs pass.
+    fights each)" and line 237 "estimator (v1.2) ... at 10 x 10"; the game now uses 5 x 5. Reminder for batch 7's docs pass. **[7b]** kept: README is the docs pass (7c).
 
 **Tests (B3)**
 - `helpers.mjs` has `NO_HEAD_START`; `combat.test.mjs` pins its hand-timed fights with it (`CFG` and `capAt`). New combat
@@ -677,7 +677,7 @@ what was done instead and which batch it touches.
   `ringTotals`, and `resolveBattle` with 3 items per type stays within the search bound (32 combinations are all tried).
 - `spec-guards.test.mjs`: no "Rating growth" / `ratingMult` in endday.js, Help does not read `growthPerDay` or `growth(`,
   no raw decimal durability printing in the gear screens, no `marginPts`, `resolveBattle` uses `searchLoadout`, one
-  `gearPower`; a B3 "request pins" test (R6, R40, R41, head start 50, A2 5 x 5 with at most +5 = 10 x 10) - the same
+  `gearPower`; a B3 "request pins" test (R6, R40, R41, A2 5 x 5 with at most +5 = 10 x 10; the head start 50 pin was removed in 7b: the user never asked for that number) - the same
   documented exception to "tests never hard-code CONFIG numbers" as in B1 and B2.
 - `ui-render.test.mjs`: no growth text on any screen, "Low · none" and fight-day Accurate / Evasion chips (every rating chip
   checked), whole-number durability in the Workshop, Adventurer tab, plan, today's packed list and the report, whole-number
@@ -755,27 +755,27 @@ what was done instead and which batch it touches.
   dead CSS `.mv-empty`, `.mv-group`, `.mi-sched`, `rt-sect-names` removed.
 - **Batch 4 open notes**
   - [minor] README still describes the 1.2 plan screen ("Estimate all", pack 2 per slot, 10 x 10) and CHANGELOG has no 2.0 section
-    (B7). The `Estimate all` guard in `tests/spec-guards.test.mjs` covers js and css only.
+    (B7). The `Estimate all` guard in `tests/spec-guards.test.mjs` covers js and css only. **[7b]** kept: README / CHANGELOG are the docs pass (7c).
   - [minor] The bot's `ringPoints` 1 and `bannerBonus` 10 are untuned guesses; with them the careful bot picks about 15% elites and
-    85% champions on days 11-30 (--quick, 3 seeds): look at it with the real benchmark in B6/B7.
+    85% champions on days 11-30 (--quick, 3 seeds): look at it with the real benchmark in B6/B7. **[7b]** kept: tool settings, not game numbers; B6 measured that the champion rule makes them matter little.
   - [minor] Review fixes: the sticky confirm bar says the unspent-point sentence once ("You have 1 intel point: spend it before you start
     day 6."); the capitalised "Spend your intel point on a track below." now opens the Intel panel's text instead (the Batch 4
     ui-render test and the plan's "contains 'Spend your intel point'" read the whole screen). The bar is 128 px at 390 px (B3: 94 px,
-    first B4 build: 144 px), 164 px at 360 px (first build 181 px).
+    first B4 build: 144 px), 164 px at 360 px (first build 181 px). **[7b]** fixed in the B4 review.
   - [minor] Review fixes: a screen puts a scroll box back through `restoreScrollLeft` (js/ui/dom.js) and the tip popover's scroll
     listener skips that one event (`isRestoredScroll`). A first tap on a hover chip inside an unselected roster column selects the
     column, which re-renders the plan and restores `.rt-scroll`; that used to close the popover at once (measured at 390 px with
     touch: hidden after the first tap, shown after the second; now shown after the first). Checking "only set scrollLeft when it
-    differs" was not enough: a re-rendered box is a new element that starts at 0, so the position always differs.
+    differs" was not enough: a re-rendered box is a new element that starts at 0, so the position always differs. **[7b]** fixed in the B4 review.
   - [minor] The roster's row-header hovers (Tier, Base HP, ..., Banner, Win estimate) are `title` only, so a phone cannot read them (the
     Banner "?" chip and the cells use `tip`). The Win estimate hover now says its own screen's gear (`opts.estimateTip`). Not
-    changed here: giving every row header `tip()` is a one-line change for B5's pass.
+    changed here: giving every row header `tip()` is a one-line change for B5's pass. **[7b]** fixed in B5 (`tip()`).
   - [minor] A run keeps going when the player leaves the Adventurer tab; the final re-render then redraws whichever tab is open
-    (harmless, but it does re-render once).
+    (harmless, but it does re-render once). **[7b]** fixed in 7b (see numbered note 1: a run only redraws the screen that started it).
   - [minor] Hand-checked in headless Chromium (1280 and 390 px): Adventurer tab and plan screen fill the estimate row by themselves,
     the plan reuses the Adventurer tab's results, spending a point and ticking gear restarts it, Confirm passes the shown estimate to
     the Today panel and the report, no console errors, no horizontal overflow. The touch popover on the ⚠ / ✓ icons was not tapped
-    on a real touch device.
+    on a real touch device. **[7b]** the touch popover on the warning icon is now checked: with touch emulation at 390 px a tap on the plan screen's warning icon opens the popover with its "Could break ..." lines (7b).
 
 **Tests (B4)**
 - New: `tests/groups.test.mjs` (banners: a win counts, a draw / loss does not, a pack mule per `defeatsPerReward` wins of the most-
@@ -817,25 +817,25 @@ what was done instead and which batch it touches.
      ore' in the filter; the field ends with 'C' or 'Co' and focus on BODY. Without visiting Adventurer it keeps the
      text. A run took 191 ms; with 10x10 counts and more gear it is longer. The earlier "harmless" is not quite true.
      Expected: when the screen that started the run (`est_scope.id`) is not on screen, only update the cache and
-     `paint()`, with no full re-render.
+     `paint()`, with no full re-render. **[7b]** fixed in 7b: `scheduleEstimates` marks `ctx.ui.est_screen`, `render()` clears it, and a run only calls `ctx.rerender()` while its own screen is the one shown (otherwise it paints). Repro (`rerender.cjs`, plan6 save, Adventurer then Log, type "Copper ore"): before, focus on BODY and "C"; after, focus kept and the full text. Two new estimates tests.
   2. [minor] Going back to a cached selection leaves the old run going, so the status says 'Estimating 1 of 7...' over
      finished numbers. `scheduleEstimates`: when `jobsFor(current scope)` is empty it clears the timer and returns but
      does not cancel `ctx.ui.est_run`. Repro: `scratchpad/v2/review/node/stale.mjs` (A finishes, switch to B and wait
      out the debounce, switch back to A): `estimatesPending` true, status 'Estimating 1 of 7...', B's run still going,
      one extra rerender at its end. Plan 4.9: one run at a time, jobs = enemies without a cached result for the CURRENT
-     key. Expected: cancel a run whose sig differs from the current scope even when the current scope needs no jobs.
+     key. Expected: cancel a run whose sig differs from the current scope even when the current scope needs no jobs. **[7b]** fixed in 7b: `scheduleEstimates` cancels a run whose signature differs from the current selection even when the current selection needs no jobs; new test (status null, no extra redraw).
   3. [minor] The warning icon also marks a blunted sword gem, not only gear that could break (documented deviation).
      `js/ui/endday.js` `gearFlag`: `if (n.kind === 'warn' && !icon) icon = 'warn'`. Plan 4.14: ONE icon slot (warning =
      could break against the chosen enemy, else the toughest tier; check = its gem answers a visible High special), and
      the blunted note belongs in the hover. In play (plan5 vs Orc Brute) a 100% 'D Copper Sword +Topaz C' shows the same
      icon as the 3% helmet that could break; only the hover tells them apart. R11 asks for a warning next to gear that
-     could break. The legend explains it. Expected: no icon for a blunted gem (hover only), or a different glyph.
+     could break. The legend explains it. Expected: no icon for a blunted gem (hover only), or a different glyph. **[7b]** kept: a documented deviation (the legend names both reasons and a test pins it); hover-only would leave a sword gem blunted by a visible High resistance with no cue, and a second glyph needs a plan change (4.14 has one icon slot).
   4. [minor] Adventurer tab gear table does not fit at 360 px (fits at 390). Measured with
      `scratchpad/v2/review/adv-rr.cjs` (plan5 save, after confirm). At 390 px the table is 328 px in a 328 px box; at
      360 px it is 325 px in a 298 px box, so the 'Packed (away)' / 'Home' column is cut off by 27 px and needs a
      sideways scroll (the warning icon is still visible, no page overflow). Contributing cause: `durabilityNode` adds
      the 22 px icon slot on could-break rows only (`css/ui-adventurer.css .adv-geartable .adv-dur span.adv-flag`), so
-     bars on risky and safe rows do not line up. The shared `gearTable` is batch 5's (plan 4.18); FYI.
+     bars on risky and safe rows do not line up. The shared `gearTable` is batch 5's (plan 4.18); FYI. **[7b]** fixed in B5.
 
 **Batch 5 (player-facing UI: workshop, gear list, inventory, battle report and loss analysis, combat log, score, top bar, Help)**
 - **New files:** `js/core/replay.js` (loss analysis), `js/ui/inventory.js` (Storage and gear), `js/ui/gearlist.js` (the shared `gearTable`),
@@ -920,19 +920,19 @@ what was done instead and which batch it touches.
     pins it).
 - **Batch 5 open notes**
   - [minor] Not changed: B4 note 3 (the warning icon also marks a blunted sword gem). The plan has one ⚠ for could-break; B4 kept a second reason on the same icon
-    and a test pins it. Changing it means a different glyph or hover-only (a sword with a blunted gem would then have no visible cue).
+    and a test pins it. Changing it means a different glyph or hover-only (a sword with a blunted gem would then have no visible cue). **[7b]** kept (see B4 note 3).
   - [minor] Not changed (not in this batch's files): B2 `craft()` / `repair()` XP without `xpPerUnit`; `travelMinutes` repeating the `loadPenaltyPct` formula; B3
-    `startFillMax` pinned in the request-pins test; B4 estimate re-render notes (estimates.js).
+    `startFillMax` pinned in the request-pins test; B4 estimate re-render notes (estimates.js). **[7b]** fixed in 7b: the two B2 notes, the `startFillMax` pin and both estimate re-render notes (each marked above).
   - [minor] The Workshop scrap sentence still uses the shown durability for the arithmetic ("35% of its 2 bars x 63%") while the bars returned use the exact value
-    (B3 note, unchanged).
-  - [minor] README (night repairs, 10 x 10 estimate, Estimate all) and CHANGELOG are B7's.
+    (B3 note, unchanged). **[7b]** kept: durability is shown whole by house rule (R9) and the exact value is never printed, so the sentence's arithmetic can be 0.01 off the bars returned; a fix would print decimals or change the scrap rule.
+  - [minor] README (night repairs, 10 x 10 estimate, Estimate all) and CHANGELOG are B7's. **[7b]** kept: the docs pass (7c).
   - [minor] Top-bar clock and work-day bar hovers are title-only, so a phone cannot read them: `js/main.js:157` (timebar `title: day.label`) and `js/main.js:174`
     (`.timestat` `title: clock.label`) use a plain `title` instead of the `tip()` helper (house rule: hover details also work on touch; plan 4.17 gives dayProgress's
     label as the hover text). Both lines were also title-only in 1.2. The visible "08:00 10h left" text covers most of it. Fix: spread `...tip(clock.label)` /
-    `...tip(day.label)`.
+    `...tip(day.label)`. **[7b]** fixed in 7b: `...tip(clock.label)` / `...tip(day.label)` (also the version label, the pile count and the Return time); a spec guard pins the two; Chromium touch at 390 px: a tap on the clock, the bar and the version opens the popover, a second tap on the clock closes it.
   - [minor] Storage and gear: the gem table scrolls by 2 px at 390 px. `css/ui-workshop.css` `.inv-gemtable { min-width: 330px; }` sits in a 328 px `.ws-scroll` box
     at 390 px (Chromium: scrollWidth 330 vs clientWidth 328). The page does not overflow, but the gem block gets a scrollbar. Lower the min-width to about 320 px or
-    tighten the cell padding; at 360 px the scroll box is still needed.
+    tighten the cell padding; at 360 px the scroll box is still needed. **[7b]** fixed in 7b: `.inv-gemtable { min-width: 280px }` (its content needs about 252 px); Chromium: scrollWidth = clientWidth at 390 (328) and 360 (298), the table still scrolls in a narrower box.
 
 **Tests (B5)**
 - New `tests/replay.test.mjs`: `replayStats` (deterministic, totals and the five parts add up, a lethal / harmless enemy, `closeCut`), `analyzeLossSync` equals
@@ -1045,17 +1045,17 @@ what was done instead and which batch it touches.
   - Comments and docs that said the tool runs on older versions are corrected (the optional-export guards for `freshCellCount` / `simCounts` are plain imports now; BENCHMARKS.md "Adding a new version" step 3 says to run the old tree's own tool).
 - **Batch 6 open notes**
   - [minor] The careful persona prefers champions as soon as its estimate is 90%+ (expected value p x (score + 1000) is larger for a champion): 62% of its fights overall and 71% on days 11-40 are champions, 4 of 100 runs
-    die on day 2 (seeds 15, 18, 38 and 42 of the benchmark list, each against a champion estimated at 100%). That is the plan's rule with the plan's numbers, not a bot bug; B7's difficulty pass (T-D) sets the picture.
-  - [minor] `bannerBonus` 10 and `ringPoints` 1 (B4 guesses) are still untuned; with the champion rule above they hardly matter. `--set` cannot reach them (they are tool settings in `botParams`).
+    die on day 2 (seeds 15, 18, 38 and 42 of the benchmark list, each against a champion estimated at 100%). That is the plan's rule with the plan's numbers, not a bot bug; B7's difficulty pass (T-D) sets the picture. **[7b]** kept: the plan's rule with the plan's numbers, not a bot bug; recorded as the T-P miss (docs/TUNING-2.0.md note 4).
+  - [minor] `bannerBonus` 10 and `ringPoints` 1 (B4 guesses) are still untuned; with the champion rule above they hardly matter. `--set` cannot reach them (they are tool settings in `botParams`). **[7b]** kept (tool settings; see the B4 note).
   - [minor] The tool's `--section all` stays economy + power + bot; running all eight sections of section 9 is eight commands (about 14 minutes in all with `--jobs`). A one-command "everything" would need the benchmark's
-    child processes to be shared, so it was left out.
+    child processes to be shared, so it was left out. **[7b]** kept: a design choice stated in the tool's header; a one-command run of everything needs the benchmark's child processes shared.
   - [minor] `README.md` (the `--section` list, `--persona`, `--intel`), `docs/BALANCE.md` and the HANDOFF file table and "Balance status" still describe 1.2's tool: B7. `docs/BENCHMARKS.md` is restructured (2.0 table empty on purpose,
-    the 1.x text moved unchanged under "1.x (old world, history only)").
-  - [minor] `tests/sim.test.mjs:307` unused variables (B2 note) and the B2 `craft()` / `repair()` XP note are outside this batch's files and not touched.
-  - [minor] SUMMARY flags count n/a target rows as misses: `tools/balance.mjs:239-246` `targetFlags()` uses `bad = mine.filter((r) => r[4] !== 'ok')`, so an 'n/a' row adds to `MISS k/n` when another row of the same id is LOW or HIGH. Repro: `node tools/balance.mjs --section benchmark --quick --seeds 2 --days 5` (table: T-D 3 LOW + 1 n/a, summary `T-D MISS 4/4`; T-P 1 LOW + 3 n/a, summary `T-P MISS 4/8`; with `--days 1` `T-P MISS 7/8`). Expected: MISS counts only LOW / HIGH, n/a apart (for example `MISS 1/5, 3 n/a`). Full-length runs are not affected.
-  - [minor] Median-life targets are judged when the median is cut off by `--days`: `tools/balance.mjs:2967` `lifeNum = (st) => (st.medLife === Infinity ? D + 1 : st.medLife)`. With more than half the runs alive at `--days` only '>D' is known, yet 'careful: median life (days)' prints D+1 and LOW, and 'careful - champion: median life (days)' prints 0.0 and LOW when both are cut off (`--section benchmark --quick --seeds 1 --days 3`). Expected: n/a, the rule the B6 review applied to alive % after `--days`. The 100-day benchmark is not affected today.
-  - [minor] `docs/BENCHMARKS.md:21` says the careful planner 'fights only when it is at least 90%'. The game needs a fight every day: `pickEnemy` (`tools/balance.mjs:2229-2230`) takes the largest p when no enemy reaches minWin (the bot section counts these as 'no-safe-option fights'; plan 8.3: 'none -> max p'). Suggested wording: 'takes the fight with the best expected value among those it is at least 90% sure of, else the surest one'.
-  - [minor] Economy SUMMARY hard-codes the +12 / +32% efficiency labels: `tools/balance.mjs:758` `searchesAtBonus = { 0: meanKs[0], 12: meanKs[1], 32: meanKs[4] }` and line 1078 prints 'searches per clear cell +0/+12/+32%'. The bonuses come from CONFIG (`skills.activity.searchEff.effects.searchEff` x maxLevel = 1.2 x 10, and the S ring 20 + 12), so if B7 changes either value the label and keys go stale. Expected: build the label from effSkill and from S ring + effSkill.
+    the 1.x text moved unchanged under "1.x (old world, history only)"). **[7b]** kept: the docs pass (7c).
+  - [minor] `tests/sim.test.mjs:307` unused variables (B2 note) and the B2 `craft()` / `repair()` XP note are outside this batch's files and not touched. **[7b]** fixed in 7b (both).
+  - [minor] SUMMARY flags count n/a target rows as misses: `tools/balance.mjs:239-246` `targetFlags()` uses `bad = mine.filter((r) => r[4] !== 'ok')`, so an 'n/a' row adds to `MISS k/n` when another row of the same id is LOW or HIGH. Repro: `node tools/balance.mjs --section benchmark --quick --seeds 2 --days 5` (table: T-D 3 LOW + 1 n/a, summary `T-D MISS 4/4`; T-P 1 LOW + 3 n/a, summary `T-P MISS 4/8`; with `--days 1` `T-P MISS 7/8`). Expected: MISS counts only LOW / HIGH, n/a apart (for example `MISS 1/5, 3 n/a`). Full-length runs are not affected. **[7b]** fixed in 7b: `targetFlags` (now exported) counts only LOW / HIGH rows out of the rows that could be judged and prints n/a rows apart (`T-D MISS 2/2 (2 n/a)`, `T-B1 ok (1 n/a)`, all n/a -> `n/a`); unit test plus the `--days 5` run.
+  - [minor] Median-life targets are judged when the median is cut off by `--days`: `tools/balance.mjs:2967` `lifeNum = (st) => (st.medLife === Infinity ? D + 1 : st.medLife)`. With more than half the runs alive at `--days` only '>D' is known, yet 'careful: median life (days)' prints D+1 and LOW, and 'careful - champion: median life (days)' prints 0.0 and LOW when both are cut off (`--section benchmark --quick --seeds 1 --days 3`). Expected: n/a, the rule the B6 review applied to alive % after `--days`. The 100-day benchmark is not affected today. **[7b]** fixed in 7b: `lifeNum` is NaN when more than half the runs are alive at `--days`, so "careful: median life" and "careful - champion: median life" print n/a; asserted in the `--days 5` benchmark test.
+  - [minor] `docs/BENCHMARKS.md:21` says the careful planner 'fights only when it is at least 90%'. The game needs a fight every day: `pickEnemy` (`tools/balance.mjs:2229-2230`) takes the largest p when no enemy reaches minWin (the bot section counts these as 'no-safe-option fights'; plan 8.3: 'none -> max p'). Suggested wording: 'takes the fight with the best expected value among those it is at least 90% sure of, else the surest one'. **[7b]** fixed in 7b: "takes the fight with the best expected value among the enemies it is at least 90% sure of, else the surest one" (the tool's pick text says the same). Line 86 sits in the 1.x history, where it is accurate.
+  - [minor] Economy SUMMARY hard-codes the +12 / +32% efficiency labels: `tools/balance.mjs:758` `searchesAtBonus = { 0: meanKs[0], 12: meanKs[1], 32: meanKs[4] }` and line 1078 prints 'searches per clear cell +0/+12/+32%'. The bonuses come from CONFIG (`skills.activity.searchEff.effects.searchEff` x maxLevel = 1.2 x 10, and the S ring 20 + 12), so if B7 changes either value the label and keys go stale. Expected: build the label from effSkill and from S ring + effSkill. **[7b]** fixed in 7b: the keys and the label come from the bonuses in CONFIG (skill effect x max level; S ring + that skill); a test moves the skill value with `--set` and checks the label follows.
 
 **Tests (B6)**
 - New `tests/personas.test.mjs` (28 tests; 16 s because eight of them run the tool's command line): `PERSONAS` shape (exactly careful / champion / casual, every key the bot reads, every pick's own keys, lists end in the catch-all); `botParams`
@@ -1070,16 +1070,38 @@ what was done instead and which batch it touches.
 - No existing test changed. `npm test`: 589 tests (561 + 28), all green.
 
 **Batch 7 (tuning) — Batch 7 tuning open notes**
-- [minor] T-GEAR (c) is in band only as an average: above the bands on days 10-20, below on days 31-40. Bot section (40 seeds, true chance vs every roster enemy): days 10-20 elite 96.9 / champion 90.5 (above 90 / 75); days 21-30 87.0 / 71.9 (in band); days 31-40 65.7 / 43.1 (below 75 / 50). Unmeasured days 3-9: 98.6-98.8 / 94-96. The plan defines (c) as the mean over days 10-40 (86.3 / 73.3), so not a miss. But for about the first 20 days of a run with median length about 31 days, a careful player wins about 95% against champions, and the user's geared range is 50-75. The log reports only the mean. Mostly structural (linear enemy growth, stepwise gear). Untried lever: T-B1 sits at the fast edge of every band (first iron day 3 vs 3-6, 3 iron slots day 6 vs 6-9, first steel day 9 vs 8-12, 3 steel slots day 13 vs 12-16); a slower early economy plus lower growth could flatten the curve. At minimum, record the per-window spread in BALANCE.md Known misses.
-- [minor] T-P careful - casual at day 20 is a real miss of about 11 points, not noise. +7 (73 vs 66) at 100 seeds; at 200 seeds careful 66% vs casual 67% = -1 (target >= +10). At day 10: 81 vs 90 = -9. The careful planner is not safer than casual until about day 20, because of early champion picks made on the noisy 5x5 estimate. Priority 3, predates tuning (B5: -5). The log's 'within noise' and 'MISS (-3)' should say the miss is real and give the 200-seed numbers.
-- [minor] T-GEAR (b) elite 82.1 vs 85-90: priority-1 miss, conflict confirmed by in-memory --set runs. Triple-strength armor gems give kit3 85.9 (matches log) but kit3 champion 75.8 and resistances pass their cap. unarmedDamage 13.5 + elite 85.5/9.75: kit3 85.3, kit2 81.4 (above 80), unarmed elite 0H 54 (above user's 50). unarmedDamage 13 + same elite: kit2 81.4, unarmed 2H+ 26.5 (below user's 30). unarmedDamage 13.5 + elite 86/9.8: kit2 80.6, kit3 84.7, 0H 52.2. kit3 reaches 85 only when kit2 is about 81+, and 0H/2H+ elite groups then leave 30-50. Conflicts with T-GEAR (a) and T-R7. Add these numbers to the log and BALANCE.md.
-- [minor] T-R7 champion sub-band misses confirmed as forced; log note 1 misstates the step size. Measured: champion mean 18.4 (8-16), 2H 17.0 (8-16), 3H 13.9 (0-6); all inside the user's 0-25 and hard limit 27. Conflict with T-GEAR (a): champion 90/10.2 (+1.1% HP / +1% damage) gives champion mean 16, 3H 12, kit2 champion 47 (below 50), kit3 champion 61 (below 65). At +1.7% (90.5/10.25) kit2 champion 44, 3H still 11.4. These match the log's 'about 15.5 / 12 / 47' but come from a +1% step, not the '+1.5-2%' the log says, so the conflict is stronger than stated. Champion spread is only 14-20, so the user's 0-13 'low end' is never reached by any group.
-- [minor] Config comments: wrong multipliers in the gemEffects comment; tiers comment contradicts itself. js/config.js gemEffects: 'resistances are about 3.75x their 1.2 values (diamond 6x...)'. Against 1.2 (997fc00), ruby magicRes is 4.5x (4..12 -> 18..54), topaz and sapphire 3.75x, diamond pierceRes 2.67x (6..18 -> 16..48), not 6x; diamond is 2x the B6 value. 'Sword gems are about as strong as before' omits the emerald accuracy rise of 40-50% ([20..60] -> [28..90]). Tiers comment: 'Fights are steep ..., so the steps are small on purpose' contradicts 'Normals sit about 7% below elites' (normal-to-elite step is +7.3% HP / +8.7% damage, about 25-30 win points).
-- [minor] Normals made much easier early and R6 stretched; the 1.2 unarmed-vs-normal band is broken and the power section still flags it. Elite base is +7.3% HP / +8.7% damage over normal (plan 4.6: tiers 'rise a little', starting step 1.25%), champion only about +1% over elite. Unarmed vs a day-2 normal is 85-86% (B5: 64; 1.2 user decision in BALANCE.md: 50-65). POWER SUMMARY still prints 'unarmed d2 vs normal 86% (target 50-65)', and section 1 flags several day-1 sets (high)/(low) against 1.2 DAY2_TARGET bands. Section 9 only asks normal >= elite + 15, so not a target miss, but the log never mentions the broken band. Stated reason is the careful bot's 90% minimum win (a game value bent around a bot threshold). The careful bot fights 89% / 99% normals on days 21-30 / 31-40. Either retire the stale power bands in the tool and docs or note the deviation.
-- [minor] Topaz and sapphire sword gems: grade S is identical to A. Topaz weapon stunChance [15,20,24,26,26] / stunDur [1,1.5,1.5,1.5,1.5]; sapphire weapon slowPct [11,16,18,19,19] / slowDur [2,2,2,2,2]. S gives nothing over A on a sword; Help's gem table shows identical columns; sapphire's whole D-S sword range is 11-19. Price of the S-swing check (headroom -1.3 topaz / -1.5 sapphire), a T-R33 trade-off; the log should state it as a feel cost.
-- [minor] Mid- and late-game feel: mythril arrives after it is obsolete; nobody survives past about day 50. T-MID misses 4/5 (iron C 10, steel C 17, mythril C 28, mythril S 44 vs 12-18 / 20-26 / 38-44 / 56-62), accepted as a consequence of T-D and T-GEAR (c) ('then recheck T-MID'). A full mythril C set stops beating a typical elite (70%) at day 28, while the careful bot reaches 3 mythril slots at day 30 (20/40 runs) and all 5 at day 36 (4/40). Alive at day 50: 0% in the bot section, 1% at 200 seeds. Per-cell T-R33 is weakest late: with the mythril set, High Chilling costs 5.3 points and sapphire armor beats emerald by only 2.6, less than emerald's own 3.0 (M7), so 'bring the matching gem' is wrong for Chilling at mythril. Pass on the plan's means; known limits.
-- [minor] Repairs: timeFraction raised 100 -> 250 (the plan's knob ran the other way); wear still destroys nothing. A full repair takes 2.5x the smithing time (a gemmed chest: 55 min to smith, 137 min to repair 0 to 100 before skills). Repair time is 3.4% of work time (T-B3 3-6%, low edge) and 0.0 items destroyed per run (1.2: 3.9). Acceptable (the only other lever, restBelow, is a bot setting), but 'repairing takes longer than making it' is counter-intuitive and should be stated in BALANCE.md.
-- [minor] Several priority-1 and other targets sit on a band edge: T-D d10 85 (top edge at 100 seeds; 81 at 200), median 31.0 (log saw 29.0 in neighbouring settings), elite 0H 49.9 (<= 50), elite 2H+ 30.7 (>= 30), T-GEAR (c) champion 73.3 (<= 75), T-B1 iron 3.0 / 6.0 (lower edges), T-B4 General repair 5.1 (>= 5), main-bar smithing 3.2 / repair 3.3 (>= 3). Any later change can flip these, so re-run the full set right before committing. The 200-seed careful row (31.0 / 81 / 96 / 89) is the more robust T-D evidence and is what BENCHMARKS.md asks for.
+- [minor] T-GEAR (c) is in band only as an average: above the bands on days 10-20, below on days 31-40. Bot section (40 seeds, true chance vs every roster enemy): days 10-20 elite 96.9 / champion 90.5 (above 90 / 75); days 21-30 87.0 / 71.9 (in band); days 31-40 65.7 / 43.1 (below 75 / 50). Unmeasured days 3-9: 98.6-98.8 / 94-96. The plan defines (c) as the mean over days 10-40 (86.3 / 73.3), so not a miss. But for about the first 20 days of a run with median length about 31 days, a careful player wins about 95% against champions, and the user's geared range is 50-75. The log reports only the mean. Mostly structural (linear enemy growth, stepwise gear). Untried lever: T-B1 sits at the fast edge of every band (first iron day 3 vs 3-6, 3 iron slots day 6 vs 6-9, first steel day 9 vs 8-12, 3 steel slots day 13 vs 12-16); a slower early economy plus lower growth could flatten the curve. At minimum, record the per-window spread in BALANCE.md Known misses. **[7b]** fixed in the log (docs/TUNING-2.0.md note 5 has the per-window spread and the untried lever); no value changed. The BALANCE.md "Known misses" entry goes with the docs pass (7c).
+- [minor] T-P careful - casual at day 20 is a real miss of about 11 points, not noise. +7 (73 vs 66) at 100 seeds; at 200 seeds careful 66% vs casual 67% = -1 (target >= +10). At day 10: 81 vs 90 = -9. The careful planner is not safer than casual until about day 20, because of early champion picks made on the noisy 5x5 estimate. Priority 3, predates tuning (B5: -5). The log's 'within noise' and 'MISS (-3)' should say the miss is real and give the 200-seed numbers. **[7b]** fixed in the log: the table row and note 4 now say the miss is real and give the 200-seed numbers (-1, 66 vs 67; day 10 -9).
+- [minor] T-GEAR (b) elite 82.1 vs 85-90: priority-1 miss, conflict confirmed by in-memory --set runs. Triple-strength armor gems give kit3 85.9 (matches log) but kit3 champion 75.8 and resistances pass their cap. unarmedDamage 13.5 + elite 85.5/9.75: kit3 85.3, kit2 81.4 (above 80), unarmed elite 0H 54 (above user's 50). unarmedDamage 13 + same elite: kit2 81.4, unarmed 2H+ 26.5 (below user's 30). unarmedDamage 13.5 + elite 86/9.8: kit2 80.6, kit3 84.7, 0H 52.2. kit3 reaches 85 only when kit2 is about 81+, and 0H/2H+ elite groups then leave 30-50. Conflicts with T-GEAR (a) and T-R7. Add these numbers to the log and BALANCE.md. **[7b]** fixed in the log (note 2 has the sweep numbers); BALANCE.md entry with the docs pass (7c).
+- [minor] T-R7 champion sub-band misses confirmed as forced; log note 1 misstates the step size. Measured: champion mean 18.4 (8-16), 2H 17.0 (8-16), 3H 13.9 (0-6); all inside the user's 0-25 and hard limit 27. Conflict with T-GEAR (a): champion 90/10.2 (+1.1% HP / +1% damage) gives champion mean 16, 3H 12, kit2 champion 47 (below 50), kit3 champion 61 (below 65). At +1.7% (90.5/10.25) kit2 champion 44, 3H still 11.4. These match the log's 'about 15.5 / 12 / 47' but come from a +1% step, not the '+1.5-2%' the log says, so the conflict is stronger than stated. Champion spread is only 14-20, so the user's 0-13 'low end' is never reached by any group. **[7b]** fixed in the log: note 1 now gives the +1.1% / +1.7% steps and their effect (the "+1.5-2%" wording is gone).
+- [minor] Config comments: wrong multipliers in the gemEffects comment; tiers comment contradicts itself. js/config.js gemEffects: 'resistances are about 3.75x their 1.2 values (diamond 6x...)'. Against 1.2 (997fc00), ruby magicRes is 4.5x (4..12 -> 18..54), topaz and sapphire 3.75x, diamond pierceRes 2.67x (6..18 -> 16..48), not 6x; diamond is 2x the B6 value. 'Sword gems are about as strong as before' omits the emerald accuracy rise of 40-50% ([20..60] -> [28..90]). Tiers comment: 'Fights are steep ..., so the steps are small on purpose' contradicts 'Normals sit about 7% below elites' (normal-to-elite step is +7.3% HP / +8.7% damage, about 25-30 win points). **[7b]** fixed: the gemEffects comment gives ruby 4.5x, topaz / sapphire 3.75x, diamond 2.67x for armor, and the sword-gem changes (emerald accuracy up, ruby down, topaz / sapphire flatter at S); the tiers comment separates the small elite-to-champion step from the large normal-to-elite one (comments only).
+- [minor] Normals made much easier early and R6 stretched; the 1.2 unarmed-vs-normal band is broken and the power section still flags it. Elite base is +7.3% HP / +8.7% damage over normal (plan 4.6: tiers 'rise a little', starting step 1.25%), champion only about +1% over elite. Unarmed vs a day-2 normal is 85-86% (B5: 64; 1.2 user decision in BALANCE.md: 50-65). POWER SUMMARY still prints 'unarmed d2 vs normal 86% (target 50-65)', and section 1 flags several day-1 sets (high)/(low) against 1.2 DAY2_TARGET bands. Section 9 only asks normal >= elite + 15, so not a target miss, but the log never mentions the broken band. Stated reason is the careful bot's 90% minimum win (a game value bent around a bot threshold). The careful bot fights 89% / 99% normals on days 21-30 / 31-40. Either retire the stale power bands in the tool and docs or note the deviation. **[7b]** fixed: noted in the log (note 6) and the config comment; the tool's power section no longer prints (low) / (high) against 1.2's day-1 bands or "target 50-65" (the day-2 targets that count are `--section day2`).
+- [minor] Topaz and sapphire sword gems: grade S is identical to A. Topaz weapon stunChance [15,20,24,26,26] / stunDur [1,1.5,1.5,1.5,1.5]; sapphire weapon slowPct [11,16,18,19,19] / slowDur [2,2,2,2,2]. S gives nothing over A on a sword; Help's gem table shows identical columns; sapphire's whole D-S sword range is 11-19. Price of the S-swing check (headroom -1.3 topaz / -1.5 sapphire), a T-R33 trade-off; the log should state it as a feel cost. **[7b]** fixed in the log (note 7 states it as a feel cost); no value changed.
+- [minor] Mid- and late-game feel: mythril arrives after it is obsolete; nobody survives past about day 50. T-MID misses 4/5 (iron C 10, steel C 17, mythril C 28, mythril S 44 vs 12-18 / 20-26 / 38-44 / 56-62), accepted as a consequence of T-D and T-GEAR (c) ('then recheck T-MID'). A full mythril C set stops beating a typical elite (70%) at day 28, while the careful bot reaches 3 mythril slots at day 30 (20/40 runs) and all 5 at day 36 (4/40). Alive at day 50: 0% in the bot section, 1% at 200 seeds. Per-cell T-R33 is weakest late: with the mythril set, High Chilling costs 5.3 points and sapphire armor beats emerald by only 2.6, less than emerald's own 3.0 (M7), so 'bring the matching gem' is wrong for Chilling at mythril. Pass on the plan's means; known limits. **[7b]** kept: the plan's means pass and the cause is T-D / T-GEAR (c); recorded in the log (note 9); balance values are frozen.
+- [minor] Repairs: timeFraction raised 100 -> 250 (the plan's knob ran the other way); wear still destroys nothing. A full repair takes 2.5x the smithing time (a gemmed chest: 55 min to smith, 137 min to repair 0 to 100 before skills). Repair time is 3.4% of work time (T-B3 3-6%, low edge) and 0.0 items destroyed per run (1.2: 3.9). Acceptable (the only other lever, restBelow, is a bot setting), but 'repairing takes longer than making it' is counter-intuitive and should be stated in BALANCE.md. **[7b]** fixed in the log (note 8 says repairing takes longer than making and why); the sentence in BALANCE.md goes with the docs pass (7c).
+- [minor] Several priority-1 and other targets sit on a band edge: T-D d10 85 (top edge at 100 seeds; 81 at 200), median 31.0 (log saw 29.0 in neighbouring settings), elite 0H 49.9 (<= 50), elite 2H+ 30.7 (>= 30), T-GEAR (c) champion 73.3 (<= 75), T-B1 iron 3.0 / 6.0 (lower edges), T-B4 General repair 5.1 (>= 5), main-bar smithing 3.2 / repair 3.3 (>= 3). Any later change can flip these, so re-run the full set right before committing. The 200-seed careful row (31.0 / 81 / 96 / 89) is the more robust T-D evidence and is what BENCHMARKS.md asks for. **[7b]** kept: recorded in the log (note 10). 7b changes no game value (a 4-seed careful bot run before and after is identical apart from the labels), so no re-run was needed; any later value change must re-run the full set.
+
+**Batch 7b (clear the open review notes; no game number changed)**
+- Every note of the "open notes" lists above is marked **[7b]** fixed or kept, with the reason. Kept ones: the documented request-pins exception (B1), the ⚠ icon for a blunted sword gem
+  (B4 note 3), the scrap sentence's 0.01 rounding (R9 whole-number durability), the tool settings `ringPoints` / `bannerBonus`, the champion rule of the careful bot, `--section all`, the
+  mid- and late-game feel and the band-edge warning (known limits, logged), and everything that is the docs pass (README, CHANGELOG, BALANCE.md, SPEC.md, the file table / save keys / release
+  step 6 above): that is the next step (7c), not a minor note.
+- **Code:** `craft()` / `repair()` XP read `xpPerUnit(skillDef(...))`; `travelMinutes` calls `loadPenaltyPct` (which takes the caller's `smithBonuses`); the top bar's clock, work-day bar,
+  version label, pile count and Return time use `tip()`; the map's Sight chip / sight row / by-distance headers / count chips, the Rings "+N if worn" and the repair previews' "Have N" use
+  `tip()` too; estimate runs only redraw the screen that started them (`ctx.ui.est_screen`, set by `scheduleEstimates`, cleared at the start of `render()`) and a run for a selection that
+  was left is cancelled even when the new selection is cached; the Debris row sentence; Help's cutting text (`skills.effects.cutBlend.text`, a string); `.inv-gemtable` min-width 330 -> 280
+  px; config comments (gemEffects multipliers, tiers) rewritten, no value touched. A 4-seed careful bot run (`--section bot --persona careful --seeds 4 --days 20`) before and after
+  prints identical numbers, labels aside.
+- **Tool and docs:** `targetFlags` (exported) counts only LOW / HIGH rows, "(k n/a)" apart; median-life targets are n/a when `--days` cuts the median off; the economy SUMMARY label and keys come
+  from CONFIG; the careful pick text says "else the highest win%"; the power section no longer judges 1.2's day-1 bands (information only; T-R7 / T-GEAR live in `--section day2`);
+  `docs/BENCHMARKS.md` careful-planner wording; `docs/TUNING-2.0.md` has the review's numbers (T-P real miss, T-GEAR (b) sweep, champion step size, per-window T-GEAR (c), S = A swords,
+  repair time, mid/late game, band edges) as notes 5-10.
+- **Tests:** 592 -> 597 (+5: craft / repair XP reads the skill definitions, two estimate tests, the `targetFlags` unit test, the economy label test); new assertions inside existing tests (the n/a /
+  median-life checks in `personas.test.mjs`, top bar `tip()` and `est_screen` guards in `spec-guards.test.mjs`, the 3-item walk through `loadPenaltyPct` in `carry.test.mjs`, the pinned scrap
+  example in `ui-render.test.mjs`). The new XP and estimates tests fail on the old code (checked); the tool tests need the new exports. The `startFillMax` pin and the single-item loop are gone, the unused variables rewritten.
+- **Hand-checked in Chromium (390 and 1280 px; 360 px for the table):** no page overflow, no console errors; the gem table fits its box (328 / 298 px) with no scrollbar; a touch tap on the
+  clock, the work-day bar and the version label opens the popover, a second tap closes it; a tap on the plan screen's ⚠ icon shows its lines (the B4 "not tapped on a touch device" FYI);
+  typing in the Log filter right after leaving the Adventurer tab keeps focus and text (before: focus on BODY, one letter left).
 
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.

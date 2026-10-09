@@ -3,7 +3,7 @@
 // All game-state changes go through core functions inside ctx.act(). UI-only state lives in ctx.ui under
 // the map_ prefix: map_sel (selected cell per field), map_new (pile items just found: { fkey, start, end }),
 // map_leave (open carry step: { from, to, bag: [bag idx], pile: [pile idx] }), map_legend (legend open).
-import { h, section, bar, clear } from './dom.js';
+import { h, section, bar, clear, tip } from './dom.js';
 import {
   travel, search, moveToPile, takeFromPile, defaultCarry, travelMinutes, returnMinutes, searchMinutes, loadPenaltyPct,
   searchEfficiency, searchEfficiencyRange, expectedSearches, searchesText, debrisClearMult, projectedLoad, fitsWithReturn, cellOpen, cellFresh, freshCellCount,
@@ -135,7 +135,7 @@ function sightTip(state, cfg) {
 }
 
 function sightChip(state, cfg) {
-  return h('span', { class: 'chip mv-sight', title: sightTip(state, cfg) }, `Sight ${round1(sightValue(state, cfg))}`);
+  return h('span', { class: 'chip mv-sight', ...tip(sightTip(state, cfg)) }, `Sight ${round1(sightValue(state, cfg))}`);
 }
 
 // [{ t, idxs: [indexes into list] }], rarest type first.
@@ -150,7 +150,7 @@ function groupByType(list) {
 
 // "Di ×3, Em ×1" chips for a list of item strings.
 function countChips(list) {
-  return groupByType(list).map((g) => h('span', { class: 'chip', title: itemName(g.t) }, itemTag(g.t), ` ×${g.idxs.length}`));
+  return groupByType(list).map((g) => h('span', { class: 'chip', ...tip(itemName(g.t)) }, itemTag(g.t), ` ×${g.idxs.length}`));
 }
 
 // 1-based "(x,y)" label for a field cell index.
@@ -415,8 +415,8 @@ function campHint(ctx) {
           ? `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.range} deeper into every cell (${sd.avg} avg, rolled per cell), so about ${sd.finish} searches finish a cell`
           : `${dur(searchMinutes(state, cfg))} per 3x3 area${fresh}; each search digs ${sd.avg} deeper into every cell, so about ${sd.finish} searches finish a cell`;
       })()),
-      h('span', { class: 'muted' }, 'Sight'), h('span', { title: sightTip(state, cfg) }, `${round1(sp.total)} (Ore sight intel ${round1(sp.intel)} + rings ${round1(sp.rings)}). In a field you see the items still in the ground whose sight threshold is within your sight${sp.total <= EPS ? '; right now that is nothing' : ''}.`),
-      h('span', { class: 'muted' }, 'Debris'), h('span', {}, `about ${f.debrisChance}% of cells, ${f.debrisAmount.min}-${f.debrisAmount.max} thick (number on the cell). Searching clears it first: ${pw.range} per cell per search${pw.skillPct > EPS ? ` (Debris clearing skill +${round1(pw.skillPct)}%)` : ''}; leftover effort searches the cell. Boulders (${bMin === bMax ? bMin : `${bMin}-${bMax}, more far away`} per field) can never be searched.`),
+      h('span', { class: 'muted' }, 'Sight'), h('span', tip(sightTip(state, cfg)), `${round1(sp.total)} (Ore sight intel ${round1(sp.intel)} + rings ${round1(sp.rings)}). In a field you see the items still in the ground whose sight threshold is within your sight${sp.total <= EPS ? '; right now that is nothing' : ''}.`),
+      h('span', { class: 'muted' }, 'Debris'), h('span', {}, `about ${f.debrisChance}% of cells, ${f.debrisAmount.min}-${f.debrisAmount.max} thick (number on the cell). Searching clears it first: ${pw.range} per cell per search${pw.skillPct > EPS ? ` (Debris clearing skill +${round1(pw.skillPct)}%)` : ''}; leftover effort searches the cell. ${bMin === bMax ? bMin : `${bMin}-${bMax}`} boulders per field${bMin === bMax ? '' : ' (more far from camp)'} can never be searched.`),
       h('span', { class: 'muted' }, 'Carrying'), h('span', {}, `Found items go to that field's pile (no limit). When you leave a field you choose up to ${cfg.bag.slots} to carry; the rest waits in the pile.`),
       h('span', { class: 'muted' }, 'Field piles'), piles.length
         ? h('span', {}, `${plural(pileTotal, 'item')} in ${plural(piles.length, 'field')}: `, piles.map((p, i) => [i ? ' · ' : '', h('b', {}, `(${p.c.x + 1},${p.c.y + 1})`), ` ${p.n}`]))
@@ -467,14 +467,14 @@ function oddsTable(ctx) {
   });
   const th = (label, attrs = {}) => h('th', { class: 'num', ...attrs }, label);
   const head = h('tr', {},
-    th('Distance', { title: 'Steps from camp, walking around blocked cells' }),
-    th('Fields', { title: 'Number of fields at this distance on your map' }),
-    th('Walk out / back', { title: 'Walking time from camp and back, carrying nothing' }),
-    th('Cells with items', { title: `Chance each cell holds items (in brackets: under debris, +${f.debrisLootBonus} points)` }),
-    th('Boulders', { title: 'Boulder cells in each field at this distance: they can never be searched and hold nothing' }),
-    th('Items / field', { title: `Expected items in a whole ${f.size}x${f.size} field (${countRange} per loot cell, about ${round1(avgCount)} on average)` }),
-    ...ORES.map((o, i) => h('th', { class: `num${i === 0 ? ' mv-sep-l' : ''}`, title: `${cap(o)} ore: % of the items found at this distance` }, itemTag(`ore:${o}`))),
-    h('th', { class: 'num mv-sep-l', title: 'Raw gems (every gem type equally likely): % of the items found at this distance' }, 'Gems'));
+    th('Distance', tip('Steps from camp, walking around blocked cells')),
+    th('Fields', tip('Number of fields at this distance on your map')),
+    th('Walk out / back', tip('Walking time from camp and back, carrying nothing')),
+    th('Cells with items', tip(`Chance each cell holds items (in brackets: under debris, +${f.debrisLootBonus} points)`)),
+    th('Boulders', tip('Boulder cells in each field at this distance: they can never be searched and hold nothing')),
+    th('Items / field', tip(`Expected items in a whole ${f.size}x${f.size} field (${countRange} per loot cell, about ${round1(avgCount)} on average)`)),
+    ...ORES.map((o, i) => h('th', { class: `num${i === 0 ? ' mv-sep-l' : ''}`, ...tip(`${cap(o)} ore: % of the items found at this distance`) }, itemTag(`ore:${o}`))),
+    h('th', { class: 'num mv-sep-l', ...tip('Raw gems (every gem type equally likely): % of the items found at this distance') }, 'Gems'));
   const last = f.byDistance.length;
   return h('div', {},
     h('div', { class: 'mv-scroll' }, h('table', { class: 'mv-odds' }, h('thead', {}, head), h('tbody', {}, rows))),

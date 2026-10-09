@@ -1,7 +1,7 @@
 import { CONFIG, GRADES, SLOTS } from '../config.js';
 import { round1, round2, EPS, cap, qtyText } from './util.js';
 import { smithBonuses } from './bonuses.js';
-import { addXp, itemXp } from './skills.js';
+import { addXp, skillDef, xpPerUnit } from './skills.js';
 
 // Final stats for one gear item, including its gem infusion.
 export function gearStats(item, cfg = CONFIG) {
@@ -147,7 +147,8 @@ export function craft(state, spec, cfg = CONFIG) {
   state.gear.push(item);
   state.time += minutes;
   const notes = [];
-  addXp(state, `smith_${spec.material}`, cfg.gear.slots[spec.slot].bars * itemXp(spec.material, cfg), notes, cfg);
+  const smithKey = `smith_${spec.material}`;
+  addXp(state, smithKey, cfg.gear.slots[spec.slot].bars * xpPerUnit(skillDef(smithKey, cfg), cfg), notes, cfg);
   return { ok: true, item, minutes, notes, msg: `Crafted ${gearName(item)} (${minutes}m).` };
 }
 
@@ -299,8 +300,9 @@ export function repair(state, id, cfg = CONFIG) {
   state.time += plan.minutes;
   const notes = [];
   const points = plan.missing * cfg.gear.slots[item.slot].bars;
-  addXp(state, `repair_${item.material}`, points * cfg.skills.perMaterial.repair.xp, notes, cfg);
-  addXp(state, 'repairTime', points * cfg.skills.activity.repairTime.xp, notes, cfg);
+  const repairKey = `repair_${item.material}`;
+  addXp(state, repairKey, points * xpPerUnit(skillDef(repairKey, cfg), cfg), notes, cfg);
+  addXp(state, 'repairTime', points * xpPerUnit(skillDef('repairTime', cfg), cfg), notes, cfg);
   const warn = substituteWarning(plan);
   return {
     ok: true,

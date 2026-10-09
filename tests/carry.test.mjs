@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { CONFIG, ORES } from '../js/config.js';
 import {
   setCarry, defaultCarry, moveToPile, takeFromPile, travel, search, projectedLoad, fitsWithReturn, returnMinutes,
-  travelMinutes, searchMinutes, currentField, atCamp, key,
+  travelMinutes, searchMinutes, currentField, atCamp, key, loadPenaltyPct,
 } from '../js/core/map.js';
 import { endDay, confirmPlan, serialize, deserialize } from '../js/core/game.js';
 import { game, cfgWith, customMap, blankField, cell, idx, fieldAt, fieldOf, DAY_START, DAY_END } from './helpers.mjs';
@@ -232,6 +232,8 @@ test('travel with a carry selection takes exactly that; travel time uses the car
   assert.equal(r.ok, true, r.msg);
   assert.equal(r.minutes, travelMinutes(s, FAR, s.map.camp, 3, CFG));
   assert.equal(r.minutes, 41.2); // 2 steps x 20 x 1.03
+  // the same walk worked out from the load penalty the rest of the game reads (loadPenaltyPct)
+  assert.equal(r.minutes, Math.round(2 * CFG.map.travelMinPerStep * (1 + (3 * loadPenaltyPct(s, CFG)) / 100) * 10) / 10);
   assert.match(r.msg, /Unloaded 3 items/);
   assert.deepEqual(s.bag, []);
   assert.equal(s.storage.ore.copper, 1);

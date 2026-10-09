@@ -1,6 +1,6 @@
 // Rings tab: owned rings per wearer (smith / adventurer), wear toggles, stacking, totals, reference tables.
 // All game-state changes go through toggleRing() inside ctx.act(). UI-only state: ctx.ui.rings_filter.
-import { h, num } from './dom.js';
+import { h, num, tip } from './dom.js';
 import { GRADES, TIERS } from '../config.js';
 import { toggleRing, ringTotals, ringContributions, ringValue, ringDef, wornRings, smithRingLock } from '../core/rings.js';
 import { cap } from '../core/util.js';
@@ -137,7 +137,7 @@ function ownerPanel(ctx, owner) {
       counts = h('span', {}, h('b', {}, num(c.effective, 2)), ' ', h('span', { class: 'muted' }, def.stack === false && c.factor === 0 ? `(only your best ${def.name} ring counts)` : `(${fmtPct(c.factor * 100)})`));
     } else {
       const gain = ringTotals([...worn, r], cfg)[r.type] - (totals[r.type] || 0);
-      counts = h('span', { class: 'muted', title: 'How much the total for this type would rise if you wore it now' }, `+${num(gain, 2)} if worn`);
+      counts = h('span', { class: 'muted', ...tip('How much the total for this type would rise if you wore it now') }, `+${num(gain, 2)} if worn`);
     }
     const lock = owner === 'smith' ? smithRingLock(state, cfg) : null;
     const btn = h('button', {

@@ -237,12 +237,17 @@ function printTargets(rows, title = 'Targets (docs/PLAN-2.0.md section 9)') {
   h2(title);
   printTable(['id', 'what', 'measured', 'target', 'flag'], [...rows].sort((a, b) => a[0].localeCompare(b[0])));
 }
-function targetFlags(rows) {
+// One short flag per target id: "T-D ok", "T-D MISS 2/4" (LOW or HIGH rows out of the rows that could be judged), "T-P n/a" (nothing
+// could be judged); rows that are n/a (a day after --days, nothing measured) are never misses and show as "(2 n/a)" next to a judged result.
+export function targetFlags(rows) {
   const ids = [...new Set(rows.map((r) => r[0]))];
   return ids.map((id) => {
     const mine = rows.filter((r) => r[0] === id);
-    const bad = mine.filter((r) => r[4] !== 'ok');
-    return bad.length ? `${id} ${bad.every((r) => r[4] === 'n/a') ? 'n/a' : `MISS ${bad.length}/${mine.length}`}` : `${id} ok`;
+    const na = mine.filter((r) => r[4] === 'n/a').length;
+    const judged = mine.length - na;
+    if (!judged) return `${id} n/a`;
+    const bad = mine.filter((r) => r[4] === 'LOW' || r[4] === 'HIGH').length;
+    return `${id} ${bad ? `MISS ${bad}/${judged}` : 'ok'}${na ? ` (${na} n/a)` : ''}`;
   }).join(' ');
 }
 
@@ -728,15 +733,15 @@ function economySection(o) {
   check(T_ROWS, 'T-E3', '% of maps with 6 or more fields at distance 5+', farOk, 99, null, 0);
   check(T_ROWS, 'T-E3', 'attempts per map (mean)', attemptsMean, null, 2, 2);
   let searchesPerCell = NaN;
-  let searchesAtBonus = {};
+  let searchesAtBonus = []; // { bonus: the search-efficiency bonus in %, k: mean searches per clear cell } for the SUMMARY: none, the skill at its top level, S ring + that skill
   {
     // Searches needed to finish one cell (each search rolls eff +/- searchRandomness for that cell).
     const rng = seededRng(mixSeed(4040, 1));
     const r = cfg.field.searchRandomness || 0;
     const meanKs = [];
     const effSkill = cfg.skills.activity.searchEff.effects.searchEff * cfg.skills.maxLevel; // % at the highest skill level
-    const rows = [0, effSkill, cfg.rings.types.searchEff.values[1], cfg.rings.types.searchEff.values[4],
-      cfg.rings.types.searchEff.values[4] + effSkill].map((bonus) => {
+    const bonuses = [0, effSkill, cfg.rings.types.searchEff.values[1], cfg.rings.types.searchEff.values[4], cfg.rings.types.searchEff.values[4] + effSkill];
+    const rows = bonuses.map((bonus) => {
       const eff = cfg.field.searchEfficiency * (1 + bonus / 100);
       const hist = {};
       const T = 20000;
@@ -756,7 +761,7 @@ function economySection(o) {
     });
     note(`Searches per clear cell, by search-efficiency bonus (0 / skill ${cfg.skills.maxLevel} / C ring / S ring / S ring + skill ${cfg.skills.maxLevel}):\n  ` + rows.join('\n  '));
     searchesPerCell = meanKs[0]; // at +0% efficiency
-    searchesAtBonus = { 0: meanKs[0], 12: meanKs[1], 32: meanKs[4] }; // +0 / +12 (skill 10) / +32% (S ring + skill 10)
+    searchesAtBonus = [0, 1, 4].map((i) => ({ bonus: bonuses[i], k: meanKs[i] })); // both bonuses come from CONFIG (the skill's effect x its top level, the S ring value)
     // ... and a debris cell (mean thickness), by debris skill level
     const dm = (cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2;
     const dRows = [0, 5, 10].map((lv) => {
@@ -1076,7 +1081,7 @@ function economySection(o) {
     ` | full set >=D work days: ${BARS.map((b) => `${b} ${f1(setDays[b])}`).join(', ')}` +
     ` | gem cut skill 0: F ${f0(gemCut.novice.F)}% C+ ${f0(gemCut.novice.S + gemCut.novice.A + gemCut.novice.B + gemCut.novice.C)}% effect ${f2(gemCut.eff0)} of C` +
     ` | map items/run ${f0(sum(Object.values(totals)) / N)} (mythril ${f1((totals['ore:mythril'] || 0) / N)}, coal ${f0((totals['ore:coal'] || 0) / N)})` +
-    ` | searches per clear cell +0/+12/+32%: ${f2(searchesAtBonus[0])}/${f2(searchesAtBonus[12])}/${f2(searchesAtBonus[32])}` +
+    ` | searches per clear cell ${searchesAtBonus.map((x) => `+${Number.isInteger(x.bonus) ? x.bonus : f1(x.bonus)}`).join('/')}%: ${searchesAtBonus.map((x) => f2(x.k)).join('/')}` +
     ` | map ${f1(fieldsPerMap)} fields, ${f0(farOk)}% of maps with 6+ at d5+, ${f2(attemptsMean)} attempts` +
     ` | sight value/trip-hour d5-6 s20/s60 vs 0: ${signed(sightGain(20))}%/${signed(sightGain(60))}%` +
     ` | ${targetFlags(T_ROWS)}`);
@@ -1179,10 +1184,9 @@ const DAY1_LOADOUTS = [
   { name: 'Copper C full set (lucky day 1)', gear: () => setOf('copper', 'C') },
   { name: 'Iron C sword + copper C boots', gear: () => [mkItem('sword', 'iron', 'C'), mkItem('boots', 'copper', 'C')] },
 ];
-// Day-2 bands. 1.2 (user, session 6): an UNARMED adventurer beats a typical normal enemy on day 2 about 50-65%
-// of the time, and a copper D sword is ~+50% over unarmed, so the sensible day-1 sets sit well above the
-// 1.1 bands (normal 85-98, elite 50-75, champion 15-40). The mid-game targets (power section 2/3) did not change.
-const UNARMED_TARGET = [50, 65];
+// (No day-2 bands here: 1.2's "unarmed beats a normal 50-65%" and its day-1 set bands were retired in 2.0. The elite is
+// about 7-9% stronger than a normal in HP and damage, normals are an easy fight on purpose, and the day-2 targets that count
+// (T-R7, T-GEAR) are judged by --section day2. The power section's first table is information.)
 // T-MID: the plain sets whose "last day with >= 70% vs a typical elite" the plan pins to 1.2's value (measured by this tool on 1.2's
 // numbers: ref12), within +-ANCHOR_WINDOW days.
 const ANCHORS = [
@@ -1190,7 +1194,6 @@ const ANCHORS = [
   { set: ['mythril', 'C'], ref12: 41 }, { set: ['mythril', 'S'], ref12: 59 },
 ];
 const ANCHOR_WINDOW = 3;
-const DAY2_TARGET = { normal: [95, 100], elite: [75, 95], champion: [40, 75] };
 
 function powerSection(o, T) {
   const S = o.samples ?? (o.quick ? 20 : 100);
@@ -1199,15 +1202,10 @@ function powerSection(o, T) {
 
   // ---- 1. the first fight
   const S2 = o.quick ? 40 : 200;
-  h2(`1. Day-2 fight with day-1 gear (unarmed vs normal ${UNARMED_TARGET.join('-')}%; sets: normal ${DAY2_TARGET.normal.join('-')}%, elite ${DAY2_TARGET.elite.join('-')}%, champion ${DAY2_TARGET.champion.join('-')}%; ${S2} x ${E} fights)`);
+  h2(`1. Day-2 fight with day-1 gear (information; T-R7 and T-GEAR are judged by --section day2; ${S2} x ${E} fights)`);
   const day2 = DAY1_LOADOUTS.map((l) => ({ ...l, w: Object.fromEntries(TIERS.map((t, ti) => [t, winPct(l.gear(), {}, t, 2, S2, E, mixSeed(222, ti))])) }));
-  const mark = (t, v, l) => {
-    // the unarmed row is only judged against normal enemies (target 50-65%); other tiers are shown for reference
-    const [lo, hi] = l.unarmed ? (t === 'normal' ? UNARMED_TARGET : [0, 100]) : DAY2_TARGET[t];
-    return v < lo - EPS ? ' (low)' : v > hi + EPS ? ' (high)' : '';
-  };
-  printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => `${f1(l.w[t])}${mark(t, l.w[t], l)}`)]));
-  note('* = the reference "sensible day 1" used in the summary line. (low)/(high) = outside the target band (unarmed vs normal: ' + UNARMED_TARGET.join('-') + '%).');
+  printTable(['day-1 loadout', ...TIERS.map((t) => `vs ${t}`)], day2.map((l) => [`${l.ref ? '* ' : '  '}${l.name}`, ...TIERS.map((t) => f1(l.w[t]))]));
+  note('* = the reference "sensible day 1" used in the summary line.');
 
   // ---- 2. archetypes over time
   const days = [2, 5, 10, 15, 20, 30, 40, 50, 60, 80];
@@ -1319,7 +1317,7 @@ function powerSection(o, T) {
   const archIdx = (name) => ARCH.findIndex((a) => a.name === name);
   const unarmed = day2.find((l) => l.unarmed);
   const cuD = day2.find((l) => l.name === 'Copper D sword');
-  console.log(`\nPOWER SUMMARY | unarmed d2 vs normal ${f0(unarmed.w.normal)}% (target ${UNARMED_TARGET.join('-')})` +
+  console.log(`\nPOWER SUMMARY | unarmed d2 vs normal ${f0(unarmed.w.normal)}%` +
     ` | day-2 ref (${ref.name}) n/e/c ${TIERS.map((t) => f0(ref.w[t])).join('/')}%` +
     ` | Cu D sword n/e/c ${TIERS.map((t) => f0(cuD.w[t])).join('/')}%` +
     ` | last day >=90% vs normal: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('normal', archIdx(n), 90)}`).join(', ')}` +
@@ -2482,7 +2480,7 @@ const PROGRESS_TARGET = {
 
 // One line on how a persona chooses its fight (the BOT section's title).
 const PICK_TEXT = {
-  ev: (P) => `pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%`,
+  ev: (P) => `pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%, else the highest win%`,
   champion: (P) => `pick: a champion at est. win >= ${P.champMin}%, else an elite at >= ${P.eliteMin}%, else max win% x (points + ${P.future}) at >= 50%`,
   looks: (P) => `pick: no estimate; a normal until its gear level is ${P.gearLevelForElites}, then an elite, the fewest visible High attributes`,
 };
@@ -2995,7 +2993,8 @@ async function benchmarkSection(o) {
 
   // ---- the plan's targets: T-D (difficulty, the careful persona) and T-P (the personas behave)
   const T_ROWS = [];
-  const lifeNum = (st) => (st.medLife === Infinity ? D + 1 : st.medLife); // alive at the end counts as one day longer than the run
+  // With more than half the runs alive at day D only ">D" is known, so a median-life target is n/a (like the alive % after --days), not judged on D + 1.
+  const lifeNum = (st) => (st.medLife === Infinity ? NaN : st.medLife);
   const st = stats;
   if (st.careful) {
     check(T_ROWS, 'T-D', 'careful: median life (days)', lifeNum(st.careful), 30, 40);

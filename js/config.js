@@ -119,8 +119,10 @@ export const CONFIG = {
   // Weapon effects go on swords. Armor effects are multiplied by gear.gemArmorMult for the slot.
   // Balance (2.0): gems are meant to be worth crafting for. Against a High special, armor with the matching gem
   // should beat emerald armor; against a Low special emerald wins (so bring the right gem to each fight). Armor
-  // resistances are about 3.75x their 1.2 values (diamond 6x: pierce resistance is the only piercing answer);
-  // sword gems are about as strong as before, except that the top grades are kept below the special they answer.
+  // resistances against their 1.2 values: ruby 4.5x, topaz and sapphire 3.75x, diamond 2.67x (pierce resistance is the
+  // only piercing answer). Sword gems against 1.2: diamond unchanged, emerald accuracy 40-50% higher ([20..60] to
+  // [28..90]), ruby lower at every grade, topaz and sapphire flatter at the top (S is 26 and 19 where 1.2 had 30 and 30),
+  // because the top grades are kept below the special they answer.
   // An S sword gem stays worth less in win points than the matching enemy special costs (Low to High); sapphire
   // is the tight one, so its sword gem rises only from 16% to 19%. Targets M1-M7 and the way to measure them:
   // docs/BALANCE.md and `node tools/balance.mjs --section specials` (tuned in the Batch 7 log).
@@ -182,12 +184,16 @@ export const CONFIG = {
     // Daily scaling: multiplier = 1 + growth/100 * (day - 1). The player is never shown these numbers.
     growthPerDay: { hpDamage: 6.3, ratings: 0.3 }, // HP & damage +6.3%/day, accuracy & dodge +0.3%/day (T-D: careful median life 30-40 days)
     // Base HP / damage / defense on day 1. Elites slightly above normals, champions slightly above elites.
-    // Fights are steep (+1% enemy HP and damage is about -3.5 win points), so the steps are small on purpose.
+    // Fights are steep (+1% enemy HP and damage is about -3.5 win points). Elite to champion is a small step (about +1%: the
+    // champion's six High attributes do most of the work); normal to elite is a large one (+7.3% HP and +8.7% damage, about
+    // 25-30 win points), on purpose: see the last sentence below.
     // Tiers also differ by attribute levels (normal: 6 low, elite: 3 low / 3 high, champion: 6 high), score and ring grades.
     // Tuned together with adventurer.unarmedDamage and the High special values (docs/PLAN-2.0.md T-R7 / T-GEAR, user answer U1):
     // on day 2 an unarmed adventurer wins about 42% against an elite (30-50 by how many of Magical / Stunning / Chilling are
     // High) and about 18% against a champion (0-25); a Copper D sword + Copper D chest wins about 77% / 53%. Normals sit
-    // about 7% below elites in HP and damage so that every roster has a safe fight while the typical elite is 85% (T-D, T-GEAR c).
+    // about 7% below elites in HP and damage so that every roster has a safe fight while the typical elite is 85% (T-D, T-GEAR c);
+    // an unarmed adventurer therefore beats a day-2 normal about 85% of the time (1.2's answer was 50-65%; the tool's power
+    // section no longer judges that).
     tiers: {
       normal: { count: 2, hp: 82, damage: 9.2, defense: 22, levels: { low: 6, normal: 6, high: 0 }, score: 10 },
       elite: { count: 3, hp: 88, damage: 10, defense: 23, levels: { low: 3, normal: 6, high: 3 }, score: 25 },
@@ -282,7 +288,7 @@ export const CONFIG = {
       refineUpgrade: { unit: '%', text: 'chance to upgrade a bar one grade' },
       cutTime: { unit: '%', text: 'less cutting time' },
       cutFail: { unit: 'pts', text: 'less cutting failure chance' },
-      cutBlend: { unit: '%', text: 'better cutting chances (of the way to a master cutter)' },
+      cutBlend: { unit: '%', text: 'of the way to a master cutter\'s cutting chances' }, // Help's "per level" column; the hovers word it in effectText (skills.js)
       smithTime: { unit: '%', text: 'less smithing time' },
       repairTime: { unit: '%', text: 'less repair time' },
       wear: { unit: '%', text: 'less durability loss in fights' },

@@ -60,6 +60,7 @@ export function clearEstimates(ctx) {
   ctx.ui.est_roster = null;
   ctx.ui.est_scope = null;
   ctx.ui.est_first = false;
+  ctx.ui.est_screen = null;
 }
 
 function jobsFor(ctx, scope, counts) {
@@ -114,6 +115,15 @@ function paint(ctx) {
   for (const el of document.querySelectorAll('.est-status')) el.textContent = text;
 }
 
+// Redraw the whole screen only while the screen that asked for this run is still the one shown. scheduleEstimates marks
+// it (ctx.ui.est_screen) every time that screen renders and main.js clears the mark at the start of every render, so a
+// run that outlives a tab change fills the cache and paints (nothing, then) instead of rebuilding another tab and costing
+// it its focus and typed text.
+function redraw(ctx, run) {
+  if (ctx.ui.est_screen === run.screen) ctx.rerender();
+  else paint(ctx);
+}
+
 async function runJobs(ctx, run) {
   const { cfg } = ctx;
   try {
@@ -128,7 +138,7 @@ async function runJobs(ctx, run) {
       }, cfg);
       if (run.cancelled || !res) return; // cancelled in the middle of a job: no result
       ctx.ui.est_cache[job.key] = { ...res, counts: run.counts };
-      if (run.selected != null && job.i === run.selected && n + 1 < run.jobs.length) ctx.rerender(); // the chosen enemy: show its details now
+      if (run.selected != null && job.i === run.selected && n + 1 < run.jobs.length) redraw(ctx, run); // the chosen enemy: show its details now
       else paint(ctx);
     }
   } catch (e) {
@@ -136,7 +146,7 @@ async function runJobs(ctx, run) {
     if (ctx.toast) ctx.toast(`Estimate failed: ${e.message}`, 'err');
   } finally {
     if (ctx.ui.est_run === run) ctx.ui.est_run = null;
-    if (!run.cancelled) ctx.rerender();
+    if (!run.cancelled) redraw(ctx, run);
   }
 }
 
@@ -148,7 +158,7 @@ function startRun(ctx) {
   const jobs = jobsFor(ctx, scope, counts);
   if (!jobs.length) return;
   const run = {
-    jobs, total: jobs.length, index: 0, progress: 0, cancelled: false, selected: scope.selected, counts,
+    jobs, total: jobs.length, index: 0, progress: 0, cancelled: false, selected: scope.selected, counts, screen: scope.id,
     sig: signature(ctx, scope, counts),
     opts: { samples: counts.samples, evalFights: counts.evalFights, fightsPerLoadout: counts.fightsPerLoadout },
   };
@@ -171,15 +181,18 @@ export function scheduleEstimates(ctx, scope, opts = {}) {
   if (!ctx.ui.est_cache) ctx.ui.est_cache = {};
   const scoped = snapshot(scope);
   ctx.ui.est_scope = scoped;
+  ctx.ui.est_screen = scoped.id; // this screen is the one being drawn (see redraw)
   const counts = simCounts(ctx.state, ctx.cfg);
+  const run = ctx.ui.est_run;
+  const stale = !!run && !run.cancelled && run.sig !== signature(ctx, scoped, counts); // a run for another selection
   if (!jobsFor(ctx, scoped, counts).length) {
     if (ctx.ui.est_timer) clearTimeout(ctx.ui.est_timer);
     ctx.ui.est_timer = null;
+    if (stale) cancelEstimates(ctx); // back on a finished selection: the other one's run is no longer wanted
     return;
   }
-  const run = ctx.ui.est_run;
   if (run && !run.cancelled) {
-    if (run.sig === signature(ctx, scoped, counts)) return; // already working on exactly this
+    if (!stale) return; // already working on exactly this
     cancelEstimates(ctx); // the selection changed under it
   }
   if (ctx.ui.est_timer) clearTimeout(ctx.ui.est_timer);

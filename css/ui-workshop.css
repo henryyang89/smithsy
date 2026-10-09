@@ -109,7 +109,7 @@
 .inv-gemcount { display: inline-block; margin-right: 6px; font-size: 12px; white-space: nowrap; }
 .inv-gemrow { cursor: pointer; }
 .inv-gemrow:hover td { background: rgba(181, 101, 29, 0.08); }
-.inv-gemtable { min-width: 330px; }
+.inv-gemtable { min-width: 280px; } /* narrower than the smallest phone box (298 px at 360 px) so a phone gets no scrollbar for 2 px; its content needs about 252 px */
 
 /* phone width: refine/cut rows and gear rows become stacked cards instead of wide tables */
 @media (max-width: 640px) {
