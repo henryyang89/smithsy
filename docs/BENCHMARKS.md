@@ -3,13 +3,83 @@
 How tough is each version of the game, compared with the others? Not by comparing win-rate tables
 (those change with every rebalance), but by asking one question that means the same in every version:
 
-> **If the same careful player plays 100 fixed games, how many are still alive after 5, 10, 15, ... days?**
+> **If the same player plays 100 fixed games, how many are still alive after 2, 3, 4, 5, 10, 15, ... days?**
 
-That is the **survival curve**. Only the game changes between versions; the player and the seeds do
+That is the **survival curve**. Only the game changes between versions; the players and the seeds do
 not, so a higher curve means an easier version and a lower one a harder version, and the *shape* shows
 where the difficulty sits (early deaths, mid-game wall, or the late-game cliff).
 
-## What is measured
+**Which table to use.** 2.0 rebuilt the world, so its curves are a new baseline: compare 2.x versions only with each
+other, and a persona only with the same persona. The 1.x tables are kept at the end as history.
+
+## What is measured (2.0 and later)
+
+- **The players** are three **personas** of the one bot in `tools/balance.mjs` (R46). They share the whole engine
+  (gathering, refining, cutting, smithing, repairs by day, rings) and differ in who they fight, what they pack, how they
+  spend intel and how much they work. Their settings are `PERSONAS` in the tool (tool settings, not game numbers); in
+  short:
+  - **Careful planner** (`careful`): reads the automatic win estimate and fights only when it is at least 90%, taking the
+    fight with the best expected value (estimate x (score + 1,000)). Rests worn gear so it can be repaired, packs the best
+    items per gear type, wears the ring set with the most win value, spends intel on Enemy scouting (to 40%), Battle
+    simulation (+3), Banner scouting (50%) and Ore sight (30), then on the track with the fewest points. Up to 5 trips a day.
+  - **Champion hunter** (`champion`): goes for score. Takes a champion it is at least 70% sure of, else an elite at 80%+,
+    else the best value among fights at 50%+ (estimate x (score + 150)). Rests only gear a champion fight could destroy (no wear threshold), weighs its
+    sword 1.5 times as much when smithing, spends intel on Battle simulation, Enemy scouting and Ring type scouting first.
+  - **Casual** (`casual`): never reads the estimate. Fights a normal enemy until it owns enough gear (gear types owned
+    plus gear types owned in iron or better reaches 6), then an elite, never a champion; of those, the enemy that *looks*
+    easiest (the fewest visible High attributes). Packs the game's default "best per type" pack, wears the best ring
+    grades whatever the type, spreads intel over all tracks in turn, makes 2 trips a day and carries what the game's
+    default carry gives.
+- **The seeds** are fixed: `mixSeed(31337, 0..99)` (100 runs by default; the same list in every version and for every
+  persona, so every persona gets the same maps and the same start). Newer versions give different maps for the same
+  seed numbers than 1.x did.
+- **The estimate they plan with** is, by default, **the game's own automatic estimate** with the version's numbers
+  (2.0: 5 guesses x 5 test fights per enemy, plus the Battle simulation points and Foresight rings the bot has).
+  `--estimator bot` uses the bot's own, larger estimate (independent of the game's) instead. The casual persona never reads it.
+- **"Alive at day d"** = the run survived the fight of day d (day 1 has no fight). Days 2, 3 and 4 are columns from 2.0 on:
+  the first fights are where a newcomer dies. A run that is still alive on the last day counts as alive.
+- **Median life** = the day the middle run died (the bot never retires). **Mean score** = the score at death (10 / 25 / 50
+  per normal / elite / champion win); it is secondary, because a version can change how much a win is worth without
+  changing how hard it is. **Score/day** = the mean of score divided by the days survived. **Fights n/e/c** = the share of
+  the fights taken that were normal / elite / champion. **Picked at** = the mean estimate of the fights taken.
+
+## 2.0 and later (new world)
+
+2.0 rebuilt the world (a 7x7 map with sight, repairs by day, new enemy numbers and banners, the automatic 5 x 5 estimate, new
+skills), so its curves are a **new baseline**. The same seed numbers give different maps than in 1.x. Compare 2.x versions
+only with each other, persona against the same persona.
+
+Alive % at the end of day (100 seeds, each version with its own in-game estimate; one row per persona and version):
+
+| version | date | persona | seeds | d2 | d3 | d4 | d5 | d10 | d15 | d20 | d25 | d30 | d40 | d50 | d60 | d70 | d80 | d100 | median life | mean score | score/day | fights n/e/c % | picked at | notes |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | | | | | | | | | | | | | | | | | |
+
+Deaths by day (runs), per persona:
+
+| version | persona | seeds | 2 | 3 | 4 | 5-9 | 10-19 | 20-29 | 30-39 | 40-49 | 50-59 | 60-79 | 80+ |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | | | | | | |
+
+The rows are filled by the tuning pass (batch 7), 100 seeds per persona and 200 for the careful planner. What the rows
+should show (targets T-D and T-P in `docs/PLAN-2.0.md`, section 9; `node tools/balance.mjs --section benchmark --jobs 4`
+prints a flag next to each):
+
+- Careful planner: median life 30-40 days, alive at day 10 about 80% (75-85%), alive at day 2 at least 95% and at day 4 at
+  least 85%.
+- Casual: alive at day 4 at least 70%; the careful planner is at least 10 points above it at day 20 and at day 40; no
+  champion fights.
+- Champion hunter: score per day survived at least 1.2 times the careful planner's, median life at least 3 days below the
+  careful planner's, and at least 40% champions among its fights on days 11-40.
+- The whole benchmark (3 personas x 100 seeds) takes at most 15 minutes with `--jobs 4`.
+
+## 1.x (old world, history only)
+
+> **Not comparable with 2.0:** a different map, enemies, repairs and estimate. The tables below are kept unchanged to show
+> how 1.0 - 1.2 compared with each other. They are one persona (the careful planner of 1.x, which repaired at night and
+> pressed "Estimate all").
+
+### What was measured
 
 - **The player** is the careful bot of `tools/balance.mjs` (gathers, refines, cuts, smiths, wears rings,
   repairs at night, plans every fight). It drives the real game API and only sees what a player sees.
@@ -28,7 +98,8 @@ where the difficulty sits (early deaths, mid-game wall, or the late-game cliff).
   (10 / 25 / 50 per normal / elite / champion win); it is secondary, because a version can change how much a
   win is worth without changing how hard it is.
 
-## Results
+
+### Results
 
 Alive % at the end of day (100 seeds, each version with its own in-game estimate):
 
@@ -59,7 +130,7 @@ Sensitivity (200 seeds, 1.2, in-game 10 x 10): `--set enemies.growthPerDay.hpDam
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1.2 | 2026-10-08 | 200 | 95 | 92 | 90 | 88 | 83 | 76 | 69 | 59 | 34 | 4 | 0 | 0 | 56.0 | 1487 | enemy HP/damage growth 3 %/day: the early and mid game stay the same within noise, day 50 +8, day 60 +24, median +5 days |
 
-### Reading the table
+#### Reading the table
 
 - **Noise.** One alive % from 100 runs has a standard error of up to 5 points (3.5 with 200 runs), so
   treat differences under about **10 points** as noise and compare the shape of the curve and the median
@@ -93,7 +164,8 @@ Sensitivity (200 seeds, 1.2, in-game 10 x 10): `--set enemies.growthPerDay.hpDam
   estimate. The next section says why the benchmark reacts to the estimate's noise more than the average
   accuracy would suggest.
 
-## Is 10 x 10 too low?
+
+### Is 10 x 10 too low?
 
 The in-game estimate runs **10 guesses x 10 test fights per enemy** (1.1: 40 x 30). Is that too few to plan
 with, and what do one Battle simulation intel point (+10: 20 x 20) or a Foresight ring (+2 to +6) change? Run
@@ -178,47 +250,52 @@ intel track, the ring, or `CONFIG.sim`) shrinks the wobble and the pick of the b
 should be less of a gamble the options are a larger `CONFIG.sim` (20 x 20 recovers most of the survival),
 more starting scouting, or widening the displayed margin by the number of hidden attributes.
 
+
 ## How to run
 
 ```
-node tools/balance.mjs --section benchmark --jobs 3
+node tools/balance.mjs --section benchmark --jobs 4
 ```
 
-- `--jobs N` runs the seeds in N parallel processes with identical results (1.2: 100 seeds take about 2
-  minutes with 3 jobs on 4 cores, 200 seeds about 4 minutes, a 20 x 20 estimate about 4 minutes with 4 jobs;
-  1.1 takes about 10 minutes for 100 seeds because its 40 x 30 estimate is 12 times bigger).
-- `--seeds N` (default 100; the seed list is a prefix, so 200 runs include the first 100), `--days N`
-  (default 100), `--estimator game|bot` (default `game`), `--minwin P` (default 90).
-- `--set path=value` runs a what-if on the same seeds, e.g. `--set enemies.growthPerDay.hpDamage=3.2`.
-- `--quick` is a smoke test (6 seeds, 40 days, about 20 seconds).
-- The last lines of the output are a one-line `BENCHMARK | ...` summary and a ready-made markdown row for
-  the table above; paste the row and add your notes. The report also prints the survival curve every 5
-  days, the life quantiles (p10 ... p90), deaths by day range, and wins per run.
+- Runs every persona (`--persona careful|champion|casual|all`, default all) on the same 100 seeds and prints the survival
+  table with days 2, 3, 4, 5, 10, ... 100, the deaths by day, the targets with flags, one `BENCHMARK | v2.0 | <persona> | ...`
+  line and one markdown row per persona, and the wall time.
+- `--jobs N` shards each persona's seeds over N parallel processes with identical results (about 2.5 seconds of
+  CPU per run, so the whole benchmark takes a few minutes with 4 jobs on 4 cores; the tool prints its wall time).
+- `--seeds N` (default 100; the seed list is a prefix, so 200 runs include the first 100), `--days N` (default 100),
+  `--estimator game|bot` (default `game`), `--minwin P` / `--future F` (override the persona's own values).
+- `--intel persona|only:<track>|none` changes how the bot spends intel; `--set path=value` runs a what-if on the same seeds,
+  e.g. `--set enemies.growthPerDay.hpDamage=4`.
+- `--quick` is a smoke test (6 seeds, 40 days, about 20 seconds for all personas).
+- The intel check (`--section intel`) runs the careful planner on the same seeds in eight modes; see below.
 
 ### Adding a new version
 
 1. Finish the version and run `npm test`.
-2. `node tools/balance.mjs --section benchmark --jobs 3` (on the release commit) and paste the row.
-3. If you also want to compare with an older version, extract the old release and run the *same* tool
-   there (the tool adapts to older versions: no `simCounts` means it uses `CONFIG.sim`):
+2. `node tools/balance.mjs --section benchmark --jobs 4` (on the release commit) and paste the three markdown rows into the
+   2.0 table, with notes.
+3. If you also want to compare with an older version, extract the old release and run **that tree's own**
+   `tools/balance.mjs` there. The 2.0 tool imports 2.0 functions (`distanceRow`, `sightValue`, `simCounts`, ...) and only
+   runs on 2.0 trees; a version before 2.0 has no personas, so its numbers come from the 1.x tool that shipped with it:
 
 ```
 mkdir -p /tmp/smithsy-old && git archive <old-commit> | tar -x -C /tmp/smithsy-old
-cp tools/balance.mjs /tmp/smithsy-old/tools/balance.mjs
 (cd /tmp/smithsy-old && node tools/balance.mjs --section benchmark --jobs 3)
 ```
 
-   (1.1 is commit `5e2423c`.) Keep the seeds, the estimator and `--minwin` the same, and add the version's
-   own row only after checking that the previous rows still reproduce.
-4. Note anything that changes the *player* (a smarter bot, a new action it uses) in the notes column:
+   Keep the seeds, the estimator and `--minwin` the same, and add the version's own row only after checking that the
+   previous rows still reproduce.
+4. Note anything that changes the *player* (a smarter bot, a new action it uses, a changed persona) in the notes column:
    a change to the bot invalidates comparisons with older rows, so rerun the older versions with the new
    bot before comparing.
 
 ## Related checks
 
-- `node tools/balance.mjs --section estimator`: how accurate the win-chance estimate is at 10 x 10, with
-  Foresight rings or Battle simulation intel points, and at 1.1's 40 x 30 (the tables in "Is 10 x 10 too
-  low?" above).
-- `node tools/balance.mjs --section specials`: how dangerous each enemy special is and how much the
-  matching defence and the adventurer's own gems are worth.
-- `node tools/balance.mjs --section power`, `--section economy`, `--section bot`: the older reports.
+- `node tools/balance.mjs --section economy | power | day2 | specials | estimator`: the instruments for pacing (T-E), the power
+  curve and its anchors (T-MID), the first fight without equipment (T-R7, T-GEAR), the gem balance (T-R33) and the automatic
+  estimate (T-A2). Each ends with a one-line SUMMARY that carries the target flags.
+- `node tools/balance.mjs --section bot --persona careful --seeds 40`: progression, time split, repairs, skills at day 30 and
+  gem supply (T-B1 .. T-B5, T-GEAR).
+- `node tools/balance.mjs --section intel --seeds 100 --days 60 --jobs 4`: does one intel track dominate? (T-R42). The careful
+  planner plays the same seeds with each track first, with its own list and with no intel; the INTEL line gives the best
+  single track, the spread between tracks, and how the persona's own list compares.

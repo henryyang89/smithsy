@@ -2,33 +2,42 @@
 // ============================================================================
 // SMITHSY BALANCE REPORT — is the pacing and difficulty sensible?
 //
-//   node tools/balance.mjs [--section economy|power|day2|bot|benchmark|specials|estimator|all] [--seeds N] [--days N] [--samples N]
-//                          [--minwin P] [--future F] [--ablate x,y] [--immortal] [--carry value|default]
-//                          [--estimator game|bot] [--jobs N] [--quick] [--set path=value ...]
+//   node tools/balance.mjs [--section economy|power|day2|bot|benchmark|specials|estimator|intel|all]
+//                          [--persona careful|champion|casual|all] [--intel persona|only:<track>|none]
+//                          [--seeds N] [--days N] [--samples N] [--minwin P] [--future F] [--ablate x,y]
+//                          [--immortal] [--carry value|default] [--estimator game|bot] [--jobs N] [--quick]
+//                          [--set path=value ...]
 //
-//   --section  which report to run (default: all = economy + power + bot; benchmark is separate)
+//   --section  which report to run (default: all = economy + power + bot; the others are separate)
+//   --persona  which kind of player the bot is (R46; see PERSONAS below): careful (Careful planner), champion
+//              (Champion hunter), casual (Casual), or all. Default: careful; benchmark: all
+//   --intel    how the bot spends intel points: persona (its own list, the default), only:<track> (that track first
+//              until it is maxed, then the persona's list), none (every track's gains set to [0] in memory, so no
+//              point can be spent and the plan gate stays open)
 //   --seeds    economy: generated maps (default 100); bot: runs (default 20; survival numbers move
 //              by ~+-10 points between seed sets of this size, use 40+ to compare close what-ifs);
-//              benchmark: runs (default 100, the fixed seed list mixSeed(31337, 0..N-1))
+//              benchmark and intel: runs (default 100, the fixed seed list mixSeed(31337, 0..N-1))
 //   --days     bot: play up to this day (default 80; runs that are still alive then are cut off);
-//              benchmark: default 100
-//   --estimator  how the bot estimates win chances when it plans a fight. game = the in-game button: every
-//              enemy, all packed gear, the game's own counts (CONFIG.sim + Battle simulation intel +
-//              Foresight rings; the default for benchmark). bot = the bot's own larger two-stage estimate
-//              (screen all 7, re-check the top 3; the default for the bot section, version-independent)
-//   --jobs     benchmark: run the seeds in N parallel node processes (same numbers as 1 process)
+//              benchmark: default 100; intel: default 60
+//   --estimator  how the bot estimates win chances when it plans a fight. game = the in-game automatic estimate
+//              (every enemy, all packed gear, the game's own counts: CONFIG.sim + Battle simulation intel +
+//              Foresight rings; the default for benchmark and intel). bot = the bot's own larger two-stage estimate
+//              (screen all 7, re-check the top 3; the default for the bot section, independent of the game's own estimate). The casual
+//              persona never reads an estimate
+//   --jobs     benchmark and intel: run the seeds in N parallel node processes (same numbers as 1 process)
 //   --samples  power: hidden-attribute guesses per win-% cell (default 100, x50 fights each)
-//   --minwin   bot: minimum estimated win % to accept a fight (default 90)
-//   --future   bot: points one survival is worth when comparing fights (default 1000 = careful:
+//   --minwin   bot: minimum estimated win % to accept a fight (default: the persona's, careful 90)
+//   --future   bot: points one survival is worth when comparing fights (default: the persona's, careful 1000 =
 //              a 50-point champion needs >= 96% of the best normal's win chance)
 //   --ablate   bot: play without some systems, comma separated: gems (never cut/infuse), rings (never
 //              wear), skills (no skill levels), intel (never spend), repair (never repair)
 //   --immortal bot: enemies deal no damage (memory only, set after the bot's value tables are built) and
 //              the bot fights an elite every day without estimating, so no run ends early. Use it to see
 //              how fast a surviving careful player uses up the finite map (the "Map supply" table)
-//   --carry    what the bot (and the economy trips) take home from a field: 'value' (default) = the most
+//   --carry    what the bot (and the economy trips) take home from a field: 'value' = the most
 //              valuable items of bag + pile by the bot's value function, worthless items stay in the pile;
-//              'default' = the game's defaultCarry (keep the bag, fill free slots with the rarest pile items)
+//              'default' = the game's defaultCarry (keep the bag, fill free slots with the rarest pile items).
+//              Default: the persona's (careful value, casual default)
 //   --quick    small sample sizes (smoke test, a few seconds)
 //   --set      what-if: override a CONFIG value in memory for this run only (repeatable). The path walks
 //              object keys and array indices; '*' matches every key/index at that level; the value is
@@ -40,38 +49,44 @@
 //                --set 'refine.mythril.input={"mythril":2}'
 //              js/config.js itself is never changed.
 //
-// Sections
+// Sections (each ends with a one-line SUMMARY and prints the plan's targets, docs/PLAN-2.0.md section 9, with a flag)
 //   economy  Uses the real map generation + search code on fresh games: items per search by field
-//            distance, how much search effort goes into debris (searching clears it), what a trip finds
-//            vs carries (finds go to the field's pile, a trip carries up to the bag size), ore/gem mix,
-//            minutes per raw item including travel, bar and gem-cut grade odds, and the minutes needed to
-//            mine + refine + smith a full set of each material.
+//            distance, the map (fields per distance, attempts per map), how much search effort goes into debris
+//            (searching clears it), what a trip finds vs carries (finds go to the field's pile, a trip carries up
+//            to the bag size), what sight is worth (3c), ore/gem mix, minutes per raw item including travel, bar and
+//            gem-cut grade odds, and the minutes needed to mine + refine + smith a full set of each material.
+//            Targets T-E1..T-E5.
 //   power    Win % of loadouts vs each enemy tier over days (estimateWinChanceSync, all attributes
 //            hidden = a typical enemy of the tier): the day-2 fight with day-1 gear, archetype sets,
-//            the weakest full set that holds target win rates on each day, and how much each gem /
-//            ring / gear slot is worth.
+//            the weakest full set that holds target win rates on each day, how much each gem / ring / gear slot is
+//            worth, and the daily-grid anchors (the last day a plain set wins 70% vs a typical elite). T-MID.
 //   day2     The first fight (day 2) without equipment (R7), tier by tier: 600 enemies x 300 fights each, win % overall
 //            and by how many of Magical / Stunning / Chilling are High, flagged against the targets in docs/PLAN-2.0.md
 //            (T-R7); then the same with a day-1 kit (Copper D sword; sword + chest; sword + chest + one matching gem per
 //            High special) as information and against T-GEAR. Prints a DAY2 summary line. Not part of `all`.
-//   benchmark  Difficulty benchmark that works on any version: the careful bot (below) on a FIXED list of
-//            seeds, reporting the SURVIVAL CURVE (% of runs still alive at day 5, 10, ... 100), the median
-//            life and the mean score, as a table row, a one-line BENCHMARK summary and a markdown row for
-//            docs/BENCHMARKS.md. Run the same command on two versions to compare how tough each is.
-//   specials How dangerous each enemy special (magic, piercing, stun, slow) is and how much the matching
-//            defence recovers, and how strong the adventurer's own gems and rings are against enemy
-//            resistances: direct fight simulations of a plain C set (iron, steel, mythril) vs an elite on the
-//            day that set wins about 55% (window of 7 days), one enemy attribute changed at a time.
-//   estimator How accurate the in-game win-chance estimate is at 10x10, with a Foresight ring or Battle simulation
-//            intel points, and at the old 40x30: wobble between presses and miss vs the true chance, at
-//            several scouting levels (steel C set vs elites at about 55 / 75 / 90% true win).
-//   bot      A scripted "careful" player that drives the real game API day by day (gather, refine,
-//            cut, smith, repair, rings, intel; at night: the plan) and reports survival,
-//            score, gear over time, the daily time split, rings, skills, the tiers it chose and how
-//            much of the map's finite supply it has used (fields never refill).
+//   specials Gem balance (R33, T-R33 M1-M7): how much each enemy special costs (Normal to High), what the matching armor
+//            gem wins back next to emerald armor, how much of a sword gem survives a High resistance, and whether
+//            the five sword gems are about equally strong; iron / steel / mythril C sets vs an elite on the day that
+//            set wins about 55% (window of 5 days).
+//   estimator How accurate the in-game automatic win estimate is at 5x5, 6x6, 8x8 and 10x10 at 10% enemy scouting (shown
+//            margin, miss vs the true chance, wobble), what it costs (fights per roster, ms) with 2 and 3 items
+//            per gear type, and the margin floor. T-A2.
+//   bot      A scripted player (--persona; default careful) that drives the real game API day by day (gather,
+//            refine, cut, smith, repair by day, rings, intel, plan) and reports survival, score, gear over time,
+//            the daily time split (with the load penalty), rings, skills at day 30, gem supply, repairs, the tiers
+//            it chose and how much of the map's finite supply it has used (fields never refill). Targets T-B1..T-B5,
+//            T-GEAR (c).
 //            In a field it searches (clearing debris on the way) until what is worth carrying fills the
 //            bag, chooses what to carry (--carry) and leaves the rest in the field's pile; its trip choice
 //            values items lying in piles (no search needed), so it comes back for them when worth it.
+//   benchmark  Difficulty benchmark: the personas on a FIXED list of seeds, reporting the
+//            SURVIVAL CURVE (% of runs still alive at day 2, 3, 4, 5, 10, ... 100), the median life, the mean
+//            score, score per day, the tiers fought and the estimate of the fights taken, as a table row, a
+//            one-line BENCHMARK summary and a markdown row per persona for docs/BENCHMARKS.md. This tool only runs on
+//            2.0 trees (it imports 2.0 functions); to compare with an older version, run that tree's own tool. Targets T-D, T-P.
+//   intel    Does one intel track dominate? The careful persona on the same seeds in 8 modes (each track alone first,
+//            the persona's own list, no intel at all): mean life and score per mode and the paired difference to the
+//            best mode. Target T-R42.
 //
 // Each section ends with a one-line SUMMARY that is easy to compare between what-if runs.
 // Never edits config or core files. Every game state here is a throwaway copy; the yield
@@ -82,27 +97,63 @@ import { newGame, endDay, acknowledgeReport, confirmPlan } from '../js/core/game
 import {
   key, sameLoc, atCamp, currentField, areaCells, travelMinutes, returnMinutes, searchMinutes,
   searchEfficiencyRange, debrisClearMult, projectedLoad, fieldProgress, cellOpen,
-  travel, search, defaultCarry, distanceRow, sightValue, sightShare, seenItems,
+  travel, search, defaultCarry, distanceRow, sightValue, sightShare, seenItems, generateMap, cellFresh,
 } from '../js/core/map.js';
 import { adjustDistribution, blendCutTable, refineMinutes, cutMinutes, rollGrade, refine, cut } from '../js/core/processing.js';
 import { gearStats, craftMinutes, smithMinutes, craft, repairInfo, repairPlan, repair, couldBreak } from '../js/core/gear.js';
-import { ringDef, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
-import { estimateWinChanceSync } from '../js/core/sim.js';
-import { knownLevels, enemyCombatant, rollLevels, ringTypeVisible, ringGradeVisible, groupVisible, hiddenGradeOdds } from '../js/core/enemies.js';
+import { ringDef, ringValue, ringTotals, wornRings, toggleRing } from '../js/core/rings.js';
+import { estimateWinChanceSync, shownMargin, pruneDominated, simCounts } from '../js/core/sim.js';
+import { knownLevels, enemyCombatant, rollLevels, generateRoster, ringTypeVisible, ringGradeVisible, groupVisible, hiddenGradeOdds } from '../js/core/enemies.js';
 import { adventurerCombatant, fight } from '../js/core/combat.js';
 import { spendIntel, intelValue, nextIntelGain, canSpendIntel } from '../js/core/intel.js';
 import { groupProgress } from '../js/core/groups.js';
-import { packLimit } from '../js/core/pack.js';
+import { packLimit, defaultPack } from '../js/core/pack.js';
 import { smithBonuses } from '../js/core/bonuses.js';
-import { itemXp } from '../js/core/skills.js';
-import { seededRng, mixSeed } from '../js/core/rng.js';
+import { itemXp, skillDefs } from '../js/core/skills.js';
+import { seededRng, mixSeed, makeRng } from '../js/core/rng.js';
 import { EPS, deepClone } from '../js/core/util.js';
 import { VERSION } from '../js/version.js';
-import * as mapMod from '../js/core/map.js'; // optional exports (freshCellCount, 1.2+) are read from here so this tool also runs on older versions
-import * as simMod from '../js/core/sim.js'; // simCounts (1.2+): the in-game estimate sizes; older versions use CONFIG.sim
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+
+// ============================================================== PERSONAS =====
+// R46: one bot engine, three kinds of player. These are tool settings (how a bot plays), not game numbers, so they
+// live here and not in js/config.js. Everything else in the bot (gathering, refining, cutting, smithing, repairs by
+// day) is shared; a persona changes who it fights, what it packs, how it spends intel and how much it works.
+//   pick          'ev': the best expected value among fights it is sure of (estimate >= minWin), else the surest;
+//                 'champion': takes a champion it is 70% sure of, else an elite it is 80% sure of, else the best
+//                 p x (score + future) over fights it is at least 50% sure of; 'looks': never reads an estimate, takes the
+//                 enemy that looks easiest (fewest visible High attributes), normals until it owns enough gear
+//   future        points one survival is worth when comparing fights (expected value = p x (score + future + extras))
+//   intel         spend each point on the first entry whose track is below its target (and can still gain); '*' (and
+//                 'roundRobin') = the track with the fewest points that can still gain (config order on ties). A
+//                 persona always spends every point, because the next day cannot start while one can be spent
+//   pack          'score': the best packLimit items per gear type by the bot's score, after the rest rule; 'default':
+//                 the game's own default pack ("Best per type", skipping items that could break)
+//   rings         'value': the ring set with the most win value (pickRings); 'grade': the best grades first, any type
+//   restBelow / repairBelow / subBelow   the rest rule and the day repairs (see botParams)
+//   trips         most trips a day; minRate: least value per minute worth a trip; carry: 'value' | 'default'
+//   swordBias     multiplies the sword slot's weight when deciding what to smith
+export const PERSONAS = {
+  careful: { name: 'Careful planner', pick: 'ev', minWin: 90, future: 1000,
+    intel: [['enemySight', 40], ['simDepth', 3], ['groupSight', 50], ['oreSight', 30], ['*']],
+    pack: 'score', rings: 'value', restBelow: 40, repairBelow: 60, subBelow: 30, trips: 5, minRate: 0.003, carry: 'value', swordBias: 1 },
+  champion: { name: 'Champion hunter', pick: 'champion', champMin: 70, eliteMin: 80, future: 150,
+    intel: [['simDepth', 3], ['enemySight', 40], ['ringTypeSight', 49], ['*']],
+    pack: 'score', rings: 'value', restBelow: 0, repairBelow: 30, subBelow: 15, trips: 5, minRate: 0.003, carry: 'value', swordBias: 1.5 },
+  casual: { name: 'Casual', pick: 'looks', gearLevelForElites: 6, intel: 'roundRobin',
+    pack: 'default', rings: 'grade', restBelow: 0, repairBelow: 30, subBelow: 0, trips: 2, minRate: 0.003, carry: 'default', swordBias: 1 },
+};
+// The keys every persona has, and the extra keys each way of picking an enemy reads (tests/personas.test.mjs).
+export const PERSONA_KEYS = ['name', 'pick', 'intel', 'pack', 'rings', 'restBelow', 'repairBelow', 'subBelow', 'trips', 'minRate', 'carry', 'swordBias'];
+export const PICK_KEYS = { ev: ['minWin', 'future'], champion: ['champMin', 'eliteMin', 'future'], looks: ['gearLevelForElites'] };
+const PERSONA_NAMES = Object.keys(PERSONAS);
+const isPersona = (name) => Object.prototype.hasOwnProperty.call(PERSONAS, name);
+
+// The benchmark's survival days and the death-day bins (R46: days 2, 3 and 4 are in from 2.0 on).
+export const BENCH_DAYS = [2, 3, 4, 5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 100];
+export const DEATH_BINS = [[2, 2], [3, 3], [4, 4], [5, 9], [10, 19], [20, 29], [30, 39], [40, 49], [50, 59], [60, 79], [80, Infinity]];
 
 const IS_MAIN = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 const SET_LOG = [];
@@ -114,6 +165,7 @@ try {
   if (ARGS.ablate.includes('skills')) SET_LOG.push(...applySet('skills.maxLevel', '0'));
   // Without intel no track can gain, so a point can never be spent and the plan gate (confirmPlan) stays open.
   if (ARGS.ablate.includes('intel')) SET_LOG.push(...applySet('intel.tracks.*.gains', '[0]'));
+  for (const [path, value] of intelModeSets(ARGS.intel)) SET_LOG.push(...applySet(path, value)); // --intel none
 } catch (err) {
   if (!IS_MAIN) throw err;
   console.error(`balance.mjs: ${err.message}`);
@@ -134,8 +186,15 @@ const fx = (v, d) => (Number.isFinite(v) ? v.toFixed(d) : '-');
 const f0 = (v) => fx(v, 0);
 const f1 = (v) => fx(v, 1);
 const f2 = (v) => fx(v, 2);
+// "+3.1" / "-0.4" / "0.0": a signed number that never prints "-0" for a value that rounds to zero.
+const signed = (v, d = 0) => {
+  const t = fx(v, d);
+  return /^-0(\.0+)?$/.test(t) ? t.slice(1) : v > 0 && t !== '-' ? `+${t}` : t;
+};
 const sum = (a) => a.reduce((x, y) => x + y, 0);
 const mean = (a) => (a.length ? sum(a) / a.length : NaN);
+// Mean of the finite numbers (NaN when there are none): a persona that never reads an estimate has p = null.
+const meanFinite = (a) => mean(a.filter(Number.isFinite));
 const median = (a) => {
   if (!a.length) return NaN;
   const s = [...a].sort((x, y) => x - y);
@@ -157,6 +216,35 @@ function h2(t) {
 function note(t) {
   for (const line of t.split('\n')) console.log(`  ${line}`);
 }
+// ------------------------------------------------------------- targets ----
+// The plan's balance targets (docs/PLAN-2.0.md section 9). check() judges one measured value against [lo, hi] (null =
+// open end) and remembers the row in `rows`; printTargets() shows a section's rows; targetFlags() is the short form for
+// its SUMMARY line (one entry per id: ok, or how many of its rows missed).
+export function judge(value, lo, hi) {
+  if (!Number.isFinite(value)) return 'n/a';
+  if (lo != null && value < lo - 1e-9) return 'LOW';
+  if (hi != null && value > hi + 1e-9) return 'HIGH';
+  return 'ok';
+}
+function check(rows, id, what, value, lo, hi, digits = 1) {
+  const flag = judge(value, lo, hi);
+  const target = lo != null && hi != null ? `${lo}-${hi}` : lo != null ? `>= ${lo}` : `<= ${hi}`;
+  rows.push([id, what, fx(value, digits), target, flag]);
+  return flag;
+}
+function printTargets(rows, title = 'Targets (docs/PLAN-2.0.md section 9)') {
+  h2(title);
+  printTable(['id', 'what', 'measured', 'target', 'flag'], [...rows].sort((a, b) => a[0].localeCompare(b[0])));
+}
+function targetFlags(rows) {
+  const ids = [...new Set(rows.map((r) => r[0]))];
+  return ids.map((id) => {
+    const mine = rows.filter((r) => r[0] === id);
+    const bad = mine.filter((r) => r[4] !== 'ok');
+    return bad.length ? `${id} ${bad.every((r) => r[4] === 'n/a') ? 'n/a' : `MISS ${bad.length}/${mine.length}`}` : `${id} ok`;
+  }).join(' ');
+}
+
 function printTable(headers, rows) {
   const str = rows.map((r) => r.map((c) => (c == null ? '' : String(c))));
   const w = headers.map((h, i) => Math.max(h.length, ...str.map((r) => (r[i] || '').length)));
@@ -168,7 +256,7 @@ function printTable(headers, rows) {
 
 // ----------------------------------------------------------------- args ----
 function parseArgs(argv) {
-  const o = { section: 'all', seeds: null, days: null, samples: null, minwin: 90, future: 1000, quick: false, immortal: false, help: false, set: [], ablate: [], carry: 'value', estimator: null, jobs: 1, shard: null, emitJson: false };
+  const o = { section: 'all', seeds: null, days: null, samples: null, minwin: null, future: null, quick: false, immortal: false, help: false, set: [], ablate: [], carry: null, estimator: null, jobs: 1, shard: null, emitJson: false, persona: null, intel: 'persona' };
   const ABLATIONS = ['gems', 'rings', 'skills', 'intel', 'repair'];
   for (let i = 0; i < argv.length; i++) {
     let a = argv[i];
@@ -205,6 +293,15 @@ function parseArgs(argv) {
     else if (a === '--carry') {
       o.carry = val();
       if (!['value', 'default'].includes(o.carry)) throw new Error('--carry must be value or default');
+    } else if (a === '--persona') {
+      o.persona = val();
+      if (o.persona !== 'all' && !isPersona(o.persona)) throw new Error(`--persona: unknown persona ${o.persona} (${[...PERSONA_NAMES, 'all'].join(', ')})`);
+    } else if (a === '--intel') {
+      o.intel = val();
+      const track = o.intel.startsWith('only:') ? o.intel.slice(5) : null;
+      if (track != null) {
+        if (!Object.prototype.hasOwnProperty.call(CONFIG.intel.tracks, track)) throw new Error(`--intel: unknown track ${track} (${Object.keys(CONFIG.intel.tracks).join(', ')})`);
+      } else if (!['persona', 'none'].includes(o.intel)) throw new Error('--intel must be persona, none or only:<track>');
     }
     else if (a === '--ablate') {
       for (const x of val().split(',').map((y) => y.trim()).filter(Boolean)) {
@@ -219,15 +316,25 @@ function parseArgs(argv) {
     } else if (a === '-h' || a === '--help') o.help = true;
     else throw new Error(`Unknown option ${a} (try --help)`);
   }
-  if (!['all', 'economy', 'power', 'day2', 'bot', 'benchmark', 'specials', 'estimator'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
-  if (o.days == null) o.days = o.section === 'benchmark' ? 100 : 80;
+  if (!['all', 'economy', 'power', 'day2', 'bot', 'benchmark', 'specials', 'estimator', 'intel'].includes(o.section)) throw new Error(`Unknown section ${o.section}`);
+  if (o.days == null) o.days = o.section === 'benchmark' ? 100 : o.section === 'intel' ? 60 : 80;
+  // The benchmark runs every persona unless one is named; every other section plays the careful planner.
+  if (o.persona == null) o.persona = o.section === 'benchmark' ? 'all' : 'careful';
+  if (o.section === 'intel' && o.persona === 'all') throw new Error('--section intel runs one persona (default careful)');
   return o;
+}
+
+// The CONFIG switches an --intel mode needs: 'none' sets every track's gains to [0], so no point can be spent (the plan
+// gate stays open) and intel does nothing. 'persona' and 'only:<track>' only change the order the bot spends in.
+export function intelModeSets(mode) {
+  return mode === 'none' ? [['intel.tracks.*.gains', '[0]']] : [];
 }
 
 // Override CONFIG values in memory (what-if runs). Path segments are object keys or array indices;
 // '*' matches every key / index at that level. The path must already exist (catches typos), and a
 // number can only be replaced by a number. Returns ["path: old -> new", ...] for the report header.
-function applySet(path, raw) {
+// With an `undo` array, every change also pushes a function that puts the old value back (withSets).
+function applySet(path, raw, undo = null) {
   let value;
   try {
     value = JSON.parse(raw);
@@ -256,11 +363,24 @@ function applySet(path, raw) {
         throw new Error(`--set: ${[...trail, k].join('.')} is an ${Array.isArray(old) ? 'array' : 'object'}; give JSON or set its fields`);
       }
       obj[k] = value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
+      if (undo) undo.push(() => { obj[k] = old; });
       out.push(`${[...trail, k].join('.')}: ${JSON.stringify(old)} -> ${JSON.stringify(value)}`);
     }
   };
   walk(CONFIG, 0, []);
   return out;
+}
+
+// Runs fn() with CONFIG changed in memory (sets = [[path, value], ...], see applySet) and puts everything back afterwards,
+// also when fn throws. For a measurement that needs one number different (sight forced to 40, intel switched off).
+export function withSets(sets, fn) {
+  const undo = [];
+  try {
+    for (const [path, value] of sets) applySet(path, String(typeof value === 'string' ? value : JSON.stringify(value)), undo);
+    return fn();
+  } finally {
+    for (const u of undo.reverse()) u();
+  }
 }
 
 // ======================================================== shared helpers ====
@@ -272,9 +392,8 @@ function setOf(material, grade, { swordGem = null, armorGem = null, slots = SLOT
   return slots.map((s) => mkItem(s, material, grade, s === 'sword' ? swordGem : armorGem));
 }
 const ringSet = (grade, types = ADV_RINGS) => ringTotals(types.map((type) => ({ type, grade })));
-// The in-game estimate's sizes for this game state: simCounts (1.2+: CONFIG.sim + intel + Foresight rings);
-// older versions have no such export and the estimator just uses CONFIG.sim.
-const gameSimOpts = (st) => (simMod.simCounts ? simMod.simCounts(st) : {});
+// The in-game estimate's sizes for this game state: simCounts (CONFIG.sim + intel + Foresight rings).
+const gameSimOpts = (st) => simCounts(st);
 
 // Expected loot of one cell, from the documented field formula.
 function lootPct(dist, debris) {
@@ -362,7 +481,7 @@ function centerOptions(st, field, vf, wasDebris) {
       for (const i of areaCells(cx, cy)) {
         const c = cv[i];
         if (!c) continue;
-        if (mapMod.freshCellCount && mapMod.cellFresh(field.cells[i])) fresh++;
+        if (cellFresh(field.cells[i])) fresh++;
         open++;
         if (c.debris) nd++;
         val += c.val;
@@ -415,7 +534,7 @@ function trackedSearch(st, cx, cy, wasDebris) {
 //   'default' the game's defaultCarry: keep the bag, fill free slots with the rarest pile items.
 const CARRY_RANK = ['ore:mythril', 'gem:diamond', 'gem:emerald', 'gem:sapphire', 'gem:topaz', 'gem:ruby', 'ore:coal', 'ore:iron', 'ore:copper'];
 const carryRank = (t) => (CARRY_RANK.includes(t) ? CARRY_RANK.indexOf(t) : CARRY_RANK.length);
-function planCarry(st, vf, mode = ARGS.carry) {
+function planCarry(st, vf, mode = ARGS.carry ?? 'value') {
   const f = currentField(st);
   if (!f) return { bag: st.bag.map((_, i) => i), pile: [], items: [...st.bag] };
   if (mode === 'default') {
@@ -437,7 +556,14 @@ function planCarry(st, vf, mode = ARGS.carry) {
 // items already in a pile when the bot arrives are picked up like fresh finds (no search needed).
 function runTrip(st, target, p) {
   const z = { carried: [], searches: 0, found: 0, fromDebris: 0, debrisEff: 0, searchEff: 0, fromOldPile: 0, moves: 0 };
-  let r = travel(st, target);
+  // A walk. p.logLoad(minutes) is told how much of it the carried load added (the same walk with nothing carried is the rest).
+  const walk = (dest, carry = null) => {
+    const empty = travelMinutes(st, st.location, dest, 0);
+    const res = travel(st, dest, cfg, carry);
+    if (res.ok && p.logLoad) p.logLoad(Math.max(0, res.minutes - empty));
+    return res;
+  };
+  let r = walk(target);
   if (!r.ok) return { ok: false, msg: r.msg, ...z };
   p.log('travel', r.minutes);
   let pileAtArrival = currentField(st).pile.length;
@@ -452,7 +578,7 @@ function runTrip(st, target, p) {
       if (p.allowMove && z.moves < 3 && p.chooseNext) {
         const next = p.chooseNext(st, plan.items);
         if (next) {
-          r = travel(st, next, cfg, plan);
+          r = walk(next, plan);
           if (r.ok) {
             tally(plan);
             p.log('travel', r.minutes);
@@ -476,7 +602,7 @@ function runTrip(st, target, p) {
   }
   if (!atCamp(st)) {
     const plan = planCarry(st, p.vf, p.carry);
-    r = travel(st, st.map.camp, cfg, plan);
+    r = walk(st.map.camp, plan);
     if (r.ok) {
       tally(plan);
       z.carried = plan.items;
@@ -523,6 +649,18 @@ function exhaustField(st0, loc) {
   return o;
 }
 
+// How many attempts generateMap needed for the map a game with this seed gets. It shuffles the candidate cells (every cell
+// but the camp) once per attempt, and then each field shuffles its own cells once, so the attempts are the shuffles of that
+// length. (A field with exactly as many cells as the candidates could not be told apart: NaN.)
+function mapAttempts(seed) {
+  const need = cfg.map.size ** 2 - 1;
+  if (need === cfg.field.size ** 2) return NaN;
+  const rng = makeRng({ s: seed >>> 0 });
+  let attempts = 0;
+  generateMap({ ...rng, shuffle: (arr) => { if (arr.length === need) attempts++; return rng.shuffle(arr); } }, cfg);
+  return attempts;
+}
+
 function economySection(o) {
   const N = o.seeds ?? (o.quick ? 30 : 100);
   h1(`ECONOMY — ${N} generated maps, fresh games (skills 0, no rings, base intel)`);
@@ -552,12 +690,12 @@ function economySection(o) {
   }
   h2('1a. What a field holds, by distance from camp (generated maps)');
   printTable(
-    ['dist', 'fields/map', 'items/field', 'ores', 'gems', 'gem %', 'boulders', 'debris cells', 'mean thickness', 'items under debris'],
+    ['dist', 'fields/map', 'items/field', 'ores', 'gems', 'gem %', 'gem % set', 'boulders', 'debris cells', 'mean thickness', 'items under debris'],
     BUCKETS.map((b) => {
       const a = agg[b];
       const per = (v) => (a.fields ? v / a.fields : NaN);
       const ores = sum(Object.entries(a.types).filter(([t]) => t.startsWith('ore:')).map(([, v]) => v));
-      return [bucketLabel(b), f2(a.fields / N), f1(per(a.items)), f1(per(ores)), f1(per(a.items - ores)), f0((100 * (a.items - ores)) / Math.max(1, a.items)), f1(per(a.boulders)), f1(per(a.debrisCells)),
+      return [bucketLabel(b), f2(a.fields / N), f1(per(a.items)), f1(per(ores)), f1(per(a.items - ores)), f0((100 * (a.items - ores)) / Math.max(1, a.items)), distanceRow(b).gemShare, f1(per(a.boulders)), f1(per(a.debrisCells)),
         f0(a.debrisCells ? a.debrisAmt / a.debrisCells : NaN), f1(per(a.debrisItems))];
     }),
   );
@@ -573,7 +711,23 @@ function economySection(o) {
     note(`Fields never refill: the ~${f0(itemsPerMap)} items in ${f0(cellsPerMap)} cells are the whole ` +
       `supply of a run (ore: ${ORES.map((x) => `${x} ${f0((totals[`ore:${x}`] || 0) / N)}`).join(', ')}). The bot's "Map supply" table shows how fast it is used.`);
   }
+  // The map itself: how many fields, how far, and how many tries generateMap needs to find a map without long detours.
+  const mapRows = states.map((st, si) => {
+    const fields = st.map.cells.filter((c) => c.type === 'field');
+    return { n: fields.length, far: fields.filter((c) => c.dist >= 5).length, attempts: mapAttempts(mixSeed(9001, si)) };
+  });
+  const attemptsMean = mean(mapRows.map((m) => m.attempts));
+  const farOk = (100 * mapRows.filter((m) => m.far >= 6).length) / N;
+  const fieldsPerMap = mean(mapRows.map((m) => m.n));
+  note(`Map: ${cfg.map.size}x${cfg.map.size} with ${cfg.map.blockedCells} blocked cells and a detour limit of ${cfg.map.maxDetour}: ${f1(fieldsPerMap)} fields per map (` +
+    BUCKETS.map((b) => `d${bucketLabel(b)} ${f1(agg[b].fields / N)}`).join(', ') + `); ${f1(mean(mapRows.map((m) => m.far)))} fields at distance 5+ ` +
+    `(at least ${Math.min(...mapRows.map((m) => m.far))} on every map; ${f0(farOk)}% of maps have 6 or more); ${f2(attemptsMean)} attempts per map (at most ${Math.max(...mapRows.map((m) => m.attempts))}).`);
+  const T_ROWS = [];
+  check(T_ROWS, 'T-E3', 'fields per map', fieldsPerMap, 40, 40, 1);
+  check(T_ROWS, 'T-E3', '% of maps with 6 or more fields at distance 5+', farOk, 99, null, 0);
+  check(T_ROWS, 'T-E3', 'attempts per map (mean)', attemptsMean, null, 2, 2);
   let searchesPerCell = NaN;
+  let searchesAtBonus = {};
   {
     // Searches needed to finish one cell (each search rolls eff +/- searchRandomness for that cell).
     const rng = seededRng(mixSeed(4040, 1));
@@ -601,6 +755,7 @@ function economySection(o) {
     });
     note(`Searches per clear cell, by search-efficiency bonus (0 / skill ${cfg.skills.maxLevel} / C ring / S ring / S ring + skill ${cfg.skills.maxLevel}):\n  ` + rows.join('\n  '));
     searchesPerCell = meanKs[0]; // at +0% efficiency
+    searchesAtBonus = { 0: meanKs[0], 12: meanKs[1], 32: meanKs[4] }; // +0 / +12 (skill 10) / +32% (S ring + skill 10)
     // ... and a debris cell (mean thickness), by debris skill level
     const dm = (cfg.field.debrisAmount.min + cfg.field.debrisAmount.max) / 2;
     const dRows = [0, 5, 10].map((lv) => {
@@ -764,6 +919,46 @@ function economySection(o) {
   );
   note('Upper bound: by-products (other ores, gems) are ignored. "steel pair" = 1 iron + 1 coal.');
 
+  // ---- 3c. what sight is worth: the same trips with the Ore sight base forced to 0 / 20 / 40 / 60 / 100
+  // One trip from 8:00 (as in 3a) to the same field with the bot's search choice (centerOptions weighs the items it sees),
+  // carrying the most valuable items. Value per item: mythril 10, any gem 4, coal 3, iron 2, copper 0.5.
+  const SIGHTS = [0, 20, 40, 60, 100];
+  const SIGHT_BUCKETS = [2, 4, 5, 6];
+  const itemValue = (t) => (t.startsWith('gem:') ? 4 : { 'ore:mythril': 10, 'ore:coal': 3, 'ore:iron': 2, 'ore:copper': 0.5 }[t] ?? 0);
+  const sightRes = Object.fromEntries(SIGHT_BUCKETS.map((b) => [b, Object.fromEntries(SIGHTS.map((sg) => [sg, { n: 0, value: 0, min: 0, items: 0 }]))]));
+  for (const sg of SIGHTS) {
+    withSets([['intel.tracks.oreSight.base', sg]], () => {
+      states.forEach((st0, si) => {
+        const rng = seededRng(mixSeed(79, si)); // the same field for every sight value
+        for (const b of SIGHT_BUCKETS) {
+          const fs = fieldsAt(st0, b);
+          if (!fs.length) continue;
+          const c = rng.pick(fs);
+          const st = deepClone(st0);
+          const res = runTrip(st, c, { vf: itemValue, wasDebris: new WeakSet(), log: () => {}, minRate: 0.002, allowMove: false });
+          const r = sightRes[b][sg];
+          r.n++;
+          r.value += sum(res.carried.map(itemValue));
+          r.min += st.time - DAY_START;
+          r.items += res.carried.length;
+        }
+      });
+    });
+  }
+  const perHour = (cells) => (60 * sum(cells.map((r) => r.value))) / Math.max(EPS, sum(cells.map((r) => r.min)));
+  const pooled = (sg, bs) => perHour(bs.map((b) => sightRes[b][sg]));
+  h2('3c. What sight is worth: value carried per trip-hour (one trip from 8:00; sight forced via Ore sight base)');
+  printTable(
+    ['dist', ...SIGHTS.map((sg) => `sight ${sg}`), ...SIGHTS.slice(1).map((sg) => `+% at ${sg}`), 'trip min at 0 / 100', 'items carried at 0 / 100'],
+    [...SIGHT_BUCKETS.map((b) => [bucketLabel(b), ...SIGHTS.map((sg) => f1(perHour([sightRes[b][sg]]))), ...SIGHTS.slice(1).map((sg) => signed(100 * (perHour([sightRes[b][sg]]) / perHour([sightRes[b][0]]) - 1), 1)),
+      `${f0(sightRes[b][0].min / Math.max(1, sightRes[b][0].n))} / ${f0(sightRes[b][100].min / Math.max(1, sightRes[b][100].n))}`, `${f1(sightRes[b][0].items / Math.max(1, sightRes[b][0].n))} / ${f1(sightRes[b][100].items / Math.max(1, sightRes[b][100].n))}`]),
+    ['5-6 together', ...SIGHTS.map((sg) => f1(pooled(sg, [5, 6]))), ...SIGHTS.slice(1).map((sg) => signed(100 * (pooled(sg, [5, 6]) / pooled(0, [5, 6]) - 1), 1)), '', '']],
+  );
+  note('Value per item: mythril 10, any gem 4, coal 3, iron 2, copper 0.5 (the trip carries the most valuable items and searches where the visible and expected value per minute is best). Targets (T-E5, distance 5-6): sight 60 vs 0 +15-30%, sight 20 vs 0 +3-8%.');
+  const sightGain = (sg) => 100 * (pooled(sg, [5, 6]) / pooled(0, [5, 6]) - 1);
+  check(T_ROWS, 'T-E5', 'value per trip-hour at distance 5-6, sight 60 vs 0 (%)', sightGain(60), 15, 30);
+  check(T_ROWS, 'T-E5', 'value per trip-hour at distance 5-6, sight 20 vs 0 (%)', sightGain(20), 3, 8);
+
   // ---- 4. refining / cutting outcomes
   h2('4. Refining and cutting: outcome % per input, minutes, and minutes per C-or-better bar');
   const rows = [];
@@ -866,6 +1061,12 @@ function economySection(o) {
   note('Mining minutes use the best distance from 3b (dedicated trips, by-products ignored, skills 0).\n' +
     'Versus the 11-bar minimum, "matched >=D" shows the overhead from failures and grade spread.');
 
+  check(T_ROWS, 'T-E1', 'searches per clear cell at +0% efficiency', searchesPerCell, 3.9, 4.1, 2);
+  check(T_ROWS, 'T-E2', 'field minutes per copper', bestMin['ore:copper'].min, 23, 31);
+  check(T_ROWS, 'T-E2', 'field minutes per iron', bestMin['ore:iron'].min, 53, 71);
+  check(T_ROWS, 'T-E4', 'mythril per map', (totals['ore:mythril'] || 0) / N, 22, 32);
+  printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-E1..T-E5)');
+
   console.log(`\nECONOMY SUMMARY | items/search by dist ${BUCKETS.filter((b) => ex[b].n).map((b) => `d${bucketLabel(b)}:${f2(ex[b].i / ex[b].s)}`).join(' ')}` +
     ` | debris % of effort ${BUCKETS.filter((b) => ex[b].n).map((b) => `d${bucketLabel(b)}:${f0(debrisShare(b))}`).join(' ')}` +
     ` | one trip d1/d3: ${f0(trip[1].min / trip[1].n)}/${trip[3].n ? f0(trip[3].min / trip[3].n) : '-'} min for ${f1(trip[1].items / trip[1].n)}/${trip[3].n ? f1(trip[3].items / trip[3].n) : '-'} items` +
@@ -874,7 +1075,10 @@ function economySection(o) {
     ` | full set >=D work days: ${BARS.map((b) => `${b} ${f1(setDays[b])}`).join(', ')}` +
     ` | gem cut skill 0: F ${f0(gemCut.novice.F)}% C+ ${f0(gemCut.novice.S + gemCut.novice.A + gemCut.novice.B + gemCut.novice.C)}% effect ${f2(gemCut.eff0)} of C` +
     ` | map items/run ${f0(sum(Object.values(totals)) / N)} (mythril ${f1((totals['ore:mythril'] || 0) / N)}, coal ${f0((totals['ore:coal'] || 0) / N)})` +
-    ` | searches per clear cell ${f2(searchesPerCell)}`);
+    ` | searches per clear cell +0/+12/+32%: ${f2(searchesAtBonus[0])}/${f2(searchesAtBonus[12])}/${f2(searchesAtBonus[32])}` +
+    ` | map ${f1(fieldsPerMap)} fields, ${f0(farOk)}% of maps with 6+ at d5+, ${f2(attemptsMean)} attempts` +
+    ` | sight value/trip-hour d5-6 s20/s60 vs 0: ${signed(sightGain(20))}%/${signed(sightGain(60))}%` +
+    ` | ${targetFlags(T_ROWS)}`);
   return { bestMin };
 }
 
@@ -978,6 +1182,13 @@ const DAY1_LOADOUTS = [
 // of the time, and a copper D sword is ~+50% over unarmed, so the sensible day-1 sets sit well above the
 // 1.1 bands (normal 85-98, elite 50-75, champion 15-40). The mid-game targets (power section 2/3) did not change.
 const UNARMED_TARGET = [50, 65];
+// T-MID: the plain sets whose "last day with >= 70% vs a typical elite" the plan pins to 1.2's value (measured by this tool on 1.2's
+// numbers: ref12), within +-ANCHOR_WINDOW days.
+const ANCHORS = [
+  { set: ['copper', 'B'], ref12: 8 }, { set: ['iron', 'C'], ref12: 15 }, { set: ['steel', 'C'], ref12: 23 },
+  { set: ['mythril', 'C'], ref12: 41 }, { set: ['mythril', 'S'], ref12: 59 },
+];
+const ANCHOR_WINDOW = 3;
 const DAY2_TARGET = { normal: [95, 100], elite: [75, 95], champion: [40, 75] };
 
 function powerSection(o, T) {
@@ -1056,6 +1267,43 @@ function powerSection(o, T) {
   note('Ladder by power (material x grade): ' + LADDER.map(([m, g]) => `${m[0].toUpperCase()}${g}=${f2(power(m, g))}`).join(' '));
   note('Reading: the target progression (iron ~d5-8, steel ~d12-18, mythril ~d25+) should roughly match the "elite" column.');
 
+  // ---- 3b. the daily grid: the last day each plain set still wins 70% against a typical elite (T-MID)
+  const AM = o.quick ? 40 : 120; // enemies per day (a typical elite = a random roll of the tier's attribute levels, everything hidden)
+  const AF = o.quick ? 20 : 60; // fights per enemy
+  const THR = 70;
+  const anchorDay = ([mat, grade]) => {
+    const adv = adventurerCombatant(setOf(mat, grade), {}, cfg);
+    const meanWin = (d) => {
+      const rng = seededRng(mixSeed(42, d));
+      let w = 0;
+      for (let i = 0; i < AM; i++) {
+        const en = enemyCombatant('elite', d, rollLevels(rng, 'elite', cfg), 'Enemy', cfg);
+        const fr = seededRng(mixSeed(3, d, i));
+        for (let f = 0; f < AF; f++) {
+          const r = fight(adv, en, fr.next, false, cfg);
+          if (r.win || r.draw) w++;
+        }
+      }
+      return (100 * w) / (AM * AF);
+    };
+    let last = NaN;
+    let at = null;
+    for (let d = 2; d <= 150; d++) {
+      const w = meanWin(d);
+      if (w >= THR) [last, at] = [d, w];
+      else if (d > 5 && w < THR - 25) break; // far below the line: later days cannot come back
+    }
+    return { last, at };
+  };
+  const T_ROWS = [];
+  h2(`3b. Anchors: the last day a plain full set still wins >= ${THR}% against a typical elite (${AM} enemies x ${AF} fights per day, all attributes hidden)`);
+  const anchors = ANCHORS.map((a) => ({ ...a, ...anchorDay(a.set) }));
+  printTable(['set', 'last day >= 70%', 'win % that day', '1.2 (same tool)', 'allowed window'],
+    anchors.map((a) => [`${a.set[0]} ${a.set[1]}`, a.last, f1(a.at), a.ref12, `${a.ref12 - ANCHOR_WINDOW}-${a.ref12 + ANCHOR_WINDOW}`]));
+  note(`T-MID: within +-${ANCHOR_WINDOW} days of the same measurement on 1.2's numbers (copper B 8, iron C 15, steel C 23, mythril C 41, mythril S 59). The lever is enemies.growthPerDay.hpDamage.`);
+  for (const a of anchors) check(T_ROWS, 'T-MID', `${a.set[0]} ${a.set[1]}: last day >= ${THR}% vs a typical elite`, a.last, a.ref12 - ANCHOR_WINDOW, a.ref12 + ANCHOR_WINDOW, 0);
+  printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-MID)');
+
   const VT = T ?? valueTables(o.quick ? 40 : 200, o.quick ? 20 : 50);
   printValueTables(VT);
 
@@ -1075,167 +1323,198 @@ function powerSection(o, T) {
     ` | Cu D sword n/e/c ${TIERS.map((t) => f0(cuD.w[t])).join('/')}%` +
     ` | last day >=90% vs normal: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('normal', archIdx(n), 90)}`).join(', ')}` +
     ` | >=70% vs elite: ${['Copper B full', 'Iron C full', 'Steel C full', 'Mythril C full', 'Mythril S full'].map((n) => `${n.replace(' full', '')} d${lastDay('elite', archIdx(n), 70)}`).join(', ')}` +
-    ` | ceiling vs normal d60/d80 ${f0(arch.normal[ARCH.length - 1][days.indexOf(60)])}/${f0(arch.normal[ARCH.length - 1][days.indexOf(80)])}%`);
+    ` | ceiling vs normal d60/d80 ${f0(arch.normal[ARCH.length - 1][days.indexOf(60)])}/${f0(arch.normal[ARCH.length - 1][days.indexOf(80)])}%` +
+    ` | anchors (last day >=70% vs elite) ${anchors.map((a) => `${a.set[0]} ${a.set[1]} d${a.last}`).join(', ')} | ${targetFlags(T_ROWS)}`);
   return VT;
 }
 
 
 // =============================================================== SPECIALS ====
-// Targets (v1.2): switching ONE enemy offensive special from Normal to High (everything else Normal) costs a
-// mid-game set (steel C) roughly 10-20 win points, the matching defence (the armor gem at C on 3 pieces plus
-// one B ring) recovers at least half of that, and the adventurer's own S gem is a little weaker than the
-// enemy's High value (and enemy resistances blunt it).
+// R33 / T-R33 (docs/PLAN-2.0.md sections 4.7 and 9): are the gems worth crafting for, and is the right gem worth bringing?
+// Iron, steel and mythril C sets against an elite on the day that set wins about 55% against an all-Normal elite (a window of
+// 5 days around it), one enemy attribute changed at a time (everything else Normal):
+//   M1  what the enemy special costs: Normal -> High, in win points
+//   M2  the matching armor gem (chest + helmet, C) minus emerald armor on the same two pieces, against a High special
+//   M3  the same against a Low special (emerald armor must win there: bring the right gem to each fight)
+//   M4  the share of the High special's cost won back by three matching armor pieces (chest, helmet, gloves) + one B ring
+//   M5  how much of a sword gem's gain survives a High resistance of the enemy (gain at High / gain at Low), C and S
+//   M6  the five sword gems are about equally strong (each within a few points of their mean), C and S
+//   M7  emerald armor (chest + helmet, C) gains no more than the smallest M2
+//   S   an S sword gem gains no more than the matching enemy special swings between Low and High
+// Judged like the reference script (scratchpad/v2/cm/gems.mjs) and spec-combat 6.1: each value is the MEAN OF THE THREE SETS (iron,
+// steel, mythril) for one special (M6: for one sword gem; M7: once), not each material on its own. The per-material tables stay as
+// information (a 12-cell reading would be stricter than the plan: T-R33 says "each special", not "each special on each material").
 const SPECIALS = [
-  { name: 'Magic', off: 'magical', field: 'magicPct', res: 'magicRes', gem: 'ruby', resRing: 'magicRes', offRing: 'magicDmg' },
-  { name: 'Piercing', off: 'piercing', field: 'pierce', res: 'pierceRes', gem: 'diamond', resRing: 'pierceRes', offRing: 'pierce' },
-  { name: 'Stun', off: 'stunning', field: 'stunChance', res: 'stunRes', gem: 'topaz', resRing: 'stunRes', offRing: null },
-  { name: 'Slow', off: 'chilling', field: 'slowPct', res: 'slowRes', gem: 'sapphire', resRing: 'slowRes', offRing: null },
+  { name: 'Magic', off: 'magical', res: 'magicRes', gem: 'ruby', resRing: 'magicRes' },
+  { name: 'Piercing', off: 'piercing', res: 'pierceRes', gem: 'diamond', resRing: 'pierceRes' },
+  { name: 'Stun', off: 'stunning', res: 'stunRes', gem: 'topaz', resRing: 'stunRes' },
+  { name: 'Slow', off: 'chilling', res: 'slowRes', gem: 'sapphire', resRing: 'slowRes' },
 ];
+const R33 = {
+  M1: [8, 20], M2: [4, null], M3: [null, -2], M4: [80, null], M5C: [null, 50], M5S: [null, 60], M6C: 3, M6S: 4,
+};
+
+// A metric row for the targets table: the range of the measured values and how many fall outside [lo, hi].
+function metricRow(rows, id, what, values, lo, hi, digits = 1) {
+  const bad = values.filter((v) => judge(v, lo, hi) !== 'ok');
+  const target = lo != null && hi != null ? `${lo} to ${hi}` : lo != null ? `>= ${lo}` : `<= ${hi}`;
+  const a = fx(Math.min(...values), digits);
+  const b = fx(Math.max(...values), digits);
+  rows.push([id, what, a === b ? a : `${a} to ${b}`, target, bad.length ? `MISS ${bad.length}/${values.length}` : 'ok']);
+}
 
 function specialsSection(o) {
-  const n = o.quick ? 1500 : 6000; // fights per cell per day
-  const WINDOW = 3; // reference day +- 3
+  const n = o.quick ? 300 : 1500; // fights per cell (an enemy variant on one day)
+  const WINDOW = 2; // reference day +- 2
   const tier = 'elite';
+  const mats = ['iron', 'steel', 'mythril'];
   const lv = (over = {}) => Object.fromEntries(Object.keys(cfg.enemies.attributes).map((k) => [k, over[k] || 'normal']));
   const foe = (day, over) => enemyCombatant(tier, day, lv(over), 'Enemy', cfg);
-  const wins = (gear, rings, day, over, salt, edit = null) => {
-    const adv = adventurerCombatant(gear, rings, cfg);
-    const en = foe(day, over);
-    if (edit) edit(en);
-    const rng = seededRng(mixSeed(777, day, salt));
+  const winRate = (adv, en, count, seed) => {
+    const rng = seededRng(seed);
     let w = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < count; i++) {
       const r = fight(adv, en, rng.next, false, cfg);
       if (r.win || r.draw) w++;
     }
-    return (100 * w) / n;
+    return (100 * w) / count;
   };
+  // The day that set wins about 55% against an all-Normal elite.
   const refDayOf = (gear) => {
+    const adv = adventurerCombatant(gear, {}, cfg);
     let best = 2;
     let bd = Infinity;
-    for (let d = 2; d <= 90; d++) {
-      const adv = adventurerCombatant(gear, {}, cfg);
-      const en = foe(d, {});
-      const rng = seededRng(mixSeed(5, d));
-      let w = 0;
-      for (let i = 0; i < 600; i++) if (fight(adv, en, rng.next, false, cfg).win) w++;
-      const dist = Math.abs((100 * w) / 600 - 55);
+    for (let d = 2; d <= 150; d++) {
+      const dist = Math.abs(winRate(adv, foe(d, {}), 500, mixSeed(5, d)) - 55);
       if (dist < bd) [bd, best] = [dist, d];
     }
     return best;
   };
-  const armorOn = (mat, gem, pieces) => setOf(mat, 'C').map((it) => (ARMOR_SLOTS.slice(0, pieces).includes(it.slot) ? { ...it, gem: { type: gem, grade: 'C' } } : it));
+  const gemOn = (base, gem, slots, grade) => base.map((it) => (slots.includes(it.slot) ? { ...it, gem: { type: gem, grade } } : it));
   const ring = (type, grade) => ringTotals([{ type, grade }]);
+  const pairOf = ['chest', 'helmet'];
+  const trio = ['chest', 'helmet', 'gloves'];
 
-  h1(`SPECIALS — enemy specials vs matching defence, and the adventurer's own gems (plain C set vs an ${tier}; ${n} fights x ${2 * WINDOW + 1} days per cell)`);
-  note('Each enemy special is set to Low / Normal / High with all other attributes Normal. "def" = the armor gem at grade C on 3 pieces (chest, helmet, gloves) plus one B ring of the matching resistance.');
-  note('N->H = win points lost going from Normal to High. recovered = how much of that loss the defence wins back at High (2 / 3 / 4 gem pieces + the ring).');
-  const summary = [];
-  for (const mat of ['iron', 'steel', 'mythril']) {
+  h1(`SPECIALS (R33) — gems and enemy specials: iron / steel / mythril C sets vs an ${tier} (${n} fights x ${2 * WINDOW + 1} days per cell)`);
+  note('Each cell changes ONE enemy attribute (Low / Normal / High) and keeps the rest Normal. The per-material tables are information; the targets judge the mean of the three sets per special. Reference day = the day the plain C set wins about 55% against an all-Normal elite; the cell is the mean over ref-2..ref+2.');
+  note('M1 cost Normal->High; M2/M3 matching armor gem minus emerald armor (chest + helmet, grade C) at a High / Low special; M4 recovered by 3 matching pieces + a B resistance ring; M5 sword gem kept at a High resistance (gain at High / gain at Low); M6 gain of a sword gem vs an all-Normal elite; M7 emerald armor; swing = the matching special Low->High.');
+  // One entry per material (a "cell" = one special on one material): the targets are judged on the mean of the three sets
+  // (docs/PLAN-2.0.md section 4.7, spec-combat 6.1: "the reported number is the mean of the three sets"), not on the cells.
+  const perMat = [];
+  const refs = [];
+  for (const mat of mats) {
     const base = setOf(mat, 'C');
     const ref = refDayOf(base);
+    refs.push(`${mat} d${ref}`);
+    const cell = { M1: [], M2: [], M3: [], M4: [], M5C: [], M5S: [], S: [], gains: {}, m7: NaN };
+    perMat.push(cell);
     const days = [];
     for (let d = ref - WINDOW; d <= ref + WINDOW; d++) if (d >= 2) days.push(d);
-    const W = (gear, rings, over) => mean(days.map((d) => wins(gear, rings, d, over, 1)));
-    h2(`${mat} C full set vs ${tier}, reference day ${ref} (days ${days[0]}-${days[days.length - 1]}); all-Normal enemy: ${f1(W(base, {}, {}))}% win`);
-    const rows = SPECIALS.map((sp) => {
-      const v = cfg.enemies.attributes[sp.off].values;
-      const none = ['low', 'normal', 'high'].map((l) => W(base, {}, { [sp.off]: l }));
-      const rg = ring(sp.resRing, 'B');
-      const def = ['low', 'normal', 'high'].map((l) => W(armorOn(mat, sp.gem, 3), rg, { [sp.off]: l }));
-      const loss = none[1] - none[2];
-      const rec = (p) => (100 * (W(armorOn(mat, sp.gem, p), rg, { [sp.off]: 'high' }) - none[2])) / Math.max(EPS, loss);
-      const recs = [rec(2), def[2] - none[2] > 0 ? (100 * (def[2] - none[2])) / Math.max(EPS, loss) : 0, rec(4)];
-      if (mat === 'steel') summary.push(`${sp.name} -${f0(loss)} / ${f0(recs[1])}%`);
-      return [sp.name, `${v.low}/${v.normal}/${v.high}`, ...none.map(f1), `-${f1(loss)}`, ...def.map(f1), recs.map((x) => `${f0(x)}%`).join(' / ')];
-    });
-    printTable(['special', 'low/normal/high', 'no def L', 'N', 'H', 'N->H', 'def L', 'N', 'H', 'recovered (2/3/4 gems)'], rows);
-  }
-
-  // ---- the adventurer's own offence
-  const mat = 'steel';
-  const base = setOf(mat, 'C');
-  const ref = refDayOf(base);
-  const days = [];
-  for (let d = ref - WINDOW; d <= ref + WINDOW; d++) if (d >= 2) days.push(d);
-  const W = (gear, rings, over, edit = null) => mean(days.map((d) => wins(gear, rings, d, over, 2, edit)));
-  h2(`The adventurer's own specials: win-point gain of a sword gem / one ring over the same ${mat} C set without it, by the enemy's matching resistance (day ${ref}, all else Normal)`);
-  const advRows = [];
-  const gains = (gear, rings, res) => ['low', 'normal', 'high'].map((l) => W(gear, rings, { [res]: l }) - W(base, {}, { [res]: l }));
-  for (const sp of SPECIALS) {
-    const rv = cfg.enemies.attributes[sp.res].values;
-    const eff = cfg.gemEffects[sp.gem].weapon;
-    const key = Object.keys(eff)[0];
-    const highEnemy = cfg.enemies.attributes[sp.off].values.high;
-    for (const g of ['C', 'S']) {
-      const gi = GRADES.indexOf(g);
-      const units = Object.entries(eff).map(([k, a]) => `${a[gi]}${k.endsWith('Dur') ? 's' : '%'}`).join(' / ');
-      const gn = gains(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: g } }), {}, sp.res);
-      advRows.push([`${sp.gem} sword ${g}`, units, g === 'S' ? `${f0((100 * eff[key][gi]) / highEnemy)}%` : '', `${rv.low}/${rv.normal}/${rv.high}`, ...gn.map((x) => (x >= 0 ? '+' : '') + f1(x))]);
-    }
-    if (sp.offRing) {
-      for (const g of ['B', 'S']) {
-        const val = cfg.rings.types[sp.offRing].values[GRADES.indexOf(g)];
-        const gn = gains(base, ring(sp.offRing, g), sp.res);
-        advRows.push([`${sp.offRing} ring ${g}`, `${val}%`, '', `${rv.low}/${rv.normal}/${rv.high}`, ...gn.map((x) => (x >= 0 ? '+' : '') + f1(x))]);
+    // mean win % over the window; the same random numbers for every gear / enemy variant with the same salt (paired comparisons)
+    const W = (gear, rings, over, salt = 1) => mean(days.map((d) => winRate(adventurerCombatant(gear, rings, cfg), foe(d, over), n, mixSeed(777, d, salt))));
+    const swordGem = (gem, grade) => gemOn(base, gem, ['sword'], grade);
+    const N0 = W(base, {}, {});
+    const N0s = W(base, {}, {}, 2);
+    h2(`${mat} C full set, reference day ${ref} (days ${days[0]}-${days[days.length - 1]}); all-Normal elite: ${f1(N0)}% win`);
+    const rows = [];
+    const sGain = {};
+    for (const sp of SPECIALS) {
+      const H = W(base, {}, { [sp.off]: 'high' });
+      const Lo = W(base, {}, { [sp.off]: 'low' });
+      const m1 = N0 - H;
+      const high = { [sp.off]: 'high' };
+      const low = { [sp.off]: 'low' };
+      const m2 = W(gemOn(base, sp.gem, pairOf, 'C'), {}, high) - W(gemOn(base, 'emerald', pairOf, 'C'), {}, high);
+      const m3 = W(gemOn(base, sp.gem, pairOf, 'C'), {}, low) - W(gemOn(base, 'emerald', pairOf, 'C'), {}, low);
+      const def = W(gemOn(base, sp.gem, trio, 'C'), ring(sp.resRing, 'B'), high);
+      const m4 = (100 * (def - H)) / Math.max(0.5, N0 - H);
+      const keep = {};
+      const gain = {};
+      for (const g of ['C', 'S']) {
+        const gl = W(swordGem(sp.gem, g), {}, { [sp.res]: 'low' }, 2) - W(base, {}, { [sp.res]: 'low' }, 2);
+        const gh = W(swordGem(sp.gem, g), {}, { [sp.res]: 'high' }, 2) - W(base, {}, { [sp.res]: 'high' }, 2);
+        keep[g] = (100 * gh) / Math.max(0.5, gl);
+        gain[g] = W(swordGem(sp.gem, g), {}, {}, 2) - N0s;
       }
+      sGain[sp.gem] = gain;
+      const swing = Lo - H;
+      cell.M1.push(m1);
+      cell.M2.push(m2);
+      cell.M3.push(m3);
+      cell.M4.push(m4);
+      cell.M5C.push(keep.C);
+      cell.M5S.push(keep.S);
+      cell.S.push(gain.S - swing); // <= 0 is the target
+      rows.push([sp.name, sp.gem, f1(m1), (m2 >= 0 ? '+' : '') + f1(m2), (m3 >= 0 ? '+' : '') + f1(m3), `${f0(m4)}%`, `${f0(keep.C)}%`, `${f0(keep.S)}%`, f1(gain.C), f1(gain.S), f1(swing)]);
     }
+    printTable(['special', 'gem', 'M1 N->H', 'M2 @High', 'M3 @Low', 'M4 recovered', 'M5 C kept', 'M5 S kept', 'M6 C gain', 'M6 S gain', 'swing L->H'], rows);
+    // M6: the five sword gems; emerald has no resistance to keep
+    const gains = { ...sGain, emerald: { C: W(swordGem('emerald', 'C'), {}, {}, 2) - N0s, S: W(swordGem('emerald', 'S'), {}, {}, 2) - N0s } };
+    cell.gains = gains;
+    const m7 = W(gemOn(base, 'emerald', pairOf, 'C'), {}, {}) - N0;
+    cell.m7 = m7;
+    const minM2 = Math.min(...cell.M2);
+    note(`Sword gems vs an all-Normal elite (win points): ${Object.entries(gains).map(([g, x]) => `${g} C ${f1(x.C)} / S ${f1(x.S)}`).join(', ')}. Emerald armor on chest + helmet (M7): ${f1(m7)} (smallest M2 ${f1(minM2)}).`);
   }
-  printTable(['gem / ring', 'effect', 'S / enemy High', 'enemy resist L/N/H', 'gain vs L', 'N', 'H'], advRows);
-  note('"S / enemy High" = the S gem\'s main number as a share of the enemy\'s High value for the same special (target: below 100%, a little weaker).');
 
-  // ---- enemy special vs the adventurer's equivalent, in win points
-  h2(`Adventurer offence vs the enemy's equivalent special, in win points (${mat} C set vs an all-Normal ${tier}, day ${ref})`);
-  const normalW = W(base, {}, {});
-  const cmpRows = SPECIALS.map((sp) => {
-    const ev = cfg.enemies.attributes[sp.off].values;
-    const absent = W(base, {}, {}, (en) => { en[sp.field] = 0; });
-    const high = W(base, {}, { [sp.off]: 'high' });
-    const eff = cfg.gemEffects[sp.gem].weapon;
-    const mainKey = Object.keys(eff)[0];
-    const gS = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'S' } }), {}, {}) - normalW;
-    const gC = W(setOf(mat, 'C', { swordGem: { type: sp.gem, grade: 'C' } }), {}, {}) - normalW;
-    const costN = absent - normalW;
-    const costH = absent - high;
-    const unit = (g) => Object.entries(eff).map(([k, a]) => `${a[GRADES.indexOf(g)]}${k.endsWith('Dur') ? 's' : '%'}`).join('/');
-    return [sp.name, `${ev.normal} / ${ev.high}`, `-${f1(costN)} / -${f1(costH)}`, `${sp.gem} C ${unit('C')} | S ${unit('S')}`, `+${f1(gC)} / +${f1(gS)}`, `${f0((100 * eff[mainKey][4]) / ev.high)}%`, `${f0((100 * gS) / costN)}% / ${f0((100 * gS) / costH)}%`];
-  });
-  printTable(['special', 'enemy Normal / High', 'enemy costs you vs none (Normal / High)', 'adventurer gem (C | S)', 'gem gain (C / S)', 'S value / enemy High', 'S gain / enemy cost (Normal / High)'], cmpRows);
-  note('Target: the adventurer\'s top gem is a little weaker than the enemy\'s High special, both in the number shown (S value / enemy High, below 100%) and in win points (S gain below the enemy\'s High cost, about the enemy\'s Normal cost).');
-
-  // ---- defensive rings in their matchup
-  h2(`Defensive and other adventurer rings: gain of ONE ring (B / S) vs an all-Normal ${tier} and vs an ${tier} with the matching attribute High (${mat} C set, day ${ref})`);
-  const rrows = [];
-  const base0 = W(base, {}, {});
-  for (const t of ADV_RINGS) {
-    const sp = SPECIALS.find((x) => x.resRing === t);
-    const bH = sp ? W(base, {}, { [sp.off]: 'high' }) : null;
-    const cell = (g) => `${f1(W(base, ring(t, g), {}) - base0)}${sp ? ` / ${f1(W(base, ring(t, g), { [sp.off]: 'high' }) - bH)}` : ''}`;
-    rrows.push([t, cfg.rings.types[t].values[2], cfg.rings.types[t].values[4], cell('B'), cell('S')]);
+  // The targets: one value per special (per sword gem for M6), each the mean over iron / steel / mythril.
+  const overMats = (pick) => mean(perMat.map(pick));
+  const bySpecial = (key) => SPECIALS.map((_, i) => overMats((c) => c[key][i]));
+  const m = {
+    M1: bySpecial('M1'), M2: bySpecial('M2'), M3: bySpecial('M3'), M4: bySpecial('M4'), M5C: bySpecial('M5C'), M5S: bySpecial('M5S'), S: bySpecial('S'), refs,
+  };
+  const gemNames = Object.keys(perMat[0].gains);
+  for (const g of ['C', 'S']) {
+    const gain = gemNames.map((gem) => overMats((c) => c.gains[gem][g])); // each gem's gain, mean of the three sets
+    const mu = mean(gain);
+    m[`M6${g}`] = gain.map((v) => Math.abs(v - mu));
   }
-  printTable(['ring', 'B value', 'S value', 'B: normal / vs High', 'S: normal / vs High'], rrows);
-  console.log(`\nSPECIALS SUMMARY (steel C, N->H loss / recovered by 3 gems + B ring) | ${summary.join(' | ')}`);
+  const meanM7 = overMats((c) => c.m7);
+  const minM2 = Math.min(...m.M2);
+  m.M7 = [meanM7 - minM2]; // <= 0 is the target
+  h2('Mean of the three sets (iron / steel / mythril), per special: the numbers the targets judge');
+  printTable(['special', 'gem', 'M1 N->H', 'M2 @High', 'M3 @Low', 'M4 recovered', 'M5 C kept', 'M5 S kept', 'S gain - swing'],
+    SPECIALS.map((sp, i) => [sp.name, sp.gem, f1(m.M1[i]), (m.M2[i] >= 0 ? '+' : '') + f1(m.M2[i]), (m.M3[i] >= 0 ? '+' : '') + f1(m.M3[i]), `${f0(m.M4[i])}%`, `${f0(m.M5C[i])}%`, `${f0(m.M5S[i])}%`, signed(m.S[i], 1)]));
+  note(`Sword gem gain vs an all-Normal elite, mean of the three sets (C / S): ${gemNames.map((g) => `${g} ${f1(overMats((c) => c.gains[g].C))} / ${f1(overMats((c) => c.gains[g].S))}`).join(', ')}; ` +
+    `distance from the mean of the five: C ${m.M6C.map((v) => f1(v)).join(' ')} | S ${m.M6S.map((v) => f1(v)).join(' ')}. Emerald armor (chest + helmet, C): ${f1(meanM7)} against the smallest M2 ${f1(minM2)}.`);
+
+  const T_ROWS = [];
+  metricRow(T_ROWS, 'T-R33', 'M1 N->H cost (points)', m.M1, ...R33.M1);
+  metricRow(T_ROWS, 'T-R33', 'M2 matching - emerald armor at High', m.M2, ...R33.M2);
+  metricRow(T_ROWS, 'T-R33', 'M3 the same at Low', m.M3, ...R33.M3);
+  metricRow(T_ROWS, 'T-R33', 'M4 recovered by 3 pieces + B ring (%)', m.M4, ...R33.M4, 0);
+  metricRow(T_ROWS, 'T-R33', 'M5 sword gem C kept at High resistance (%)', m.M5C, ...R33.M5C, 0);
+  metricRow(T_ROWS, 'T-R33', 'M5 sword gem S kept at High resistance (%)', m.M5S, ...R33.M5S, 0);
+  metricRow(T_ROWS, 'T-R33', 'M6 sword gem C: distance from the mean of the five', m.M6C, null, R33.M6C);
+  metricRow(T_ROWS, 'T-R33', 'M6 sword gem S: distance from the mean of the five', m.M6S, null, R33.M6S);
+  metricRow(T_ROWS, 'T-R33', 'M7 emerald armor gain - smallest M2', m.M7, null, 0);
+  metricRow(T_ROWS, 'T-R33', 'S sword gem gain - matching Low->High swing', m.S, null, 0);
+  printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-R33; each value is the mean of iron / steel / mythril: 4 specials, 5 sword gems for M6, 1 for M7)');
+  const span = (v, d = 0) => (fx(Math.min(...v), d) === fx(Math.max(...v), d) ? fx(v[0], d) : `${fx(Math.min(...v), d)}..${fx(Math.max(...v), d)}`);
+  console.log(`\nSPECIALS | ref ${m.refs.join(' ')} | M1 ${span(m.M1)} (8-20) | M2 ${span(m.M2, 1)} (>=4) | M3 ${span(m.M3, 1)} (<=-2) | M4 ${span(m.M4)}% (>=80) | M5 C ${span(m.M5C)}% S ${span(m.M5S)}% (<=50/60)` +
+    ` | M6 C max ${fx(Math.max(...m.M6C), 1)} S max ${fx(Math.max(...m.M6S), 1)} (<=3/4) | M7 ${span(m.M7, 1)} (<=0) | S-swing ${span(m.S, 1)} (<=0) | ${targetFlags(T_ROWS)}`);
 }
 
 // ============================================================ ESTIMATOR =====
-// How accurate is the in-game win-chance estimate at a given size (guesses x test fights)? A plain steel C set
-// vs random elites on three days chosen so the average true win chance is about 55 / 75 / 90%. For each
-// enemy: its TRUE win chance (4000 fights against its real attributes) and the estimate made when only a
-// share of its attributes is visible (enemy scouting: the base is CONFIG.intel.tracks.enemySight.base; 50 and
-// 100 show what better scouting does). Every estimate is made 3 times with different random draws.
-//   repeat sd  = how much the same estimate wobbles between presses (sampling noise; shrinks with size)
-//   error sd   = typical miss of the estimate vs the true chance (adds the hidden-attribute guesswork,
-//                which more guesses do not remove)
-//   >10 pts    = share of estimates that miss by more than 10 points
-// Sizes: 10x10 = start of the game; 13x13 / 16x16 = a C / S Foresight ring (+3 / +6); 20x20 = 1 Battle
-// simulation intel point (+10); 29x29 = 2 points (+10 +9); 40x30 = the 1.1 estimate.
+// A2 / T-A2: how good is the in-game automatic win estimate at a given size (guesses x test fights), and what does it cost?
+// A plain steel C set against random elites on three days chosen so the average true win chance is about 55 / 75 / 90%.
+// For each enemy: its TRUE win chance (4000 fights against its real attributes) and the estimate made when only the
+// attributes that enemy scouting shows are visible (the starting 10% scouting, times the elite multiplier like the game does).
+// Every estimate is made 3 times with different random draws.
+//   shown +-   = the margin the game shows next to the estimate (shownMargin: twice the spread of the guesses, never less than the
+//                Wilson floor of all the test fights), mean over the estimates
+//   miss (rms) = root mean square of (estimate - true chance): the typical miss, which includes the guesswork about hidden attributes
+//   wobble     = how much the same estimate moves between presses (sampling noise; shrinks with size)
+//   inside +-  = the share of estimates whose true chance lies within the shown margin
+// Sizes: 5x5 = the start, 6x6 / 8x8 = Battle simulation points or a Foresight ring, 10x10 = the most the game reaches (+3 intel, +2 ring).
 function estimatorSection(o) {
   const M = o.quick ? 40 : 200; // enemies per target
   const tier = 'elite';
   const gear = setOf('steel', 'C');
-  const sizes = [[10, 10], [13, 13], [16, 16], [20, 20], [29, 29], [40, 30]];
-  const base = cfg.intel.tracks.enemySight.base;
-  const sights = [...new Set([base, 50, 100])];
+  const base = cfg.sim.samples;
+  const sizes = [[base, base], [base + 1, base + 1], [base + 3, base + 3], [base + 5, base + 5]]; // 5x5 6x6 8x8 10x10 (+1 per Battle simulation point and Foresight step)
+  const scouting = cfg.intel.tracks.enemySight.base;
+  const sightPct = (scouting * (((cfg.intel.tracks.enemySight.tierMult || {})[tier]) ?? 100)) / 100;
   const lvOf = (rng) => rollLevels(rng, tier, cfg);
   const trueWin = (day, levels, n, seed) => {
     const adv = adventurerCombatant(gear, {}, cfg);
@@ -1260,10 +1539,10 @@ function estimatorSection(o) {
     }
     return best;
   };
-  h1(`ESTIMATOR — how far off is the win-chance estimate? (steel C set vs random ${tier}s; ${M} enemies per target, 3 estimates each)`);
-  note('Sizes are guesses x test fights. 13x13 / 16x16 = a C / S Foresight ring, 20x20 = 1 Battle simulation intel point, 29x29 = 2 points, 40x30 = what 1.1 used.');
-  note(`Sight = the share of the enemy's attributes visible (enemy scouting; ${base}% is the starting value). repeat sd = wobble of the same estimate between presses; error sd = miss vs the true chance (includes the guesswork about hidden attributes).`);
-  const summary = [];
+  const optsOf = ([S, E]) => ({ samples: S, evalFights: E, fightsPerLoadout: E });
+  h1(`ESTIMATOR — how good is the automatic win estimate? (steel C set vs random ${tier}s; ${M} enemies per target, 3 estimates each, ${scouting}% enemy scouting = ${f1(sightPct)}% per attribute for ${tier}s)`);
+  note(`Sizes are guesses x test fights: ${sizes.map(([S, E]) => `${S}x${E}`).join(', ')} (the game starts at ${base}x${base}; each Battle simulation point and each Foresight ring step adds 1, at most +${cfg.intel.tracks.simDepth.max} and +2). The gear search uses as many fights per gear combination as test fights.`);
+  const acc = Object.fromEntries(sizes.map(([S, E]) => [`${S}x${E}`, { margin: [], miss2: [], wobble2: [], inside: [] }]));
   for (const target of [55, 75, 90]) {
     const day = dayFor(target);
     const rng = seededRng(mixSeed(1234, target));
@@ -1276,60 +1555,116 @@ function estimatorSection(o) {
     const sdT = Math.sqrt(mean(enemies.map((e) => (e.truth - mt) ** 2)));
     h2(`target ~${target}%: steel C set vs ${tier} on day ${day}; mean true win ${f1(mt)}% (true spread sd ${f1(sdT)})`);
     const rows = sizes.map(([S, E]) => {
-      const cells = [];
-      for (const sight of sights) {
-        const errs = [];
-        const reps = [];
-        let hi = 0;
-        let falseSafe = 0;
-        enemies.forEach((e, i) => {
-          const known = {};
-          for (const k of Object.keys(e.levels)) if (e.sightRoll[k] < sight) known[k] = e.levels[k];
-          const ests = [0, 1, 2].map((r) => estimateWinChanceSync({ gearItems: gear, ringTotals: {}, tier, day, known, seed: 1000 * i + r + 1 }, { samples: S, evalFights: E, fightsPerLoadout: E }, cfg).winPct);
-          const m = mean(ests);
-          reps.push(Math.sqrt(sum(ests.map((x) => (x - m) ** 2)) / 2));
-          errs.push(ests[0] - e.truth);
-          if (ests[0] >= 90) {
-            hi++;
-            if (e.truth < 80) falseSafe++;
-          }
-        });
-        const me = mean(errs);
-        const sdE = Math.sqrt(mean(errs.map((x) => (x - me) ** 2)));
-        const repSd = Math.sqrt(mean(reps.map((x) => x * x)));
-        const over10 = (100 * errs.filter((x) => Math.abs(x) > 10).length) / errs.length;
-        cells.push(f1(repSd), f1(sdE), `${f0(over10)}%`);
-        if (target === 90 && sight === base) summary.push({ S, E, falseSafe: hi ? (100 * falseSafe) / hi : NaN, hi });
-        if (sight === base) summary.push({ S, E, target, repSd, sdE, over10 });
-      }
-      return [`${S}x${E}`, ...cells];
+      const a = acc[`${S}x${E}`];
+      const margins = [];
+      const miss2 = [];
+      const wob2 = [];
+      let inside = 0;
+      let total = 0;
+      enemies.forEach((e, i) => {
+        const known = {};
+        for (const k of Object.keys(e.levels)) if (e.sightRoll[k] < sightPct) known[k] = e.levels[k];
+        const ests = [0, 1, 2].map((r) => estimateWinChanceSync({ gearItems: gear, ringTotals: {}, tier, day, known, seed: 1000 * i + r + 1 }, optsOf([S, E]), cfg));
+        const pcts = ests.map((x) => x.winPct);
+        const mu = mean(pcts);
+        wob2.push(sum(pcts.map((x) => (x - mu) ** 2)) / 2);
+        for (const x of ests) {
+          const mg = shownMargin(x);
+          margins.push(mg);
+          miss2.push((x.winPct - e.truth) ** 2);
+          total++;
+          if (Math.abs(x.winPct - e.truth) <= mg) inside++;
+        }
+      });
+      a.margin.push(...margins);
+      a.miss2.push(...miss2);
+      a.wobble2.push(...wob2);
+      a.inside.push(inside / total);
+      return [`${S}x${E}`, f1(mean(margins)), f1(Math.sqrt(mean(miss2))), f1(Math.sqrt(mean(wob2))), `${f0((100 * inside) / total)}%`];
     });
-    printTable(['size', ...sights.flatMap((sg) => [`sight ${sg}%: repeat sd`, 'error sd', '>10 pts'])], rows);
-    if (target === 90) {
-      const fs = summary.filter((x) => x.falseSafe !== undefined && x.target === undefined);
-      note(`Risk at 90%: of the estimates >= 90 (sight ${base}%), the share whose true chance is under 80: ` + fs.map((x) => `${x.S}x${x.E} ${Number.isFinite(x.falseSafe) ? f0(x.falseSafe) + '%' : '-'}`).join(', ') + '.');
+    printTable(['size', 'shown +-', 'miss (rms)', 'wobble', 'truth inside +-'], rows);
+  }
+  const keyOf = ([S, E]) => `${S}x${E}`;
+  h2('All three targets together');
+  printTable(['size', 'shown +- (mean)', 'miss (rms)', 'wobble', 'truth inside +-', 'margin when every test fight is won'],
+    sizes.map(([S, E]) => {
+      const a = acc[keyOf([S, E])];
+      return [keyOf([S, E]), f1(mean(a.margin)), f1(Math.sqrt(mean(a.miss2))), f1(Math.sqrt(mean(a.wobble2))), `${f0(100 * mean(a.inside))}%`, shownMargin({ wins: S * E, fights: S * E, se: 0 })];
+    }));
+  note('The last column is the margin floor: a spread of 0 does not mean certainty, so all test fights won still shows a margin (25 of 25 -> 14, from the Wilson bound).');
+
+  // ---- cost: simulated fights and milliseconds per roster of 7 enemies, with 2 and 3 items per gear type
+  const rosterRng = seededRng(mixSeed(77, 1));
+  const roster = generateRoster(rosterRng, 20, cfg).enemies;
+  // trade-off items per gear type, none better than another in every stat (so the gear search keeps all of them)
+  const variants = [() => ({ material: 'iron', grade: 'C', gem: null }), () => ({ material: 'copper', grade: 'C', gem: { type: 'ruby', grade: 'C' } }), () => ({ material: 'copper', grade: 'D', gem: { type: 'diamond', grade: 'C' } })];
+  const gearOf = (counts) => SLOTS.flatMap((slot, si) => variants.slice(0, counts[si]).map((v) => ({ id: nextItemId++, slot, durability: 100, packed: false, ...v() })));
+  // 2 per type = the pack limit; 3 per type = every pack mule; the third row is the dearest case: the largest number of combinations
+  // that is still tried one by one (maxExactCombos), here a pack mule for the sword and 2 of every other type
+  const gearCases = [['2 per type', [2, 2, 2, 2, 2]], ['3 per type', [3, 3, 3, 3, 3]], ['3 swords + 2 per type', [3, 2, 2, 2, 2]]];
+  const costRows = [];
+  const cost = {};
+  for (const [gname, counts] of gearCases) {
+    const items = gearOf(counts);
+    const kept = pruneDominated(items, cfg).length;
+    const combos = counts.reduce((a, b) => a * b, 1);
+    for (const [label, size] of [['base', sizes[0]], ['max', sizes[sizes.length - 1]]]) {
+      let fights = 0;
+      let evaluated = 0;
+      const t = process.hrtime.bigint();
+      roster.forEach((e, i) => {
+        const res = estimateWinChanceSync({ gearItems: items, ringTotals: {}, tier: e.tier, day: e.day, known: {}, seed: i + 1 }, optsOf(size), cfg);
+        fights += res.evaluated * size[1] + size[0] * size[1];
+        evaluated += res.evaluated;
+      });
+      const ms = Number(process.hrtime.bigint() - t) / 1e6;
+      cost[`${gname}/${label}`] = { fights, ms };
+      costRows.push([`${gname} (${combos} combinations${kept < items.length ? `, ${items.length - kept} items pruned!` : ''})`, `${label} ${keyOf(size)}`, f0(evaluated), f0(fights), f0(ms)]);
     }
   }
-  const line = (S, E) => {
-    const xs = summary.filter((x) => x.target && x.S === S && x.E === E);
-    return `${S}x${E}: repeat sd ${f1(mean(xs.map((x) => x.repSd)))}, error sd ${f1(mean(xs.map((x) => x.sdE)))}`;
-  };
-  console.log(`\nESTIMATOR SUMMARY (mean over the 55/75/90 targets, sight ${base}%, points) | ${sizes.map(([S, E]) => line(S, E)).join(' | ')}`);
+  h2(`Cost of one roster (${roster.length} enemies, nothing scouted): gear combinations tried, simulated fights, milliseconds`);
+  printTable(['gear', 'size', 'gear combinations tried', 'fights per roster', 'ms per roster'], costRows);
+  note(`Up to sim.maxExactCombos (${cfg.sim.maxExactCombos}) combinations every one is tried per guess; above it the gear is picked one type at a time (at most sim.searchPasses x items + 1 = ${cfg.sim.searchPasses * 15 + 1} tries for 15 items), which is why 3 per type costs less than 2 per type. ms depends on the machine.`);
+
+  const T_ROWS = [];
+  const maxFights = (label) => Math.max(...gearCases.map(([g]) => cost[`${g}/${label}`].fights));
+  check(T_ROWS, 'T-A2', 'fights per roster at the base size (dearest gear case)', maxFights('base'), null, 10000, 0);
+  check(T_ROWS, 'T-A2', 'fights per roster at the max size (10x10, dearest gear case)', maxFights('max'), null, 60000, 0);
+  check(T_ROWS, 'T-A2', 'shown margin at the base size (+-)', mean(acc[keyOf(sizes[0])].margin), 15, 25);
+  const marg = sizes.map((sz) => mean(acc[keyOf(sz)].margin));
+  check(T_ROWS, 'T-A2', 'margin shrinks with every step: smallest drop between sizes', Math.min(...marg.slice(1).map((v, i) => marg[i] - v)), 0.01, null, 2);
+  printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-A2)');
+  console.log(`\nESTIMATOR SUMMARY (mean over the 55/75/90 targets, ${scouting}% scouting) | ${sizes.map((sz) => `${keyOf(sz)}: +-${f1(mean(acc[keyOf(sz)].margin))} miss ${f1(Math.sqrt(mean(acc[keyOf(sz)].miss2)))} wobble ${f1(Math.sqrt(mean(acc[keyOf(sz)].wobble2)))}`).join(' | ')}` +
+    ` | fights/roster base ${f0(maxFights('base'))} max ${f0(maxFights('max'))} (dearest gear case; 2 per type ${f0(cost['2 per type/base'].fights)}/${f0(cost['2 per type/max'].fights)}, 3 per type ${f0(cost['3 per type/base'].fights)}/${f0(cost['3 per type/max'].fights)}) | ${targetFlags(T_ROWS)}`);
 }
 
 // ================================================================== BOT =====
-// A careful scripted player. It only sees what a player sees (visible enemy attributes, the items its sight
+// A scripted player (a persona, default careful). It only sees what a player sees (visible enemy attributes, the items its sight
 // shows, expected field loot) and uses the same API as the UI. Heuristics, not an optimiser.
 const MAT_RANK = { none: 0, copper: 1, iron: 2, steel: 3, mythril: 4 };
 // Grade a bar of this material must reach to still be worth gathering for an upgrade.
 // The best material keeps being worth chasing up to A grade; older materials up to B.
 const WORTH_GRADE = { copper: 'B', iron: 'B', steel: 'B', mythril: 'A' };
 
+// The intel spending list of a persona, with an --intel only:<track> mode in front: that track first until it cannot
+// gain any more, then the persona's own list. 'roundRobin' is the list ['*'].
+function intelList(persona, mode = 'persona') {
+  const base = persona.intel === 'roundRobin' ? [['*']] : persona.intel;
+  return typeof mode === 'string' && mode.startsWith('only:') ? [[mode.slice(5), Infinity], ...base] : base;
+}
+
+// The bot's own (first-stage) estimate sizes; they do not depend on the persona or the value tables.
+const botSimOpts = (o) => (o.quick ? { samples: 8, fightsPerLoadout: 1, evalFights: 15 } : { samples: 24, fightsPerLoadout: 1, evalFights: 25 });
+
+// The bot's settings: the value tables (T) turned into weights, plus the persona (PERSONAS[o.persona], default
+// careful) and the command line. --minwin, --future and --carry override the persona's own values.
 function botParams(T, o) {
+  const persona = PERSONAS[o.persona || 'careful'];
   // win % per unit of slot power (upgrade steel C 2.2 -> mythril C 3.3)
   const dp = power('mythril', 'C') - power('steel', 'C');
   const slotW = {};
   for (const s of SLOTS) slotW[s] = Math.max(1, T.slots[s].up) / dp;
+  slotW.sword *= persona.swordBias; // a persona that cares about its sword weighs the sword slot more when it chooses what to smith
   const gemSword = {};
   const gemArmor = {};
   for (const g of GEMS) {
@@ -1343,24 +1678,27 @@ function botParams(T, o) {
   const gemOrder = ablate.has('gems') ? [] : GEMS.filter((g) => Math.max(gemSword[g], gemArmor[g]) >= 2).sort((a, b) => Math.max(gemSword[b], gemArmor[b]) - Math.max(gemSword[a], gemArmor[a]));
   return {
     slotW, gemSword, gemArmor, ringW, smithW, gemOrder, ablate,
-    minWin: o.minwin, future: o.future, immortal: !!o.immortal, carry: o.carry, estimator: o.estimator ?? 'bot',
-    simOpts: o.quick ? { samples: 8, fightsPerLoadout: 1, evalFights: 15 } : { samples: 24, fightsPerLoadout: 1, evalFights: 25 },
+    persona: o.persona || 'careful', personaName: persona.name, pick: persona.pick, champMin: persona.champMin, eliteMin: persona.eliteMin,
+    gearLevelForElites: persona.gearLevelForElites, pack: persona.pack, rings: persona.rings, trips: persona.trips, swordBias: persona.swordBias,
+    minWin: o.minwin ?? persona.minWin, future: o.future ?? persona.future, immortal: !!o.immortal, carry: o.carry ?? persona.carry, estimator: o.estimator ?? 'bot',
+    simOpts: botSimOpts(o),
     verifyOpts: o.quick ? { samples: 10, fightsPerLoadout: 4, evalFights: 15 } : { samples: 30, fightsPerLoadout: 6, evalFights: 30 },
     verifyTop: 3,
     // Intel: spend each point on the first entry whose track is below its target value and can still gain; '*' = the
     // track with the fewest points that can still gain (config order on ties). Every point is spent (confirmPlan refuses
-    // while one can be). The careful persona's list (docs/PLAN-2.0.md 8.3; the personas themselves are batch 6).
-    intel: [['enemySight', 40], ['simDepth', 3], ['groupSight', 50], ['oreSight', 30], ['*']],
+    // while one can be). The persona's list (docs/PLAN-2.0.md 8.3), with --intel only:<track> in front.
+    intel: intelList(persona, o.intel),
     // Fight choice: EV = p/100 x (score + future + ringValue + bannerBonus). ringPoints = score points per unit of
     // (win % per ring value) x ring value; bannerBonus = points when the enemy's banner is seen and is the most-beaten one.
     ringPoints: 1, bannerBonus: 10,
-    minRate: 0.003, minCraftGain: 1.0, minGemGain: 1.0, cutCap: 3, ironReserve: 4, reserveCap: 240,
+    minRate: persona.minRate, minCraftGain: 1.0, minGemGain: 1.0, cutCap: 3, ironReserve: 4, reserveCap: 240,
     // Repairs happen by day, at camp, on gear that stayed home (they cost time). Rest rule: before packing, an item
     // below restBelow % that the stock can repair tomorrow, or one a champion fight could destroy, stays home when its
     // slot has another item to pack. At camp the bot repairs the top-3 unpacked items of a slot once they are below
     // repairBelow % (exact-grade bars), or below subBelow % when only a higher grade is in stock (a substitute uses
-    // up better bars for no benefit).
-    usableDur: 15, restBelow: 40, repairBelow: 60, subBelow: 30,
+    // up better bars for no benefit). A persona that packs the game's default pack has no rest rule: the default pack
+    // itself leaves out an item that could break.
+    usableDur: 15, restBelow: persona.restBelow, repairBelow: persona.repairBelow, subBelow: persona.subBelow,
   };
 }
 
@@ -1543,6 +1881,7 @@ function doRepair(st, item, plan, rec) {
   if (!r.ok) return r;
   rec.repaired++;
   rec.repairBars += sum(Object.values(plan.bars));
+  rec.repairGems += sum(Object.values(plan.gems));
   rec.repairPct += plan.missing;
   if (r.substitutes && r.substitutes.length) {
     rec.subRepairs++;
@@ -1648,10 +1987,15 @@ function pickRings(rings, weights, max) {
   return chosen;
 }
 
+// The casual player's rings: the best grades first, any type (ties: the larger ring value, then the older ring).
+function gradeRings(rings, max) {
+  return [...rings].sort((a, b) => GRADES.indexOf(b.grade) - GRADES.indexOf(a.grade) || ringValue(b) - ringValue(a) || a.id - b.id).slice(0, max);
+}
+
 function wearSmithRings(st, P) {
   if (P.ablate.has('rings')) return;
   const mine = st.rings.filter((r) => ringDef(r.type).owner === 'smith');
-  const want = new Set(pickRings(mine, P.smithW, cfg.rings.maxWorn).map((r) => r.id));
+  const want = new Set((P.rings === 'grade' ? gradeRings(mine, cfg.rings.maxWorn) : pickRings(mine, P.smithW, cfg.rings.maxWorn)).map((r) => r.id));
   for (const r of wornRings(st, 'smith')) if (!want.has(r.id)) toggleRing(st, r.id);
   for (const r of mine) if (want.has(r.id) && !r.worn) toggleRing(st, r.id);
 }
@@ -1739,12 +2083,12 @@ function workDay(st, ctx, rec) {
   wearSmithRings(st, ctx.P);
   campWork(st, ctx, rec);
   let trips = 0;
-  for (; trips < 5; trips++) {
+  for (; trips < ctx.P.trips; trips++) {
     const vf = makeValueFn(st, ctx.P);
     const target = chooseField(st, ctx, vf, st.map.camp);
     if (!target) break;
     const res = runTrip(st, target.loc, {
-      vf, wasDebris: ctx.wasDebris, log: (c, m) => (ctx.tm[c] += m), minRate: ctx.P.minRate, allowMove: true, carry: ctx.P.carry,
+      vf, wasDebris: ctx.wasDebris, log: (c, m) => (ctx.tm[c] += m), logLoad: (m) => (ctx.tm.load += m), minRate: ctx.P.minRate, allowMove: true, carry: ctx.P.carry,
       reserve: (s, items) => campReserve(s, ctx.P, items),
       chooseNext: (s, items) => {
         const n = chooseField(s, ctx, vf, s.location, items);
@@ -1792,9 +2136,10 @@ function spendIntelPoints(st, P) {
   if (P.ablate.has('intel')) return; // no track can gain: nothing to spend
   const tracks = Object.keys(cfg.intel.tracks);
   const canGain = (t) => nextIntelGain(st, t) > 0;
+  const list = P.intel === 'roundRobin' ? [['*']] : P.intel;
   for (let guard = 0; guard < 200 && canSpendIntel(st); guard++) {
     let track = null;
-    for (const [t, target] of P.intel) {
+    for (const [t, target] of list) {
       if (t === '*') {
         track = tracks.filter(canGain).sort((a, b) => (st.intel.spent[a] || 0) - (st.intel.spent[b] || 0) || tracks.indexOf(a) - tracks.indexOf(b))[0] || null;
         break;
@@ -1833,17 +2178,75 @@ function winExtras(st, e, P) {
   return ringValueOf(st, e, P) + banner;
 }
 
+// How hostile an enemy looks: how many of its attributes the player can see at High.
+const visibleHighs = (st, e) => Object.values(knownLevels(st, e)).filter((lv) => lv === 'high').length;
+
+// How well geared the adventurer is, 0-10: the gear types it owns (0-5) plus the gear types it owns in iron or better (0-5).
+export function gearLevel(st) {
+  const owned = SLOTS.filter((s) => st.gear.some((g) => g.slot === s)).length;
+  const iron = SLOTS.filter((s) => st.gear.some((g) => g.slot === s && MAT_RANK[g.material] >= MAT_RANK.iron)).length;
+  return owned + iron;
+}
+
+// Which enemy a persona fights. Pure: evals = [{ i, tier, p, ev }] in roster order (p = the win estimate in %, ev = the
+// expected value; either may be missing when the persona does not use it), st = the game state (only the casual
+// persona reads it: its roster, visible attributes and gear). Returns the chosen element of evals (the first one on a tie,
+// so the lowest index), or null for an empty list.
+//   ev (careful):  among estimates >= minWin the largest ev; none that sure -> the largest p
+//   champion:      a champion with p >= champMin -> the highest p; else an elite with p >= eliteMin -> the highest p;
+//                  else the largest p/100 x (score + future) among p >= 50 (the plan's formula: the ring and banner extras
+//                  in `ev` are not counted here); else the largest p
+//   looks (casual): never reads p. Below gearLevelForElites it takes a normal, from there on an elite (a normal when the
+//                  roster has no elite), never a champion; of those the enemy with the fewest VISIBLE High attributes,
+//                  ties -> the lowest index
+export function pickEnemy(P, st, evals) {
+  if (!evals.length) return null;
+  const best = (list, f) => list.reduce((a, b) => (f(b) > f(a) ? b : a));
+  const planValue = (x) => (x.p / 100) * (cfg.enemies.tiers[x.tier].score + P.future);
+  const evOf = (x) => (Number.isFinite(x.ev) ? x.ev : planValue(x));
+  if (P.pick === 'looks') {
+    const level = gearLevel(st);
+    const tiers = level < P.gearLevelForElites ? ['normal'] : ['elite'];
+    let pool = evals.filter((x) => tiers.includes(x.tier));
+    if (!pool.length) pool = evals.filter((x) => x.tier === 'normal');
+    if (!pool.length) pool = evals.filter((x) => x.tier !== 'champion');
+    if (!pool.length) pool = evals;
+    return pool.reduce((a, b) => {
+      const ha = visibleHighs(st, st.roster.enemies[a.i]);
+      const hb = visibleHighs(st, st.roster.enemies[b.i]);
+      return hb < ha || (hb === ha && b.i < a.i) ? b : a;
+    });
+  }
+  if (P.pick === 'champion') {
+    const champs = evals.filter((x) => x.tier === 'champion' && x.p >= P.champMin);
+    if (champs.length) return best(champs, (x) => x.p);
+    const elites = evals.filter((x) => x.tier === 'elite' && x.p >= P.eliteMin);
+    if (elites.length) return best(elites, (x) => x.p);
+    const fair = evals.filter((x) => x.p >= 50);
+    if (fair.length) return best(fair, planValue);
+    return best(evals, (x) => x.p);
+  }
+  const safe = evals.filter((x) => x.p >= P.minWin);
+  return safe.length ? best(safe, evOf) : best(evals, (x) => x.p);
+}
+
 function choosePlan(st, ctx, rec) {
   const P = ctx.P;
-  const rest = restingIds(st, P);
-  const gearIds = [];
-  for (const slot of SLOTS) {
-    const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
-    // the rest rule: worn items stay home so they can be repaired tomorrow (when the slot keeps another item)
-    gearIds.push(...items.filter((g) => !rest.has(g.id)).slice(0, packLimit(st, slot)).map((g) => g.id));
+  const rest = P.pack === 'default' ? new Set() : restingIds(st, P);
+  let gearIds;
+  if (P.pack === 'default') gearIds = defaultPack(st, cfg);
+  else {
+    gearIds = [];
+    for (const slot of SLOTS) {
+      const items = st.gear.filter((g) => g.slot === slot).sort((a, b) => score(b, P) - score(a, P));
+      // "rested item-days" count only items the pack would otherwise have taken: a worn spare beyond packLimit stays home anyway
+      rec.rested += items.slice(0, packLimit(st, slot)).filter((g) => rest.has(g.id)).length;
+      // the rest rule: worn items stay home so they can be repaired tomorrow (when the slot keeps another item)
+      gearIds.push(...items.filter((g) => !rest.has(g.id)).slice(0, packLimit(st, slot)).map((g) => g.id));
+    }
   }
   const advRings = P.ablate.has('rings') ? [] : st.rings.filter((r) => ringDef(r.type).owner === 'adventurer');
-  const ringIds = pickRings(advRings, P.ringW, cfg.rings.maxWorn).map((r) => r.id);
+  const ringIds = (P.rings === 'grade' ? gradeRings(advRings, cfg.rings.maxWorn) : pickRings(advRings, P.ringW, cfg.rings.maxWorn)).map((r) => r.id);
   const rings = ringTotals(st.rings.filter((r) => ringIds.includes(r.id)));
   const packed = st.gear.filter((g) => gearIds.includes(g.id));
   if (P.immortal) {
@@ -1853,6 +2256,7 @@ function choosePlan(st, ctx, rec) {
     rec.picks.push({ day: st.day + 1, tier: st.roster.enemies[i].tier, p: 100, safe: true, bestP: all, meanP: all });
     return { enemyIndex: i, gearIds, ringIds };
   }
+  const reads = P.pick !== 'looks'; // the casual persona never reads an estimate
   // Screen all 7 with the best packed piece per slot (fast, a slight underestimate), then
   // re-estimate the top candidates with all packed gear and fresh seeds (removes the
   // "picked the luckiest estimate" bias) and choose among those.
@@ -1861,8 +2265,11 @@ function choosePlan(st, ctx, rec) {
   const evOf = (x) => (x.p / 100) * (cfg.enemies.tiers[x.tier].score + P.future + winExtras(st, st.roster.enemies[x.i], P));
   let evals;
   let pool;
-  if (P.estimator === 'game') {
-    // The in-game "estimate win chances" button: every enemy, all packed gear, the game's own counts
+  if (!reads) {
+    evals = st.roster.enemies.map((e, i) => ({ i, tier: e.tier, p: null, ev: null }));
+    pool = evals;
+  } else if (P.estimator === 'game') {
+    // The in-game automatic estimate: every enemy, all packed gear, the game's own counts
     // (CONFIG.sim + Battle simulation intel + Foresight rings). Its noise is part of the risk.
     const gopts = gameSimOpts(st);
     evals = st.roster.enemies.map((e, i) => {
@@ -1877,22 +2284,28 @@ function choosePlan(st, ctx, rec) {
       x.ev = evOf(x);
       return x;
     });
-    const order = [...evals].sort((a, b) => b.ev - a.ev);
-    for (const x of order.slice(0, P.verifyTop)) {
+    // the careful planner re-checks its three best; a persona that looks at every tier re-checks them all
+    const order = P.pick === 'ev' ? [...evals].sort((a, b) => b.ev - a.ev).slice(0, P.verifyTop) : [...evals];
+    for (const x of order) {
       x.p = est(packed, st.roster.enemies[x.i], x.i, 2, P.verifyOpts);
       x.ev = evOf(x);
     }
-    pool = order.slice(0, P.verifyTop);
+    pool = order;
   }
-  const safe = pool.filter((x) => x.p >= P.minWin);
-  const pick = safe.length ? safe.reduce((a, b) => (b.ev > a.ev ? b : a)) : pool.reduce((a, b) => (b.p > a.p ? b : a));
-  const bestP = {};
-  const meanP = {};
-  for (const t of TIERS) {
-    bestP[t] = Math.max(...evals.filter((x) => x.tier === t).map((x) => x.p));
-    meanP[t] = mean(evals.filter((x) => x.tier === t).map((x) => x.p));
+  const pick = pickEnemy(P, st, pool);
+  let bestP = null;
+  let meanP = null;
+  if (reads) {
+    bestP = {};
+    meanP = {};
+    for (const t of TIERS) {
+      bestP[t] = Math.max(...evals.filter((x) => x.tier === t).map((x) => x.p));
+      meanP[t] = mean(evals.filter((x) => x.tier === t).map((x) => x.p));
+    }
   }
-  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: safe.length > 0, bestP, meanP });
+  // "safe" = the pick was one the persona is sure of (the careful planner: p >= minWin; the champion hunter: p >= 50)
+  const sureP = P.pick === 'ev' ? P.minWin : P.pick === 'champion' ? 50 : null;
+  rec.picks.push({ day: st.day + 1, tier: pick.tier, p: pick.p, safe: sureP == null ? null : pick.p >= sureP, bestP, meanP });
   return { enemyIndex: pick.i, gearIds, ringIds };
 }
 
@@ -1910,6 +2323,24 @@ function snapshot(st, P) {
   const gems = SLOTS.filter((s) => best[s] && best[s].gem).length;
   const gemGrades = SLOTS.filter((s) => best[s] && best[s].gem).map((s) => GRADES.indexOf(best[s].gem.grade));
   return { score: st.stats.score, swordDmg, defense, powers, mats, label, gems, gemGrade: gemGrades.length ? mean(gemGrades) : NaN, rings: st.rings.length };
+}
+
+// The days on which a run records its skill levels, main bar and answer-gem armor (the Skills at day 30 and Gem supply tables).
+const SNAP_DAYS = [10, 20, 25, 30, 40];
+// The gems that answer an enemy special when infused into armor (emerald answers no special): GEM_MATCH without emerald.
+const ANSWER_GEMS = GEMS.filter((g) => g !== 'emerald');
+function daySnapshot(st, rec) {
+  // main bar: the bar type the run has smithed the most items from so far
+  const made = {};
+  for (const c of rec.craftLog) made[c.material] = (made[c.material] || 0) + 1;
+  const mainBar = Object.entries(made).sort((a, b) => b[1] - a[1] || BARS.indexOf(b[0]) - BARS.indexOf(a[0]))[0];
+  return {
+    skills: Object.fromEntries(Object.entries(st.skills).map(([k, v]) => [k, v.level])),
+    mainBar: mainBar ? mainBar[0] : null,
+    // how many of the 4 answer gems the run owns on a chest or a helmet
+    cover: ANSWER_GEMS.filter((g) => st.gear.some((it) => (it.slot === 'chest' || it.slot === 'helmet') && it.gem && it.gem.type === g)).length,
+    gems: sum(GEMS.map((g) => st.storage.gem[g] || 0)) + sum(GEMS.flatMap((g) => GRADES.map((gr) => st.storage.cut[`${g}:${gr}`] || 0))),
+  };
 }
 
 // What is still in the map: hidden items by type, items in field piles, % searched, finished cells
@@ -1939,8 +2370,8 @@ function runBot(seed, D, P) {
   const st = newGame(seed);
   const ctx = { P, wasDebris: new WeakSet(), seed, tm: null, seen: new Set() };
   const rec = {
-    seed, deathDay: null, lastDay: 1, timeByDay: {}, tripsByDay: {}, snaps: {}, picks: [], gathered: {}, bars: {},
-    crafted: 0, repaired: 0, subRepairs: 0, subBars: 0, subDeferred: 0, repairBars: 0, repairPct: 0, gemsUsed: 0, destroyed: 0,
+    seed, deathDay: null, lastDay: 1, timeByDay: {}, tripsByDay: {}, snaps: {}, atDay: {}, picks: [], gathered: {}, bars: {},
+    crafted: 0, repaired: 0, subRepairs: 0, subBars: 0, subDeferred: 0, repairBars: 0, repairGems: 0, repairPct: 0, rested: 0, gemsUsed: 0, destroyed: 0,
     craftLog: [], tripDist: [], tripItems: [], wornOut: 0, wornOutMat: {}, repairBlocked: {},
     found: 0, foundByDay: {}, mapByDay: {}, mapStart: null,
     searches: 0, carried: 0, fromOldPile: 0, fromDebris: 0, debrisEff: 0, searchEff: 0, pileTrips: 0, cuts: {},
@@ -1949,6 +2380,7 @@ function runBot(seed, D, P) {
   for (;;) {
     const day = st.day;
     ctx.tm = Object.fromEntries(TIME_CATS.map((c) => [c, 0]));
+    ctx.tm.load = 0; // the part of the travel minutes that the carried load added (not a time category of its own)
     workDay(st, ctx, rec);
     rec.timeByDay[day] = ctx.tm;
     rec.foundByDay[day] = rec.found;
@@ -1971,6 +2403,7 @@ function runBot(seed, D, P) {
     }
     rec.lastDay = day;
     rec.snaps[day] = snapshot(st, P);
+    if (SNAP_DAYS.includes(day) && st.phase !== 'over') rec.atDay[day] = daySnapshot(st, rec);
     if (st.phase === 'over') {
       rec.deathDay = day;
       break;
@@ -2013,7 +2446,19 @@ function firstDay(r, pred) {
   return NaN;
 }
 const slotsAtLeast = (sn, m) => SLOTS.filter((s) => MAT_RANK[sn.mats[s]] >= MAT_RANK[m]).length;
-const PROGRESS_TARGET = { iron: '5-8', steel: '12-18', mythril: '25+' };
+// T-B1: the median day of the careful persona's first piece of a material, and of having 3 of 5 slots in it (1.2: 4/10/18 and 7/14/28).
+const PROGRESS_TARGET = {
+  iron: { first: [3, 6], three: [6, 9] },
+  steel: { first: [8, 12], three: [12, 16] },
+  mythril: { first: [15, 21], three: [24, 32] },
+};
+
+// One line on how a persona chooses its fight (the BOT section's title).
+const PICK_TEXT = {
+  ev: (P) => `pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%`,
+  champion: (P) => `pick: a champion at est. win >= ${P.champMin}%, else an elite at >= ${P.eliteMin}%, else max win% x (points + ${P.future}) at >= 50%`,
+  looks: (P) => `pick: no estimate; a normal until its gear level is ${P.gearLevelForElites}, then an elite, the fewest visible High attributes`,
+};
 
 function botSection(o, T) {
   const N = o.seeds ?? (o.quick ? 3 : 20);
@@ -2022,8 +2467,12 @@ function botSection(o, T) {
   const P = botParams(VT, o);
   // --immortal: enemies deal no damage from here on (the value tables above used the real numbers)
   const immortalLog = o.immortal ? applySet('enemies.tiers.*.damage', '0') : [];
-  h1(`BOT — ${N} runs x up to ${D} days (pick: max win% x (points + ${P.future}) among enemies with est. win >= ${P.minWin}%)` +
-    (P.ablate.size ? `  ABLATED: ${[...P.ablate].join(', ')}` : ''));
+  const persona = PERSONAS[P.persona];
+  h1(`BOT — ${persona.name}: ${N} runs x up to ${D} days (${PICK_TEXT[P.pick](P)})` +
+    (P.ablate.size ? `  ABLATED: ${[...P.ablate].join(', ')}` : '') + (o.intel !== 'persona' ? `  INTEL: ${o.intel}` : ''));
+  const careful = P.persona === 'careful';
+  const reads = P.pick !== 'looks'; // the casual persona never reads an estimate
+  const T_ROWS = []; // the plan's targets for this run (they are written for the careful persona)
   if (o.immortal) note(`IMMORTAL: ${immortalLog.join(', ')}; the bot fights an elite every day (no estimates). Survival/fight numbers are meaningless here.`);
   note(`Gem order: ${P.gemOrder.join(' > ') || '(none)'}; slot weights (win% per power unit): ` + SLOTS.map((s) => `${s} ${f1(P.slotW[s])}`).join(', '));
   note(`Adventurer ring weights (win% per ring point): ` + ADV_RINGS.map((t) => `${t} ${f2(P.ringW[t])}`).join(', '));
@@ -2065,19 +2514,40 @@ function botSection(o, T) {
   printTable(
     ['days', 'fights', ...TIERS.map((t) => `${t} %`), 'mean est. win %', 'actual win %', 'loss per fight %', 'no-safe-option fights'],
     pickRows.map(({ a, b, pk, losses }) => [`${a}-${b}`, pk.length, ...TIERS.map((t) => f0((100 * pk.filter((x) => x.tier === t).length) / Math.max(1, pk.length))),
-      f1(mean(pk.map((x) => x.p))), f1((100 * pk.filter((x) => x.win || x.draw).length) / Math.max(1, pk.length)), f1((100 * losses) / Math.max(1, pk.length)), pk.filter((x) => !x.safe).length]),
+      f1(meanFinite(pk.map((x) => x.p))), f1((100 * pk.filter((x) => x.win || x.draw).length) / Math.max(1, pk.length)), f1((100 * losses) / Math.max(1, pk.length)), reads ? pk.filter((x) => x.safe === false).length : '-']),
   );
+  // the estimate of a tier on a day: the best / the mean over the roster's enemies of the tier (the casual persona has none)
+  const tierP = (x, kind, t) => (x[kind] ? x[kind][t] : NaN);
   h2("Best estimated win % on each day's roster with the bot's own gear (mean over runs alive)");
   const pdays = dayList([2, 3, 5, 7, 10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80]);
   printTable(
     ['tier', ...pdays.map((d) => `d${d}`)],
-    TIERS.map((t) => [t, ...pdays.map((d) => f0(mean(recs.flatMap((r) => r.picks.filter((x) => x.day === d).map((x) => x.bestP[t])))))]),
+    TIERS.map((t) => [t, ...pdays.map((d) => f0(meanFinite(recs.flatMap((r) => r.picks.filter((x) => x.day === d).map((x) => tierP(x, 'bestP', t))))))]),
   );
+  h2('Win chance by tier: the mean estimate over the roster\'s enemies of the tier, with the gear the bot packed (T-GEAR c)');
+  const gearRanges = [[2, 2], [3, 5], [6, 9], [10, 20], [21, 30], [31, 40], [41, 60]].filter(([a]) => a <= D);
+  printTable(
+    ['fight days', 'runs x days', ...TIERS.map((t) => `${t} est. %`)],
+    gearRanges.map(([a, b]) => {
+      const pk = recs.flatMap((r) => r.picks.filter((x) => x.day >= a && x.day <= b));
+      return [a === b ? String(a) : `${a}-${b}`, pk.length, ...TIERS.map((t) => f1(meanFinite(pk.map((x) => tierP(x, 'meanP', t)))))];
+    }),
+  );
+  const midPicks = recs.flatMap((r) => r.picks.filter((x) => x.day >= 10 && x.day <= 40));
+  if (reads) {
+    note(`Estimate: ${P.estimator === 'game' ? `the game's own (${cfg.sim.samples} x ${cfg.sim.evalFights} plus intel)` : `the bot's screen (${P.simOpts.samples} x ${P.simOpts.evalFights} with the best packed piece per slot, a slight underestimate)`}. Targets (T-GEAR c): days 10-40 mean elite 75-90, mean champion 50-75.`);
+    if (careful) {
+      check(T_ROWS, 'T-GEAR', 'elite, days 10-40 (mean estimate)', meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'elite'))), 75, 90);
+      check(T_ROWS, 'T-GEAR', 'champion, days 10-40 (mean estimate)', meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'champion'))), 50, 75);
+    }
+  } else note('The casual persona never reads an estimate, so there is no win chance to show.');
   const d2picks = recs.flatMap((r) => r.picks.filter((x) => x.day === 2));
   const day1 = recs.map((r) => r.craftLog.filter((c) => c.day === 1));
   const d1label = (c) => `${c.material[0].toUpperCase()}${c.grade} ${c.slot}`;
-  note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean est. over the roster's enemies of the tier): ` +
-    TIERS.map((t) => `${t} ${f0(mean(d2picks.map((x) => x.meanP[t])))}%`).join(', ') + ` (target ${DAY2_TARGET.normal.join('-')} / ${DAY2_TARGET.elite.join('-')} / ${DAY2_TARGET.champion.join('-')}).`);
+  if (reads) {
+    note(`Day-2 fight with the bot's day-1 gear, TYPICAL enemy (mean est. over the roster's enemies of the tier): ` +
+      TIERS.map((t) => `${t} ${f0(meanFinite(d2picks.map((x) => tierP(x, 'meanP', t))))}%`).join(', ') + ` (T-GEAR kit rows: node tools/balance.mjs --section day2).`);
+  }
   note(`Day-1 smithing: ${f1(mean(day1.map((c) => c.length)))} pieces/run; e.g. ${day1.slice(0, 6).map((cs) => cs.map(d1label).join(' + ') || 'nothing').join(' | ')}`);
 
   // ---- gear over time
@@ -2099,7 +2569,7 @@ function botSection(o, T) {
         f1(mean(sn.map((x) => x.gems))), f2(mean(sn.map((x) => x.gemGrade).filter(Number.isFinite))), modal(sn.map((x) => x.label.sword)), modal(sn.map((x) => x.label.chest)), f1(mean(sn.map((x) => x.rings))), f0(mean(sn.map((x) => x.score)))];
     }),
   );
-  h2('Progression milestones (median day over runs that got there; target in brackets)');
+  h2('Progression milestones (median day over runs that got there; T-B1 target in brackets)');
   const prog = {};
   const progRows = ['iron', 'steel', 'mythril'].map((m) => {
     const first = recs.map((r) => (r.craftLog.find((c) => MAT_RANK[c.material] >= MAT_RANK[m]) || { day: NaN }).day).filter(Number.isFinite);
@@ -2108,9 +2578,14 @@ function botSection(o, T) {
     const all = recs.map((r) => firstDay(r, (sn) => slotsAtLeast(sn, m) >= 5)).filter(Number.isFinite);
     prog[m] = { first: median(first), three: median(three) };
     const fmt = (a) => `${f0(median(a))} (${a.length}/${N})`;
-    return [`${m} [${PROGRESS_TARGET[m]}]`, fmt(first), fmt(sword), fmt(three), fmt(all)];
+    const tg = PROGRESS_TARGET[m];
+    if (careful) {
+      check(T_ROWS, 'T-B1', `first ${m} piece, median day`, prog[m].first, tg.first[0], tg.first[1]);
+      check(T_ROWS, 'T-B1', `3 of 5 slots ${m}, median day`, prog[m].three, tg.three[0], tg.three[1]);
+    }
+    return [`${m} >=`, `${fmt(first)} [${tg.first.join('-')}]`, fmt(sword), `${fmt(three)} [${tg.three.join('-')}]`, fmt(all)];
   });
-  printTable(['material >=', 'first piece', 'sword', '3 of 5 slots', 'all 5 slots'], progRows);
+  printTable(['material', 'first piece', 'sword', '3 of 5 slots', 'all 5 slots'], progRows);
 
   // ---- time split
   h2(`Daily time split (minutes per day, mean over days in range; day = ${DAY_LEN} min)`);
@@ -2122,15 +2597,24 @@ function botSection(o, T) {
     const used = sum(days.map((x) => sum(TIME_CATS.map((c) => x.t[c]))));
     return (100 * mine) / Math.max(1, used);
   };
+  const workMin = (days) => sum(days.map((x) => sum(TIME_CATS.map((c) => x.t[c]))));
+  // NaN when the range holds no day (a short --days run): the T-B2 / T-B3 rows then print n/a, not 0 / LOW
+  const travelPct = (days) => (days.length ? (100 * sum(days.map((x) => x.t.travel))) / Math.max(1, workMin(days)) : NaN);
+  const loadPct = (days) => (days.length ? (100 * sum(days.map((x) => x.t.load))) / Math.max(EPS, sum(days.map((x) => x.t.travel))) : NaN);
   printTable(
-    ['days', ...TIME_CATS, 'idle', 'mining % of used', 'trips/day'],
+    ['days', ...TIME_CATS, 'idle', 'load (in travel)', 'travel % of used', 'load % of travel', 'mining % of used', 'trips/day'],
     tr.map(([a, b]) => {
       const days = daysIn(a, b);
       const m = (c) => mean(days.map((x) => x.t[c]));
       const used = sum(TIME_CATS.map(m));
-      return [`${a}-${b}`, ...TIME_CATS.map((c) => f0(m(c))), f0(DAY_LEN - used), f0(miningPct(days)), f1(mean(days.map((x) => x.trips)))];
+      return [`${a}-${b}`, ...TIME_CATS.map((c) => f0(m(c))), f0(DAY_LEN - used), f0(m('load')), f0(travelPct(days)), f1(loadPct(days)), f0(miningPct(days)), f1(mean(days.map((x) => x.trips)))];
     }),
   );
+  note('load = the part of the travel minutes that the carried items add (the same walks with nothing carried make up the rest of travel). Targets (T-B2, days 11-40): travel 25-35% of the minutes worked, load 8-15% of the travel minutes.');
+  if (careful) {
+    check(T_ROWS, 'T-B2', 'travel, % of work time, days 11-40', travelPct(daysIn(11, 40)), 25, 35);
+    check(T_ROWS, 'T-B2', 'load, % of travel minutes, days 11-40', loadPct(daysIn(11, 40)), 8, 15);
+  }
   const tripHist = [0, 1, 2, 3, 4, 5].map((n) => [n, recs.flatMap((r) => Object.values(r.tripsByDay)).filter((x) => x === n).length]);
   const nDays = sum(tripHist.map(([, c]) => c));
   note(`Trips per day: ${tripHist.filter(([, c]) => c).map(([n, c]) => `${n}: ${f0((100 * c) / nDays)}%`).join(', ')}; items per trip: mean ${f1(mean(recs.flatMap((r) => r.tripItems)))}` +
@@ -2177,17 +2661,63 @@ function botSection(o, T) {
     `${f1(repairBars)} bars spent on repairs = ${f1((100 * repairBars) / Math.max(1, barsMade))}% of bars made, repair time ${f1((100 * repairMin) / Math.max(1, usedMin))}% of working time; ` +
     `${f1(mean(recs.map((r) => r.destroyed)))} items destroyed by wear (${f1(wornOut)} bars = ${f1((100 * wornOut) / Math.max(1, barsMade))}% of bars made; ` +
     BARS.map((b) => `${b} ${f1(mean(recs.map((r) => r.wornOutMat[b] || 0)))}`).join(', ') + ').');
-  const repairDays = (r) => Object.entries(r.timeByDay).filter(([d]) => Number(d) >= 2);
-  note(`Repairs: 0 at night (repairs only happen by day) and ${f1(mean(recs.map((r) => r.repaired)))} by day per run, ` +
-    `${f1(mean(recs.map((r) => sum(Object.values(r.timeByDay).map((t) => t.repair)))))} repair minutes per run (${f1(mean(recs.flatMap((r) => repairDays(r).map(([, t]) => t.repair))))} min a day)` +
-    ` (the bot repairs an unpacked top-3 item below ${P.repairBelow}%, or below ${P.subBelow}% if only a higher grade is in stock; ` +
-    `items below ${P.restBelow}% that it can repair stay home, as do items a champion fight could destroy).` +
-    ` With a higher-grade substitute: ${f1(mean(recs.map((r) => r.subRepairs)))} repairs/run (${f2(mean(recs.map((r) => r.subBars)))} better bars used);` +
-    ` deferred because only a higher grade was in stock: ${f1(mean(recs.map((r) => r.subDeferred)))} item-days/run.`);
+  // Repairs happen by day only (no night repairs). Days 11-40 are the plan's measuring window (T-B3).
+  const midDays = daysIn(11, 40);
+  const repMidMin = midDays.length ? mean(midDays.map((x) => x.t.repair)) : NaN;
+  const repMidPct = midDays.length ? (100 * sum(midDays.map((x) => x.t.repair))) / Math.max(1, workMin(midDays)) : NaN;
+  note(`Repairs: ${f1(mean(recs.map((r) => r.repaired)))} by day per run (${f1(repMidMin)} min a day on days 11-40), ${f1(mean(recs.map((r) => r.rested)))} rested item-days, ` +
+    `${f1(mean(recs.map((r) => r.subRepairs)))} substitutes (${f2(mean(recs.map((r) => r.subBars)))} better bars used); ` +
+    `${f1(mean(recs.map((r) => sum(Object.values(r.timeByDay).map((t) => t.repair)))))} repair minutes per run. ` +
+    `The bot repairs an unpacked top-3 item below ${P.repairBelow}%, or below ${P.subBelow}% if only a higher grade is in stock` +
+    (P.pack === 'default' ? "; it packs the game's default pack, so only an item the default pack left out (it could break) is repaired. " : `; items below ${P.restBelow}% that it can repair stay home, as do items a champion fight could destroy. `) +
+    `Deferred because only a higher grade was in stock: ${f1(mean(recs.map((r) => r.subDeferred)))} item-days/run.`);
+  note(`Repair time is ${f1(repMidPct)}% of the minutes worked on days 11-40 (T-B3: 3-6%), ${f1(mean(recs.map((r) => r.destroyed)))} items destroyed by wear per run (T-B3: at most 5; 1.2: 3.9).`);
+  if (careful) {
+    check(T_ROWS, 'T-B3', 'repair time, % of work time, days 11-40', repMidPct, 3, 6);
+    check(T_ROWS, 'T-B3', 'items destroyed by wear per run', mean(recs.map((r) => r.destroyed)), null, 5);
+  }
   note(`Repair blocked (a worn top-3 item below ${P.repairBelow}% with no bars of its material at its grade or higher): ` +
     `${f1(mean(recs.map((r) => Object.keys(r.repairBlocked).length)))} days/run, ${f1(mean(recs.map((r) => sum(Object.values(r.repairBlocked)))))} item-days/run.`);
   note('Trips per run by field distance: ' + BUCKETS.map((d) => `d${bucketLabel(d)} ${f1(mean(recs.map((r) => r.tripDist.filter((x) => bucketOf(x) === d).length)))}`).join(', ') +
     `; mean trip distance ${f2(mean(recs.flatMap((r) => r.tripDist)))}.`);
+
+  // ---- gem supply (R29 cut the gems, R33 wants more of them: do the bot's gems cover what it wants?)
+  h2('Gem supply (per run; answer gems: ruby, diamond, topaz, sapphire)');
+  const gemsFound = mean(recs.map((r) => sum(GEMS.map((g) => r.gathered[`gem:${g}`] || 0))));
+  const gemsCutOk = mean(recs.map((r) => sum(GRADES.map((g) => r.cuts[g] || 0))));
+  const repGems = mean(recs.map((r) => r.repairGems));
+  const at25 = recs.map((r) => r.atDay[25]).filter(Boolean);
+  const cover25 = mean(at25.map((x) => x.cover));
+  printTable(['raw gems carried home', 'cut (cuts that worked)', 'infused into gear', 'used by repairs', 'repairs % of cut', 'answer-gem armor cover at day 25 (of 4)', 'runs alive at day 25'],
+    [[f1(gemsFound), f1(gemsCutOk), f1(mean(recs.map((r) => r.gemsUsed))), f2(repGems), f1((100 * repGems) / Math.max(EPS, gemsCutOk)), f2(cover25), `${at25.length}/${N}`]]);
+  note('cover = how many of the 4 answer gems the run owns on a chest or a helmet (what T-R33 M2 says to bring to a fight against a High special). Repair gems are fractions: a repair costs gemFraction % of the item\'s gem, scaled by the % repaired.');
+  if (careful) {
+    check(T_ROWS, 'T-B5', 'answer-gem armor cover at day 25, runs alive (of 4)', cover25, 2.5, null, 2);
+    check(T_ROWS, 'T-B5', 'gems used by repairs, % of gems cut', (100 * repGems) / Math.max(EPS, gemsCutOk), null, 25);
+  }
+
+  // ---- skills at day 30 (T-B4)
+  h2('Skills at day 30 (mean level over the runs alive on day 30)');
+  const at30 = recs.map((r) => r.atDay[30]).filter(Boolean);
+  const lv = (key) => mean(at30.map((x) => x.skills[key]));
+  const defs = skillDefs();
+  const actKeys = defs.filter((d) => !d.material).map((d) => d.key);
+  if (!at30.length) note('No run was alive on day 30 (use --days 30 or more, without --quick).');
+  else {
+    printTable(['activity skill', 'mean level'], actKeys.map((k) => [defs.find((d) => d.key === k).name, f1(lv(k))]));
+    printTable(['bar type', 'bar grade', 'refining', 'smithing', 'repair', 'runs with it as main bar'],
+      BARS.map((b) => [b, f1(lv(`oreGrade_${b}`)), f1(lv(`oreFail_${b}`)), f1(lv(`smith_${b}`)), f1(lv(`repair_${b}`)), `${at30.filter((x) => x.mainBar === b).length}/${at30.length}`]));
+    printTable(['gem type', 'grade', 'cutting'], GEMS.map((g) => [g, f1(lv(`gemGrade_${g}`)), f1(lv(`gemFail_${g}`))]));
+    const main = (prefix) => mean(at30.filter((x) => x.mainBar).map((x) => x.skills[`${prefix}_${x.mainBar}`]));
+    note(`Main bar = the bar type the run has smithed the most items from (smithing ${f1(main('smith'))}, repair ${f1(main('repair'))}). Targets (T-B4, day 30): Travel 6-8, Carrying 5-8, General repair 5-7, main bar smithing 3-6, main bar repair 3-6.`);
+    if (careful) {
+      check(T_ROWS, 'T-B4', 'Travel, mean level at day 30', lv('travel'), 6, 8);
+      check(T_ROWS, 'T-B4', 'Carrying', lv('carrying'), 5, 8);
+      check(T_ROWS, 'T-B4', 'General repair', lv('repairTime'), 5, 7);
+      check(T_ROWS, 'T-B4', 'main bar smithing', main('smith'), 3, 6);
+      check(T_ROWS, 'T-B4', 'main bar repair', main('repair'), 3, 6);
+    }
+  }
 
   // ---- map supply (finite: fields never refill)
   h2('Map supply (the map is the whole supply; runs alive on that day; window = the 10 days up to it)');
@@ -2240,63 +2770,87 @@ function botSection(o, T) {
   note('Intel spent: ' + Object.keys(recs[0].intel).map((k) => `${k} ${f1(mean(recs.map((r) => r.intel[k])))}`).join(', '));
   note(`Banners: ${f1(mean(recs.map((r) => r.groups.earned)))} pack mules earned per run (of ${SLOTS.length * cfg.groups.maxExtraPerType}), the most-beaten banner has ${f1(mean(recs.map((r) => r.groups.top)))} wins at the end.`);
 
-  // ---- one-line summary for comparing what-if runs
+  // ---- the plan's targets, then the one-line summary for comparing what-if runs
+  if (careful) printTargets(T_ROWS, 'Targets for the careful persona (docs/PLAN-2.0.md section 9: T-B1..T-B5, T-GEAR c)');
+  else note(`The bot targets (T-B1..T-B5, T-GEAR c) are written for the careful persona; this run is ${persona.name}. Persona behaviour (T-P) is checked by --section benchmark.`);
   const mid = recs.flatMap((r) => r.picks.filter((x) => x.day >= 11 && x.day <= 30 && x.win !== undefined));
   const share = (arr, t) => f0((100 * arr.filter((x) => x.tier === t).length) / Math.max(1, arr.length));
   const d2 = recs.flatMap((r) => r.picks.filter((x) => x.day === 2));
   const life = median(recs.map((r) => r.deathDay ?? Infinity));
-  console.log(`\nBOT SUMMARY | alive ${dayList([10, 20, 30, 40, 50, 60, 80]).map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')}` +
+  const repairPct = (100 * repairMin) / Math.max(1, usedMin);
+  console.log(`\nBOT SUMMARY | ${P.persona} | alive ${dayList([10, 20, 30, 40, 50, 60, 80]).map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')}` +
     ` | median life ${life === Infinity ? `>${D}` : f1(life)} | score ${f0(mean(scores))}` +
-    ` | d2 typical est n/e/c ${TIERS.map((t) => f0(mean(d2.map((x) => x.meanP[t])))).join('/')}` +
+    ` | d2 typical est n/e/c ${reads ? TIERS.map((t) => f0(meanFinite(d2.map((x) => tierP(x, 'meanP', t))))).join('/') : '-'}` +
+    ` | d10-40 est e/c ${reads ? `${f0(meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'elite'))))}/${f0(meanFinite(midPicks.map((x) => tierP(x, 'meanP', 'champion'))))}` : '-'}` +
     ` | first iron/steel/myth piece d${f0(prog.iron.first)}/${f0(prog.steel.first)}/${f0(prog.mythril.first)}` +
     ` | 3-slot iron/steel/myth d${f0(prog.iron.three)}/${f0(prog.steel.three)}/${f0(prog.mythril.three)}` +
     ` | d11-30 fights n/e/c ${TIERS.map((t) => share(mid, t)).join('/')}%` +
     ` | mining ${f0(miningPct(daysIn(2, D)))}% trips/day ${f1(mean(daysIn(2, D).map((x) => x.trips)))} idle ${f0(mean(daysIn(2, D).map((x) => DAY_LEN - sum(TIME_CATS.map((c) => x.t[c])))))}m` +
-    ` | repair ${f1((100 * repairBars) / Math.max(1, barsMade))}% bars ${f1((100 * repairMin) / Math.max(1, usedMin))}% time, 0 at night (${f1(mean(recs.map((r) => r.subRepairs)))} subst.)` +
+    ` | d11-40 travel ${f0(travelPct(midDays))}% load ${f1(loadPct(midDays))}% of travel` +
+    ` | repair ${f1((100 * repairBars) / Math.max(1, barsMade))}% bars ${f1(repairPct)}% time (d11-40 ${f1(repMidPct)}%), by day only (${f1(mean(recs.map((r) => r.subRepairs)))} subst., ${f1(mean(recs.map((r) => r.destroyed)))} destroyed)` +
+    ` | skills d30 travel/carry/repair ${at30.length ? `${f1(lv('travel'))}/${f1(lv('carrying'))}/${f1(lv('repairTime'))}` : '-'}` +
+    ` | answer cover d25 ${f1(cover25)}/4` +
     ` | map found ${[40, 60, 80].filter((d) => supply[d]).map((d) => `d${d}:${f0(supply[d].pct)}%`).join(' ') || '-'}` +
     ` | field: ${f2(fw.found / Math.max(1, fw.searches))} found/search, carried ${f0((100 * fw.carried) / Math.max(1, fw.found))}% of found (${f1(fw.carried / Math.max(1, fw.trips))}/trip, ${f0(fw.oldPile)} from old piles),` +
     ` piles at end ${f0(fw.pileEnd)} (${f1(fw.pileEndWorth)} worth), debris ${f1(fw.debrisPct)}% of effort` +
-    ` | gems cut ${f1(cutN)}/run F/D/C+ ${f0((100 * cutsAll.F) / Math.max(EPS, cutN))}/${f0((100 * cutsAll.D) / Math.max(EPS, cutN))}/${f0((100 * (cutN - cutsAll.F - cutsAll.D)) / Math.max(EPS, cutN))}%, ${f1(mean(recs.map((r) => r.gemsUsed)))} infused`);
+    ` | gems cut ${f1(cutN)}/run F/D/C+ ${f0((100 * cutsAll.F) / Math.max(EPS, cutN))}/${f0((100 * cutsAll.D) / Math.max(EPS, cutN))}/${f0((100 * (cutN - cutsAll.F - cutsAll.D)) / Math.max(EPS, cutN))}%, ${f1(mean(recs.map((r) => r.gemsUsed)))} infused` +
+    (careful ? ` | ${targetFlags(T_ROWS)}` : ''));
   return recs;
 }
 
 
 // ============================================================ BENCHMARK =====
-// The difficulty benchmark: the careful bot on a FIXED list of seeds (mixSeed(31337, 0..N-1); the same
-// seeds in every version), reporting the survival curve = % of runs still alive at the end of day d.
+// The difficulty benchmark: the personas (PERSONAS) on a FIXED list of seeds (mixSeed(31337, 0..N-1); the same
+// seeds in every version and for every persona), reporting the survival curve = % of runs still alive at the end of day d.
 // Only the game changes between versions, so the curve shows how tough each version is. The numbers
 // that matter are the alive% columns and the median life; the mean score is secondary.
 // Noise: with 100 runs one alive% has a standard error of up to 5 points (so compare versions by the
 // shape of the curve, and treat differences under about 10 points as noise).
-const BENCH_DAYS = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 100];
 const BENCH_SEED_BASE = 31337;
 
+// One finished run as a small record (a --jobs child sends these as JSON): when it ended, its score, and how many fights it
+// took of each tier (all days, and on days 11-40), plus the sum and count of the estimates the fights were taken at.
+function lightRecord(i, r) {
+  const fought = r.picks.filter((x) => x.win !== undefined); // planned fights that happened (the last plan may not)
+  const byTier = (picks) => Object.fromEntries(TIERS.map((t) => [t, picks.filter((x) => x.tier === t).length]));
+  const ps = fought.map((x) => x.p).filter(Number.isFinite);
+  return {
+    i, deathDay: r.deathDay, lastDay: r.lastDay, score: r.score, wins: r.wins,
+    fights: byTier(fought), fightsMid: byTier(fought.filter((x) => x.day >= 11 && x.day <= 40)), pSum: sum(ps), pN: ps.length,
+  };
+}
+
 // Runs benchmark seeds i = from, from + step, ... (< N) and returns light records.
-function benchRuns(o, N, D, P, shard) {
+function benchRuns(N, D, P, shard) {
   const [from, step] = shard || [0, 1];
   const out = [];
-  for (let i = from; i < N; i += step) {
-    const r = runBot(mixSeed(BENCH_SEED_BASE, i), D, P);
-    out.push({ i, deathDay: r.deathDay, lastDay: r.lastDay, score: r.score, wins: r.wins });
-  }
+  for (let i = from; i < N; i += step) out.push(lightRecord(i, runBot(mixSeed(BENCH_SEED_BASE, i), D, P)));
   return out;
 }
 
-// --jobs: the same command in k child processes, each running every k-th seed; results are merged
-// (a run only depends on its seed and the config, so this equals one process).
-function benchViaChildren(o, N) {
+// The value tables the bot's weights come from (one set for every persona and intel mode: they only read the game numbers).
+function benchTables(o) {
+  return valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
+}
+
+// --jobs: the same command in k child processes, each running every k-th seed of one persona (and intel mode); results
+// are merged (a run only depends on its seed and the config, so this equals one process).
+function benchViaChildren(o, N, D, persona, intelMode) {
   const argv = process.argv.slice(2);
   const base = [];
+  const SKIP = new Set(['--jobs', '--seeds', '--days', '--persona', '--intel', '--section', '--shard']);
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--jobs' || argv[i] === '--seeds') i += 1; // skipped here: children get --seeds N and their --shard
-    else if (argv[i].startsWith('--jobs=') || argv[i].startsWith('--seeds=')) continue;
-    else base.push(argv[i]);
+    const name = argv[i].includes('=') && argv[i].startsWith('--') ? argv[i].slice(0, argv[i].indexOf('=')) : argv[i];
+    if (SKIP.has(name)) {
+      if (!argv[i].includes('=')) i += 1; // its value is the next argument
+    } else if (name !== '--emit-json') base.push(argv[i]);
   }
   const script = fileURLToPath(import.meta.url);
   const children = [];
   for (let k = 0; k < o.jobs; k++) {
     children.push(new Promise((resolve, reject) => {
-      const c = spawn(process.execPath, [script, ...base, '--seeds', String(N), '--shard', `${k}/${o.jobs}`, '--emit-json'], { stdio: ['ignore', 'pipe', 'inherit'] });
+      const args = [script, ...base, '--section', 'benchmark', '--persona', persona, '--intel', intelMode, '--seeds', String(N), '--days', String(D), '--shard', `${k}/${o.jobs}`, '--emit-json'];
+      const c = spawn(process.execPath, args, { stdio: ['ignore', 'pipe', 'inherit'] });
       let out = '';
       c.stdout.on('data', (d) => (out += d));
       c.on('error', reject);
@@ -2310,65 +2864,206 @@ function benchViaChildren(o, N) {
   return Promise.all(children).then((parts) => parts.flat());
 }
 
+// The light records of N seeds for one persona and intel mode: in this process, or --jobs children.
+async function benchPersona(o, N, D, persona, intelMode, estimator, tables) {
+  let recs;
+  if (o.jobs > 1) recs = await benchViaChildren(o, N, D, persona, intelMode);
+  else {
+    const P = botParams(tables, { ...o, persona, intel: intelMode, estimator });
+    recs = withSets(intelModeSets(intelMode), () => benchRuns(N, D, P, null));
+  }
+  recs.sort((a, b) => a.i - b.i);
+  if (recs.length !== N) throw new Error(`benchmark: expected ${N} runs, got ${recs.length}`);
+  return recs;
+}
+
+// Everything the benchmark reports about one persona's records.
+function benchStats(recs, N, D) {
+  const alive = (r, d) => r.lastDay >= d && !(r.deathDay != null && r.deathDay <= d);
+  // NaN after the last day played: nothing is known about a day d > D (a target on it prints n/a, not 0 / LOW)
+  const alivePct = (d) => (d > D ? NaN : (100 * recs.filter((r) => alive(r, d)).length) / N);
+  const life = recs.map((r) => r.deathDay ?? Infinity).sort((a, b) => a - b);
+  const fightShare = (key) => {
+    const total = sum(recs.map((r) => sum(TIERS.map((t) => r[key][t]))));
+    return Object.fromEntries(TIERS.map((t) => [t, total ? (100 * sum(recs.map((r) => r[key][t]))) / total : NaN])); // NaN: no fight in range (n/a, not 0)
+  };
+  const pN = sum(recs.map((r) => r.pN));
+  return {
+    alivePct, life, medLife: median(life), meanScore: mean(recs.map((r) => r.score)),
+    scorePerDay: mean(recs.map((r) => r.score / Math.max(1, r.lastDay - 1))), // score per day survived (day 1 has no fight)
+    fights: fightShare('fights'), fightsMid: fightShare('fightsMid'), pickedAt: pN ? sum(recs.map((r) => r.pSum)) / pN : NaN,
+  };
+}
+
 async function benchmarkSection(o) {
   const N = o.seeds ?? (o.quick ? 6 : 100);
   const D = o.quick ? Math.min(o.days, 40) : o.days;
   const estimator = o.estimator ?? 'game';
   if (o.emitJson) {
-    const VT = valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
-    const P = botParams(VT, { ...o, estimator });
-    console.log('BENCH_JSON ' + JSON.stringify(benchRuns(o, N, D, P, o.shard)));
+    // a --jobs child: one persona (and intel mode), the seeds of its shard
+    const P = botParams(benchTables(o), { ...o, estimator });
+    console.log('BENCH_JSON ' + JSON.stringify(benchRuns(N, D, P, o.shard)));
     return null;
   }
+  const personas = o.persona === 'all' ? PERSONA_NAMES : [o.persona];
   const t0 = Date.now();
   const sim0 = gameSimOpts(newGame(1));
+  const simText = `${sim0.samples ?? cfg.sim.samples} guesses x ${sim0.evalFights ?? cfg.sim.evalFights} test fights, gear picked with ${sim0.fightsPerLoadout ?? cfg.sim.fightsPerLoadout} fights per loadout`;
   const estText = estimator === 'game'
-    ? `in-game estimate (${sim0.samples ?? cfg.sim.samples} guesses x ${sim0.evalFights ?? cfg.sim.evalFights} test fights, gear picked with ${sim0.fightsPerLoadout ?? cfg.sim.fightsPerLoadout} fights per loadout${simMod.simCounts ? ", plus the bot's Foresight rings" : ''})`
-    : "the bot's own two-stage estimate (24 guesses x 25 fights screen, top 3 re-checked with 30 x 30)";
-  h1(`BENCHMARK — version ${VERSION}: careful bot, ${N} fixed seeds x up to ${D} days`);
-  note(`Seeds: mixSeed(${BENCH_SEED_BASE}, 0..${N - 1}). Estimator: ${estText}. The bot fights an enemy only if its estimate is >= ${o.minwin}% (else the best one).`);
-  let recs;
-  if (o.jobs > 1) recs = await benchViaChildren(o, N);
-  else {
-    const VT = valueTables(o.quick ? 30 : 150, o.quick ? 15 : 40);
-    const P = botParams(VT, { ...o, estimator });
-    recs = benchRuns(o, N, D, P, null);
+    ? `the in-game automatic estimate (${simText}, plus the bot's Battle simulation points and Foresight rings)`
+    : (() => {
+      const sim = botSimOpts(o); // not botParams: --persona all is no persona, and the tables are not needed for a header
+      return `the bot's own two-stage estimate (${sim.samples} guesses x ${sim.evalFights} fights screen, the best 3 re-checked)`;
+    })();
+  h1(`BENCHMARK — version ${VERSION}: ${personas.map((n) => PERSONAS[n].name).join(', ')}; ${N} fixed seeds x up to ${D} days`);
+  note(`Seeds: mixSeed(${BENCH_SEED_BASE}, 0..${N - 1}), the same maps for every persona. Estimate: ${estText}; the casual persona never reads it.`);
+  note(personas.map((n) => `${PERSONAS[n].name}: ${PICK_TEXT[PERSONAS[n].pick]({ ...PERSONAS[n], minWin: o.minwin ?? PERSONAS[n].minWin, future: o.future ?? PERSONAS[n].future })}`).join('. ') + '.');
+  if (o.quick) note('QUICK run (few seeds, 40 days): the target flags below are only a smoke test.');
+  const tables = o.jobs > 1 ? null : benchTables(o);
+  const recsBy = {};
+  for (const name of personas) {
+    const t = Date.now();
+    recsBy[name] = await benchPersona(o, N, D, name, o.intel, estimator, tables);
+    note(`(${PERSONAS[name].name}: ${((Date.now() - t) / 1000).toFixed(1)}s${o.jobs > 1 ? `, ${o.jobs} processes` : ''})`);
   }
-  recs.sort((a, b) => a.i - b.i);
-  if (recs.length !== N) throw new Error(`benchmark: expected ${N} runs, got ${recs.length}`);
-  note(`(${((Date.now() - t0) / 1000).toFixed(1)}s${o.jobs > 1 ? `, ${o.jobs} processes` : ''})`);
+  const wallS = (Date.now() - t0) / 1000;
+  note(`Wall time ${wallS.toFixed(1)}s (${f1(wallS / 60)} min, ${o.jobs} process${o.jobs > 1 ? 'es' : ''}).`);
+  const stats = Object.fromEntries(personas.map((n) => [n, benchStats(recsBy[n], N, D)]));
 
-  const alive = (r, d) => r.lastDay >= d && !(r.deathDay != null && r.deathDay <= d);
-  const alivePct = (d) => (100 * recs.filter((r) => alive(r, d)).length) / N;
   const days = BENCH_DAYS.filter((d) => d <= D);
-  const life = recs.map((r) => r.deathDay ?? Infinity).sort((a, b) => a - b);
-  const q = (p) => {
-    const v = quantile(life, p);
-    return v === Infinity ? `>${D}` : f1(v);
-  };
-  const medLife = median(life);
-  const medText = medLife === Infinity ? `>${D}` : f1(medLife);
-  const meanScore = mean(recs.map((r) => r.score));
-
+  const medText = (st) => (st.medLife === Infinity ? `>${D}` : f1(st.medLife));
+  const mixText = (m) => TIERS.map((t) => f0(m[t])).join('/');
+  const pctText = (v) => (Number.isFinite(v) ? `${f0(v)}%` : '-');
   h2('Survival curve: % of runs alive at the end of day d');
-  printTable(['day', ...days.map(String), 'median life', 'mean score'], [['% alive', ...days.map((d) => f0(alivePct(d))), medText, f0(meanScore)]]);
-  const fine = [];
-  for (let d = 5; d <= D; d += 5) fine.push(d);
-  note('Every 5 days: ' + fine.map((d) => `d${d} ${f0(alivePct(d))}`).join(' | '));
-  note(`Life (day of death; runs alive at day ${D} count as >${D}): p10 ${q(0.1)}, p25 ${q(0.25)}, median ${medText}, p75 ${q(0.75)}, p90 ${q(0.9)}.`);
-  const deaths = recs.filter((r) => r.deathDay != null);
-  const bins = [[2, 2], [3, 9], [10, 19], [20, 29], [30, 39], [40, 49], [50, 59], [60, 79], [80, 200]].filter(([a]) => a <= D);
-  note(`Deaths ${deaths.length}/${N}. By day: ` + bins.map(([a, b]) => `${a === b ? a : `${a}-${b}`}: ${deaths.filter((r) => r.deathDay >= a && r.deathDay <= b).length}`).join(', ') + '.');
-  const scores = recs.map((r) => r.score);
-  note(`Score: mean ${f0(meanScore)}, median ${f0(median(scores))}, min ${Math.min(...scores)}, max ${Math.max(...scores)}. ` +
-    `Wins per run: ${TIERS.map((t) => `${t} ${f1(mean(recs.map((r) => r.wins[t])))}`).join(', ')}.`);
+  printTable(['persona', ...days.map((d) => `d${d}`), 'median life', 'mean score', 'score/day', 'fights n/e/c %', 'picked at'],
+    personas.map((n) => {
+      const st = stats[n];
+      return [PERSONAS[n].name, ...days.map((d) => f0(st.alivePct(d))), medText(st), f0(st.meanScore), f1(st.scorePerDay), mixText(st.fights), pctText(st.pickedAt)];
+    }));
+  note('score/day = the mean of score / (days survived), day 1 has no fight. fights n/e/c % = the share of the fights taken that were normal / elite / champion. picked at = the mean estimate of the fights taken (the casual persona has none).');
+  const bins = DEATH_BINS.filter(([a]) => a <= D);
+  const binText = ([a, b]) => (b === Infinity ? `${a}+` : a === b ? String(a) : `${a}-${b}`);
+  h2('Deaths by day (runs)');
+  printTable(['persona', ...bins.map(binText), 'deaths'],
+    personas.map((n) => {
+      const deaths = recsBy[n].filter((r) => r.deathDay != null);
+      return [PERSONAS[n].name, ...bins.map(([a, b]) => deaths.filter((r) => r.deathDay >= a && r.deathDay <= b).length), `${deaths.length}/${N}`];
+    }));
+  for (const n of personas) {
+    const st = stats[n];
+    const q = (p) => {
+      const v = quantile(st.life, p);
+      return v === Infinity ? `>${D}` : f1(v);
+    };
+    const scores = recsBy[n].map((r) => r.score);
+    note(`${PERSONAS[n].name}: life (day of death; runs alive at day ${D} count as >${D}) p10 ${q(0.1)}, p25 ${q(0.25)}, median ${medText(st)}, p75 ${q(0.75)}, p90 ${q(0.9)}. ` +
+      `Score mean ${f0(st.meanScore)}, median ${f0(median(scores))}, min ${Math.min(...scores)}, max ${Math.max(...scores)}. Wins per run: ${TIERS.map((t) => `${t} ${f1(mean(recsBy[n].map((r) => r.wins[t])))}`).join(', ')}. ` +
+      `Fights on days 11-40 n/e/c %: ${mixText(st.fightsMid)}.`);
+  }
   note(`Noise: one alive% has a standard error of ${f1(50 / Math.sqrt(N))} points at 50% (100 runs: 5); treat differences under about 10 points as noise.`);
 
-  const estShort = estimator === 'game' ? `game ${sim0.samples ?? cfg.sim.samples}x${sim0.evalFights ?? cfg.sim.evalFights}` : 'bot';
-  console.log(`\nBENCHMARK | v${VERSION} | seeds ${N} | alive ${days.map((d) => `d${d}:${f0(alivePct(d))}%`).join(' ')} | median life ${medText} | mean score ${f0(meanScore)} | estimator ${estShort}`);
-  console.log('\nMarkdown row for docs/BENCHMARKS.md (add your own notes at the end):');
-  console.log(`| ${VERSION} | ${new Date().toISOString().slice(0, 10)} | ${N} | ${BENCH_DAYS.map((d) => (d <= D ? f0(alivePct(d)) : '-')).join(' | ')} | ${medText} | ${f0(meanScore)} | estimator ${estShort} |`);
-  return recs;
+  // ---- the plan's targets: T-D (difficulty, the careful persona) and T-P (the personas behave)
+  const T_ROWS = [];
+  const lifeNum = (st) => (st.medLife === Infinity ? D + 1 : st.medLife); // alive at the end counts as one day longer than the run
+  const st = stats;
+  if (st.careful) {
+    check(T_ROWS, 'T-D', 'careful: median life (days)', lifeNum(st.careful), 30, 40);
+    check(T_ROWS, 'T-D', 'careful: alive at day 10 (%)', st.careful.alivePct(10), 75, 85, 0);
+    check(T_ROWS, 'T-D', 'careful: alive at day 2 (%)', st.careful.alivePct(2), 95, null, 0);
+    check(T_ROWS, 'T-D', 'careful: alive at day 4 (%)', st.careful.alivePct(4), 85, null, 0);
+  }
+  if (st.casual) {
+    check(T_ROWS, 'T-P', 'casual: alive at day 4 (%)', st.casual.alivePct(4), 70, null, 0);
+    check(T_ROWS, 'T-P', 'casual: share of champion fights (%)', st.casual.fights.champion, null, 0);
+  }
+  if (st.careful && st.casual) {
+    check(T_ROWS, 'T-P', 'careful - casual: alive at day 20 (points)', st.careful.alivePct(20) - st.casual.alivePct(20), 10, null, 0);
+    check(T_ROWS, 'T-P', 'careful - casual: alive at day 40 (points)', st.careful.alivePct(40) - st.casual.alivePct(40), 10, null, 0);
+  }
+  if (st.careful && st.champion) {
+    check(T_ROWS, 'T-P', "champion: score/day relative to careful's (x)", st.champion.scorePerDay / Math.max(EPS, st.careful.scorePerDay), 1.2, null, 2);
+    check(T_ROWS, 'T-P', "careful - champion: median life (days)", lifeNum(st.careful) - lifeNum(st.champion), 3, null);
+  }
+  if (st.champion) check(T_ROWS, 'T-P', 'champion: champions among its fights, days 11-40 (%)', st.champion.fightsMid.champion, 40, null, 0);
+  if (personas.length > 1) check(T_ROWS, 'T-P', `benchmark wall time with ${o.jobs} jobs (minutes)`, wallS / 60, null, 15);
+  if (T_ROWS.length) printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-D, T-P)');
+
+  // ---- one line and one markdown row per persona
+  const estShort0 = estimator === 'game' ? `game ${sim0.samples ?? cfg.sim.samples}x${sim0.evalFights ?? cfg.sim.evalFights}` : 'bot';
+  const estShort = (n) => (PERSONAS[n].pick === 'looks' ? 'no estimate' : estShort0); // the casual persona never reads one
+  for (const n of personas) {
+    const s = stats[n];
+    console.log(`\nBENCHMARK | v${VERSION} | ${n} | seeds ${N} | alive ${days.map((d) => `d${d}:${f0(s.alivePct(d))}%`).join(' ')} | median life ${medText(s)} | mean score ${f0(s.meanScore)} | score/day ${f1(s.scorePerDay)} | fights n/e/c ${mixText(s.fights)}% | picked at ${pctText(s.pickedAt)} | estimator ${estShort(n)}`);
+  }
+  console.log('\nMarkdown rows for docs/BENCHMARKS.md (add your own notes at the end):');
+  for (const n of personas) {
+    const s = stats[n];
+    console.log(`| ${VERSION} | ${new Date().toISOString().slice(0, 10)} | ${PERSONAS[n].name} | ${N} | ${BENCH_DAYS.map((d) => (d <= D ? f0(s.alivePct(d)) : '-')).join(' | ')} | ${medText(s)} | ${f0(s.meanScore)} | ${f1(s.scorePerDay)} | ${mixText(s.fights)} | ${pctText(s.pickedAt)} | estimator ${estShort(n)} |`);
+  }
+  console.log(`\nBENCHMARK SUMMARY | v${VERSION} | seeds ${N} | wall ${f1(wallS / 60)} min (${o.jobs} jobs) | ${personas.map((n) => `${n} life ${medText(stats[n])} d10 ${f0(stats[n].alivePct(10))}%`).join(' | ')}${T_ROWS.length ? ` | ${targetFlags(T_ROWS)}` : ''}`);
+  return recsBy;
+}
+
+// =============================================================== INTEL ======
+// R42 / T-R42: is the choice of what to upgrade obvious? The careful persona plays the same seeds in 8 modes: each
+// track alone first (only:<track>: that track until it is maxed, then the persona's own list), the persona's own list,
+// and no intel at all (every track's gains set to [0], so the gate opens and intel does nothing). A run that is still
+// alive at --days counts as days + 1. The differences are paired by seed.
+async function intelSection(o) {
+  const N = o.seeds ?? (o.quick ? 4 : 100);
+  const D = o.quick ? Math.min(o.days, 25) : o.days;
+  const estimator = o.estimator ?? 'game';
+  const persona = o.persona;
+  const tracks = Object.keys(cfg.intel.tracks);
+  const modes = [...tracks.map((t) => `only:${t}`), 'persona', 'none'];
+  const t0 = Date.now();
+  h1(`INTEL — does one track dominate? ${PERSONAS[persona].name}, ${N} fixed seeds x up to ${D} days, ${modes.length} modes on the same seeds`);
+  note(`Modes: ${modes.join(', ')}. only:<track> spends on that track until it is maxed, then follows the persona's list (${intelList(PERSONAS[persona]).map(([t, v]) => (t === '*' ? 'fewest points' : `${t} ${v}`)).join(', ')}); none = no intel at all.`);
+  note(`Seeds: mixSeed(${BENCH_SEED_BASE}, 0..${N - 1}), the same for every mode. Life = the day of death; alive at day ${D} counts as ${D + 1}. Differences are paired by seed: mean +- standard error.`);
+  if (o.quick) note('QUICK run (few seeds, short): the target flags below are only a smoke test.');
+  const tables = o.jobs > 1 ? null : benchTables(o);
+  const recsBy = {};
+  for (const mode of modes) {
+    const t = Date.now();
+    recsBy[mode] = await benchPersona(o, N, D, persona, mode, estimator, tables);
+    note(`(${mode}: ${((Date.now() - t) / 1000).toFixed(1)}s)`);
+  }
+  const lifeOf = (r) => (r.deathDay != null && r.deathDay <= D ? r.deathDay : D + 1);
+  const life = Object.fromEntries(modes.map((m) => [m, recsBy[m].map(lifeOf)]));
+  const scoreOf = Object.fromEntries(modes.map((m) => [m, recsBy[m].map((r) => r.score)]));
+  const se = (a) => (a.length > 1 ? Math.sqrt(a.reduce((x, v) => x + (v - mean(a)) ** 2, 0) / (a.length - 1) / a.length) : NaN);
+  const diff = (a, b) => a.map((v, i) => v - b[i]); // paired by seed
+  const meanLife = Object.fromEntries(modes.map((m) => [m, mean(life[m])]));
+  const meanScore = Object.fromEntries(modes.map((m) => [m, mean(scoreOf[m])]));
+  const onlyModes = modes.filter((m) => m.startsWith('only:'));
+  const bestMode = modes.reduce((a, b) => (meanLife[b] > meanLife[a] ? b : a));
+  const bestOnly = onlyModes.reduce((a, b) => (meanLife[b] > meanLife[a] ? b : a));
+  const pm = (a, d = 1) => `${a.length ? fx(mean(a), d) : '-'} +- ${fx(se(a), d)}`;
+  h2('Mean life and score per mode, and the paired differences');
+  printTable(['mode', 'mean life', 'mean score', `life vs best (${bestMode})`, 'score vs best, %', 'life vs none'],
+    modes.map((m) => [m, f1(meanLife[m]), f0(meanScore[m]), pm(diff(life[m], life[bestMode])), f1((100 * (meanScore[m] - meanScore[bestMode])) / Math.max(EPS, meanScore[bestMode])), pm(diff(life[m], life.none))]));
+  note(`Best mode by mean life: ${bestMode}; best single track: ${bestOnly}.`);
+
+  // ---- T-R42
+  const T_ROWS = [];
+  const lifeSpread = meanLife[bestOnly] - median(onlyModes.map((m) => meanLife[m]));
+  const medOnlyScore = median(onlyModes.map((m) => meanScore[m]));
+  const scoreSpread = (100 * (Math.max(...onlyModes.map((m) => meanScore[m])) - medOnlyScore)) / Math.max(EPS, medOnlyScore);
+  check(T_ROWS, 'T-R42', '(1) best only: mode - median only: mode, mean life (days)', lifeSpread, null, 4);
+  check(T_ROWS, 'T-R42', '(1) the same in mean score (%)', scoreSpread, null, 10);
+  let worstVsNone = Infinity;
+  for (const m of onlyModes) {
+    const d = diff(life[m], life.none);
+    worstVsNone = Math.min(worstVsNone, mean(d));
+    check(T_ROWS, 'T-R42', `(2) ${m} vs none, in paired se (days / se)`, mean(d) / Math.max(EPS, se(d)), -2, null);
+  }
+  const defaultVsBest = meanLife.persona - meanLife[bestOnly];
+  check(T_ROWS, 'T-R42', "(3) the persona's own list - best only: mode (days)", defaultVsBest, -3, null);
+  printTargets(T_ROWS, 'Targets (docs/PLAN-2.0.md section 9: T-R42)');
+  const sgn = (v) => signed(v, 1);
+  console.log(`\nINTEL | best ${bestOnly} | spread life ${f1(lifeSpread)}d score ${f0(scoreSpread)}% | default ${sgn(defaultVsBest)}d | worst vs none ${sgn(worstVsNone)}d | seeds ${N} days ${D} | ${targetFlags(T_ROWS)}`);
+  note(`(${((Date.now() - t0) / 1000).toFixed(1)}s total)`);
+  return { meanLife, meanScore };
 }
 
 // ================================================================= DAY 2 =====
@@ -2406,7 +3101,7 @@ function day2Section(o) {
       return [copperD('sword'), ...(gearBySlot.some((g) => g.slot === 'chest') ? [] : [copperD('chest')]), ...gearBySlot];
     },
   };
-  const LABEL = { unarmed: 'Unarmed', kit1: 'Copper D sword', kit2: 'Copper D sword + Copper D chest', kit3: 'sword + chest + a matching gem per High special' };
+  const LABEL = { unarmed: 'Unarmed', kit1: 'Copper D sword', kit2: 'Copper D sword + Copper D chest', kit3: 'kit + a matching gem per High special (all scouted: upper bound)' };
 
   // per variant and tier: { all: [win%], groups: { label: [win%] } }
   const results = {};
@@ -2441,6 +3136,7 @@ function day2Section(o) {
   note('Targets (T-R7, docs/PLAN-2.0.md section 9): the user asked for elites at 30-50% and champions at 0-25% without equipment; the bands below keep every group inside that.');
   let hits = 0;
   let checks = 0;
+  const T_ROWS = []; // the same judgements, for the DAY2 line
   const flagCell = (v, lo, hi, hardLo, hardHi) => {
     const f = band(v, lo, hi);
     const hard = v < hardLo - 1e-9 || v > hardHi + 1e-9;
@@ -2458,8 +3154,10 @@ function day2Section(o) {
     const tg = DAY2_TARGETS[tier];
     const r = un[tier];
     rows.push([tier, 'all', String(r.all.length), f1(mean(r.all)), `${f0(quantile(r.all, 0.1))}-${f0(quantile(r.all, 0.9))}`, `${tg.mean[0]}-${tg.mean[1]}`, flagCell(mean(r.all), tg.mean[0], tg.mean[1], tg.hard[0], tg.hard[1])]);
+    check(T_ROWS, 'T-R7', `${tier} mean`, mean(r.all), tg.mean[0], tg.mean[1]);
     for (const [label, lo, hi] of tg.groups) {
       const g = r.groups[label] || [];
+      check(T_ROWS, 'T-R7', `${tier} ${label}`, g.length ? mean(g) : NaN, lo, hi);
       rows.push([tier, label, String(g.length), g.length ? f1(mean(g)) : '-', g.length ? `${f0(quantile(g, 0.1))}-${f0(quantile(g, 0.9))}` : '-', `${lo}-${hi}`, g.length ? flagCell(mean(g), lo, hi, tg.hard[0], tg.hard[1]) : 'no enemies']);
     }
   }
@@ -2472,16 +3170,18 @@ function day2Section(o) {
     const cell = (tier) => {
       const m = mean(r[tier].all);
       const t = DAY2_GEAR_TARGETS[variant] && DAY2_GEAR_TARGETS[variant][tier];
+      if (t) check(T_ROWS, 'T-GEAR', `${variant} ${tier}`, m, t[0], t[1]);
       return `${f1(m)}${t ? ` (target ${t[0]}-${t[1]}: ${band(m, t[0], t[1])})` : ''}`;
     };
     return [LABEL[variant], cell('normal'), cell('elite'), cell('champion')];
   });
   printTable(['gear', 'normal', 'elite', 'champion'], kitRows);
   note(`kit3 puts a ${GEM_GRADE} gem that answers each High special on the chest, then on an extra plain Copper D helmet and gloves (a chest holds one gem). T-GEAR: kit2 elite 75-80 / champion 50-55, kit3 elite 85-90 / champion 65-75.`);
+  note('kit3 is an UPPER BOUND for T-GEAR (b), "one matching gem per VISIBLE High special": it gems every High special, hidden ones too (as if everything were scouted), and with 2 or more Highs it also has the extra Copper D helmet and gloves. A real player sees only some of the Highs, so the real number lies between kit2 and kit3.');
 
   const m = (variant, tier) => f0(mean(results[variant][tier].all));
   const g = (tier, label) => f0(mean(un[tier].groups[label] || [NaN]));
-  console.log(`\nDAY2 | unarmed n/e/c ${m('unarmed', 'normal')}/${m('unarmed', 'elite')}/${m('unarmed', 'champion')} | elite 0H/1H/2H+ ${g('elite', '0H')}/${g('elite', '1H')}/${g('elite', '2H+')} | champ <=1H/2H/3H ${g('champion', '<=1H')}/${g('champion', '2H')}/${g('champion', '3H')} | kit1 n/e/c ${m('kit1', 'normal')}/${m('kit1', 'elite')}/${m('kit1', 'champion')} | kit2 n/e/c ${m('kit2', 'normal')}/${m('kit2', 'elite')}/${m('kit2', 'champion')} | kit3 n/e/c ${m('kit3', 'normal')}/${m('kit3', 'elite')}/${m('kit3', 'champion')} | T-R7 in band ${hits}/${checks}`);
+  console.log(`\nDAY2 | unarmed n/e/c ${m('unarmed', 'normal')}/${m('unarmed', 'elite')}/${m('unarmed', 'champion')} | elite 0H/1H/2H+ ${g('elite', '0H')}/${g('elite', '1H')}/${g('elite', '2H+')} | champ <=1H/2H/3H ${g('champion', '<=1H')}/${g('champion', '2H')}/${g('champion', '3H')} | kit1 n/e/c ${m('kit1', 'normal')}/${m('kit1', 'elite')}/${m('kit1', 'champion')} | kit2 n/e/c ${m('kit2', 'normal')}/${m('kit2', 'elite')}/${m('kit2', 'champion')} | kit3 n/e/c ${m('kit3', 'normal')}/${m('kit3', 'elite')}/${m('kit3', 'champion')} | T-R7 in band ${hits}/${checks} | ${targetFlags(T_ROWS)}`);
   return results;
 }
 
@@ -2506,9 +3206,12 @@ async function main() {
   }
   if (o.section === 'all' || o.section === 'economy') await run('economy', () => economySection(o));
   if (o.section === 'all' || o.section === 'power') await run('power', () => (T = powerSection(o, null)));
-  if (o.section === 'all' || o.section === 'bot') await run('bot', () => botSection(o, T));
+  if (o.section === 'all' || o.section === 'bot') {
+    for (const name of o.persona === 'all' ? PERSONA_NAMES : [o.persona]) await run(o.persona === 'all' ? `bot ${name}` : 'bot', () => botSection({ ...o, persona: name }, T));
+  }
   if (o.section === 'day2') await run('day2', () => day2Section(o));
   if (o.section === 'benchmark') await run('benchmark', () => benchmarkSection(o));
+  if (o.section === 'intel') await run('intel', () => intelSection(o));
   if (o.section === 'specials') await run('specials', () => specialsSection(o));
   if (o.section === 'estimator') await run('estimator', () => estimatorSection(o));
   console.log(`\n[total ${((Date.now() - t0) / 1000).toFixed(1)}s]`);
@@ -2527,7 +3230,7 @@ function readHelp() {
 
 export {
   applySet, parseArgs, workDay, choosePlan, spendIntelPoints, snapshot, runBot, botParams, valueTables, economySection, powerSection, day2Section, botSection, benchmarkSection,
-  centerOptions, chooseField, makeValueFn, campReserve, winPct, setOf, mkItem,
+  specialsSection, estimatorSection, intelSection, centerOptions, chooseField, makeValueFn, campReserve, winPct, setOf, mkItem, mapAttempts,
 };
 
 if (IS_MAIN) {

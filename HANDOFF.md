@@ -35,7 +35,7 @@ changes on top (`git status`).
 | `js/main.js` | UI shell (top bar with version, pile count and the work-day bar (`timeBar`, a 4 px strip on the bar's bottom edge), tabs, side log, phase screens, save/load: tries `smithsy-save-v3`, else migrates `smithsy-save-v2`, else `smithsy-save-v1`; a save that can't be loaded is kept as `smithsy-save-backup-<time>` and a new game starts; a render error offers "Start a new game"; `newGame` cancels a running Estimate all). |
 | `js/ui/*.js` | One module per screen; `mapview.js` = world map (pile badges), field grid (debris numbers, boulders), pile and bag panels and the "Choose what to carry" step; `workshop.js` also shows the gem novice/master tables; `endday.js` = battle report + plan screen (incl. the roster comparison table `rosterTable`, **Estimate all** (`startEstimateAll`, `cancelRun`, `estKey`), the ± margin (`marginPts`), the Matchup table, wear text (`wearRange`, `wearText`) and night repairs); `adventurer.js` shows the same roster table; `repairui.js` = repair widgets shared by the workshop and the night screens; `skillsview.js` also holds the skill-vs-ring helpers used by Help; `dom.js` = tiny `h()` helper. |
 | `tests/` | `npm test` (= `node --test tests/*.test.mjs`), **325 tests in 16 files** (+ `helpers.mjs`); `carry.test.mjs` (1.1, 19 tests) covers piles, carry choice and the projected-load rule; `durability.test.mjs` (new in 1.2, 20 tests) covers wear, Gear care, decimal durability and the v1.0/v1.1 save upgrades; the estimate margin, cancellation, `simCounts` and Foresight/Battle simulation are in `sim.test.mjs`, `rings.test.mjs`, `skills-intel.test.mjs`, the fresh-cell rule in `field.test.mjs`, save v3 in `game.test.mjs`. |
-| `tools/balance.mjs` | Balance report: economy (incl. map size, debris effort, trips found vs carried, gem novice/master odds), power curve, bot playthrough (incl. field piles and "Map supply"), and (1.2) **benchmark** (survival curve on fixed seeds, `--jobs`, `--estimator game\|bot`), **specials** (enemy specials vs the matching defence and the adventurer's gems) and **estimator** (accuracy of the win estimate); `--set` what-ifs, `--ablate` systems, `--immortal`, `--carry value\|default`. The tool also runs on older versions (it reads optional exports such as `freshCellCount`/`simCounts` from the modules), which is how 1.1's benchmark row was made. |
+| `tools/balance.mjs` | Balance report: economy (incl. map size, debris effort, trips found vs carried, gem novice/master odds), power curve, bot playthrough (incl. field piles and "Map supply"), and (1.2) **benchmark** (survival curve on fixed seeds, `--jobs`, `--estimator game\|bot`), **specials** (enemy specials vs the matching defence and the adventurer's gems) and **estimator** (accuracy of the win estimate); `--set` what-ifs, `--ablate` systems, `--immortal`, `--carry value\|default`. The 2.0 tool only runs on 2.0 trees (it imports 2.0 functions); older versions are measured with the tool that shipped with them (that is how 1.1's benchmark row was made). |
 
 ## Release process
 1. Bump `VERSION` in `js/version.js` (tenths for small changes, ones for big ones: user decision) and add a
@@ -464,7 +464,7 @@ what was done instead and which batch it touches.
   rewritten; its other numbers (skills, repairs, estimate) are B7's. HANDOFF's file table, save keys and release
   step 6 are B7's too, so they still describe 1.2. `CHANGELOG.md` has no 2.0 section yet (B7).
 - **`tools/balance.mjs` only runs on 2.0 trees now** (it imports `distanceRow`, `sightValue`, `sightShare`,
-  `seenItems` directly; the 1.2-era optional-export guards that are still there are harmless). Economy buckets are
+  `seenItems` directly; the 1.2-era optional-export guards (`mapMod.freshCellCount`, `simMod.simCounts`) were removed in the B6 review: `cellFresh` and `simCounts` are plain imports). Economy buckets are
   1..6+ and its SUMMARY ends with `searches per clear cell`. The bot only had `intelChance` renamed (it still spends
   intel by its own short list: no R45 gate until B4) and its field search uses sight (`centerOptions`).
 - **Batch 1 open notes**
@@ -962,6 +962,112 @@ what was done instead and which batch it touches.
   "request pins" test (R15 fill = fraction used, R28 columns, R30 column order).
 - Hand-checked in headless Chromium (1280, 390 and 360 px): Workshop, report, run summary (lost with the analysis, retired), Adventurer tab, Skills tab; an
   end-to-end click through craft, refine, Repair all, End run (confirm text, `end.prevBest`, a reload shows the same summary) and New game: no console errors.
+
+**Batch 6 (balance tool: personas, sections, benchmark)**
+- **Only `tools/balance.mjs`, `tests/personas.test.mjs` and `docs/BENCHMARKS.md` changed** (no game code, no config). Every number the tool uses for targets is the plan's
+  (section 9) and sits in the tool next to the check, because they are measuring instruments, not game numbers.
+- **Personas (`PERSONAS`, `PERSONA_KEYS`, `PICK_KEYS`, exported).** Section 8.3 verbatim (careful, champion, casual). The persona merges into the bot through `botParams(T, o)`: `o.persona`
+  (default careful), `--minwin`, `--future` and `--carry` are `null` by default and only override the persona when given. `slotW.sword` is multiplied by `swordBias`; `trips`, `minRate`,
+  `restBelow` / `repairBelow` / `subBelow` and `carry` come from the persona. `--intel only:<track>` puts `[track, Infinity]` in front of the persona's list.
+- **`pickEnemy(P, st, evals)` (pure, exported)** returns the chosen element of `evals`. Ties keep the lowest index. `ev` may be missing. The champion fallback always computes the plan's `p/100 x (score + future)` over `p >= 50` and ignores `ev` (which also counts the reward ring and the banner bonus; fixed in the B6 review, the first version used `ev`); the careful rule uses `ev`.
+  **Reading chosen for the casual persona (a deviation):** the plan says "G < 6: normals, else normals and elites; fewest visible High, ties -> lowest index". Taken literally the casual player
+  would never fight an elite, because a normal has no High attribute at all (0 visible), so a normal always wins the "fewest visible High" and the tie-break goes to the lower index (normals come
+  first in the roster). The plan's own test list says "elites from 6", and the UI spec behind it says "G < 6: normals; else elites", so from `gearLevelForElites` on the pool is the elites (the normals
+  only when the roster has no elite), still never champions, still fewest visible High then lowest index. `gearLevel(st)` is exported.
+- **Casual details the plan leaves open.** `pack: 'default'` is the game's `defaultPack(state, cfg)` and has no rest rule (the default pack leaves out an item that could break; the casual persona
+  repairs it at camp when it is below `repairBelow` 30). Crafting is the shared engine for all three personas. The casual persona's picks have `p: null`, `bestP` / `meanP` / `safe` null; the tables print "-" for it.
+- **Casual rings (a deviation).** Plan 8.3 says "`grade` = highest ring value first, any type". `gradeRings` sorts by **grade first**, then by ring value, then by the older ring, for adventurer AND smith rings.
+  Raw ring values cannot be compared across types (a health ring is 3-7, a slow-resistance ring 6-18, so "highest value first" would just mean "always the slow-resistance ring"), and grade is what a casual player
+  can read off a ring. Within a grade the larger value wins, so the plan's rule is the tie-break. The test pins the grade order.
+- **The "bot" estimator (`--estimator bot`)** still re-checks the best three by expected value for the careful persona; the champion persona re-checks all seven (its rule needs the p of every
+  enemy, not only the three with the best expected value). The benchmark and intel sections use the in-game estimate (`--estimator game`) by default, as before.
+- **`spendIntelPoints`** accepts the list or `'roundRobin'`, skips tracks that cannot gain, and a list without `*` falls back to the first track that can gain, so a persona never leaves a spendable point.
+  `rec.rested` counts the items the rest rule kept home ("rested item-days"): only items the pack would otherwise have taken (within the best `packLimit` of their type; a worn third or fourth spare that the
+  pack limit leaves at home anyway is not counted, fixed in the B6 review), `rec.repairGems` the gems repairs used (gem units; a repair costs a fraction of a gem), `rec.atDay[d]` (days 10, 20, 25, 30, 40)
+  the skill levels, the main bar and the answer-gem armor cover.
+- **Sections.**
+  - **economy:** 1a gets a "gem % set" column next to the measured one; a **Map** note (fields per distance, fields at distance 5+, % of maps with 6 or more, attempts per map); **3c Sight**
+    (sight forced through `intel.tracks.oreSight.base` with `withSets`, the same field and the same maps for every sight value, value per trip-hour, "5-6 together" row for T-E5); the SUMMARY ends with
+    the searches per clear cell at +0 / +12 / +32%, the map note and the sight gain, then the T-E flags. Attempts per map are counted without touching the game: `mapAttempts(seed)` wraps the rng, counting
+    the shuffles of the candidate cells (one per attempt in `generateMap`); it returns NaN if a field had exactly as many cells as the candidates.
+  - **power:** "3b Anchors" (120 enemies x 60 fights per day, a typical elite = a random roll of the tier's attribute levels, last day with >= 70%, scanned until a day is 25 points under the line), five sets,
+    flagged against 1.2's numbers (8 / 15 / 23 / 41 / 59) within 3 days (T-MID). Elite only (curve.mjs also did normal and champion).
+  - **specials:** rewritten for M1-M7 (T-R33) and the S-swing check; iron / steel / mythril C sets, reference day = the day the plain set wins about 55% against an all-Normal elite (win or draw, 500 fights per
+    day), window of 5 days, 1,500 fights per cell (300 with `--quick`), the same random numbers for every gear variant of a cell (paired). M5 is measured for the four gems with a resistance (emerald has none);
+    M6 is "distance from the mean of the five sword gems" (C <= 3, S <= 4); M7 compares the emerald armor gain with the smallest M2; the S check is S sword gem gain minus the
+    matching special's Low-to-High swing. **Judged on the mean of the three sets (B6 review fix):** every target value is the mean over iron / steel / mythril for one special (M6: for one sword gem; M7: one value, the mean
+    M7 against the smallest per-special mean M2), the reading of the reference script (`scratchpad/v2/cm/gems.mjs`) and spec-combat 6.1 ("the reported number is the mean of the three sets"). The first version flagged each of the
+    12 cells (15 for M6, 3 for M7) on its own, which is stricter than the plan and printed `T-R33 MISS 8/10` where the plan's reading gives 2 (topaz M2 3.9 and 2 of 4 S-swing checks). The per-material tables stay as
+    information, followed by a table of the means. The old 1.2 tables (rings, offence vs equivalent special) are gone with the old section.
+  - **estimator:** rewritten for 5x5 / 6x6 / 8x8 / 10x10 (derived from `sim.samples`) at the starting 10% scouting times the elite multiplier (what the game would show, 9% per attribute): shown margin,
+    rms miss, wobble, how often the truth lies inside the shown margin, the margin floor, and the **cost table**. The plan's "max (10x10, 3 per type)" is not the dearest case: with 3 items per type the gear search
+    is one type at a time (<= 31 tries per guess) and costs LESS than 2 items per type, which are all tried (32 combinations). The dearest case is the largest exact search, 3 swords + 2 of the other
+    types (48 combinations = `maxExactCombos`), so the table has that third row and T-A2's two limits check the dearest row at base and at max.
+  - **bot:** persona title and pick text, "Win chance by tier" (T-GEAR c, the mean estimate over the roster's enemies of each tier on the days the bot planned), progression with T-B1 ranges, the **load**
+    column (travel minutes the carried items add = the walk minus the same walk with nothing carried; `ctx.tm.load` is not a time category, so idle is unchanged), travel % of the minutes worked and load % of
+    travel (T-B2), the Repairs line from the plan, repair time % on days 11-40 and items destroyed (T-B3), **Gem supply** (T-B5), **Skills at day 30** (T-B4, "main bar" = the bar type the run has smithed the
+    most items from by then), and a targets table. T-B / T-GEAR (c) rows are only judged for the careful persona; other personas get a note.
+  - **benchmark:** personas (default all; `--persona` one), `BENCH_DAYS` (2, 3, 4, 5, 10, ...) and `DEATH_BINS` exported, columns median life, mean score, score/day (mean of score / (days survived), day 1 has
+    no fight), fights n/e/c %, picked at; per persona a `BENCHMARK | v2.0 | <persona> | ...` line and a markdown row; wall time; T-D and T-P rows (T-P rows that need a persona pair only when both ran).
+    `--jobs` shards every persona; the children get `--persona X --intel M --section benchmark --emit-json` and the parent's other flags. Same numbers as one process (a test compares them).
+  - **intel (new):** 6 `only:` modes + `persona` + `none`, the same seeds, life (alive at `--days` counts as days + 1), score, paired differences to the best mode and to `none`, T-R42 rows, the INTEL line.
+    `--intel none` is a CONFIG switch (`intelModeSets`), applied for the whole process when given on the command line and with `withSets` (undone afterwards) inside the intel section.
+  - **day2** only got flags (T-R7 / T-GEAR) on its DAY2 line. **kit3 is an upper bound for T-GEAR (b)** (plan: "one matching gem per *visible* High special"): the B3 code gems every High special, hidden ones too, and adds an
+    extra Copper D helmet and gloves with 2+ Highs. B6 judges it against the 85-90 / 65-75 bands anyway; its label and a note now say "all scouted: upper bound", so a miss on the high end of (b) is read as "the ceiling", not
+    "a typical scouted player". A version with only the visible Highs gemmed would sit between kit2 and kit3. `--section all` is still economy + power + bot (benchmark, intel, day2, specials, estimator are separate), as the header always said.
+- **Earlier open notes fixed here (inside this batch's files):** B3 "`--section estimator` still describes 10x10 / 13x13 sizes" (rewritten). B4's "ringPoints 1 and bannerBonus 10 are untuned guesses": measured below, not changed.
+
+- **First measurements with the B5 numbers (untuned; these are B7's inputs, full runs, flags as the tool prints them).**
+  - `economy` (100 maps, 24 s): T-E1 3.98 ok; T-E2 copper 21 (LOW, 23-31), iron 60 ok; T-E3 ok (40 fields, every map has 7+ at distance 5+, 1.70 attempts); T-E4 mythril 28.2 ok; T-E5 sight 60 vs 0 +27% ok,
+    sight 20 vs 0 about 0% (LOW, 3-8).
+  - `day2` (3 s): unchanged from B3: T-R7 in band 2 of 8; T-GEAR kit2 94 / 77 and kit3 96 / 85 (elite / champion), all four above their bands.
+  - `power` (5 s): T-MID ok on all five anchors (copper B d9, iron C d15, steel C d25, mythril C d38, mythril S d59).
+  - `specials` (2 s), judged on the mean of the three sets per special (after the B6 review; the first per-cell reading gave `T-R33 MISS 8/10`): M1 9.1-18.3 ok, M2 3.9-7.7 (topaz 3.9, just under 4: the case plan 4.7's
+    topaz fallback covers), M3 -3.0..-2.5 ok, M4 96-125% ok, M5 C 32-49% and S 41-48% ok, M6 C max 2.4 / S max 3.7 ok, M7 3.1 against the smallest M2 3.9 ok, S-swing -17.0..+4.0 (topaz and sapphire sword gems S gain 4 more
+    than the swing; the mythril diamond / ruby swings are huge, so the other direction is fine): `T-R33 MISS 2/10`. Per cell (information) 1-4 of the 12 cells of M1, M2, M3, M5-C and M6 are outside the bands.
+  - `estimator` (4 s): +-20.7 / 17.2 / 12.8 / 10.3 at 5x5 / 6x6 / 8x8 / 10x10, miss 13.1 / 12.3 / 11.1 / 10.5, wobble 9.3 / 8.1 / 6.2 / 5.0; dearest cost 8,575 fights (base) and 34,300 (max) per roster; T-A2 ok.
+  - `bot --persona careful --seeds 40` (bot estimator, 128 s): median life 49.5, alive d2 95% / d10 95%; T-B1 first pieces ok, 3-of-5-slots iron 5 and steel 11.5 a day early; T-B2 travel 29% ok, load 6.9% of travel (LOW);
+    T-B3 repairs 1.9% of the time (LOW), 0.0 destroyed; T-B4 Travel 8.2 (HIGH), General repair 3.8 and main-bar repair 2.4 (LOW); T-B5 cover 3.5 of 4 ok, repairs use 2.3% of the gems cut; T-GEAR (c) elite 98.5 /
+    champion 94.9 (both HIGH: the careful bot is far safer than the 75-90 / 50-75 bands).
+  - `intel --seeds 100 --days 60 --jobs 3` (544 s): all eight modes lie within 2.7 days of life (standard error 1.3-1.6): none 43.7, the persona's list 43.8, best only:groupSight 44.1, worst only:oreSight 41.4. T-R42 is
+    met, but only because intel hardly moves survival in the bot's hands; B7 may want the gains to matter more. (Spending on Ore sight alone is the one mode a little below none, -2.3 +- 1.4 days.)
+  - `benchmark --jobs 4` (100 seeds x 3 personas, 134 s wall, T-P limit 15 min): careful d2 96 / d4 96 / d10 95 / d20 94 / d30 85 / d40 67, median life 48 (T-D wants 30-40 and 75-85% at d10: HIGH); champion median 38,
+    score/day 44.3 = 1.22x the careful planner's, 99% champions on days 11-40; casual d4 100, 0% champions, median 42. T-P misses: careful - casual at d20 is -5 points (casual 99%, careful 94%: the careful
+    planner loses 4 of 100 runs on day 2, every time to a champion that its 5 x 5 estimate put at 100%: 25 of 25 test fights won, and the bot, like the plan's rule, ignores the shown +-14); d40 +11 ok. `--section benchmark --persona careful --quick` takes 8 s.
+- **B6 review fixes (recorded here, all inside `tools/balance.mjs`, `tests/personas.test.mjs`, `docs/BENCHMARKS.md`).**
+  - `--section benchmark --estimator bot` crashed with the default `--persona all` (the header called `botParams` with `persona: 'all'`); the bot's first-stage estimate sizes are now `botSimOpts(o)`, which needs no persona and
+    no value tables (the `--jobs` parent no longer builds them either). A test runs it in one process and with `--jobs`.
+  - T-R33 is judged on the mean of the three sets per special (see **specials** above); the champion fallback uses `p/100 x (score + future)` (see `pickEnemy`); "rested item-days" count only items in the pack's top `packLimit` (the 40-seed careful run: 108 -> 71.7 per run; nothing else in that run changed: median life 49.5, same T-B flags).
+  - Targets on a day after `--days` print n/a, not 0 / LOW: `alivePct(d)` is NaN for `d > D`; the T-B2 / T-B3 windows (days 11-40) and the benchmark's fight shares are NaN when no day / fight falls in the range.
+  - The casual persona's BENCHMARK line and markdown row say `estimator no estimate` (it never reads one); the others say `game 5x5` / `bot`.
+  - The champion hunter does rest gear (docs/BENCHMARKS.md said it did not): `restingIds` keeps home any item a champion fight could destroy for every persona with `pack: 'score'`; only the `restBelow` wear threshold is off for it (0).
+    The sentence now says so. The plan is silent; the spec says "keeps break-risk items".
+  - Comments and docs that said the tool runs on older versions are corrected (the optional-export guards for `freshCellCount` / `simCounts` are plain imports now; BENCHMARKS.md "Adding a new version" step 3 says to run the old tree's own tool).
+- **Batch 6 open notes**
+  - [minor] The careful persona prefers champions as soon as its estimate is 90%+ (expected value p x (score + 1000) is larger for a champion): 62% of its fights overall and 71% on days 11-40 are champions, 4 of 100 runs
+    die on day 2 (seeds 15, 18, 38 and 42 of the benchmark list, each against a champion estimated at 100%). That is the plan's rule with the plan's numbers, not a bot bug; B7's difficulty pass (T-D) sets the picture.
+  - [minor] `bannerBonus` 10 and `ringPoints` 1 (B4 guesses) are still untuned; with the champion rule above they hardly matter. `--set` cannot reach them (they are tool settings in `botParams`).
+  - [minor] The tool's `--section all` stays economy + power + bot; running all eight sections of section 9 is eight commands (about 14 minutes in all with `--jobs`). A one-command "everything" would need the benchmark's
+    child processes to be shared, so it was left out.
+  - [minor] `README.md` (the `--section` list, `--persona`, `--intel`), `docs/BALANCE.md` and the HANDOFF file table and "Balance status" still describe 1.2's tool: B7. `docs/BENCHMARKS.md` is restructured (2.0 table empty on purpose,
+    the 1.x text moved unchanged under "1.x (old world, history only)").
+  - [minor] `tests/sim.test.mjs:307` unused variables (B2 note) and the B2 `craft()` / `repair()` XP note are outside this batch's files and not touched.
+  - [minor] SUMMARY flags count n/a target rows as misses: `tools/balance.mjs:239-246` `targetFlags()` uses `bad = mine.filter((r) => r[4] !== 'ok')`, so an 'n/a' row adds to `MISS k/n` when another row of the same id is LOW or HIGH. Repro: `node tools/balance.mjs --section benchmark --quick --seeds 2 --days 5` (table: T-D 3 LOW + 1 n/a, summary `T-D MISS 4/4`; T-P 1 LOW + 3 n/a, summary `T-P MISS 4/8`; with `--days 1` `T-P MISS 7/8`). Expected: MISS counts only LOW / HIGH, n/a apart (for example `MISS 1/5, 3 n/a`). Full-length runs are not affected.
+  - [minor] Median-life targets are judged when the median is cut off by `--days`: `tools/balance.mjs:2967` `lifeNum = (st) => (st.medLife === Infinity ? D + 1 : st.medLife)`. With more than half the runs alive at `--days` only '>D' is known, yet 'careful: median life (days)' prints D+1 and LOW, and 'careful - champion: median life (days)' prints 0.0 and LOW when both are cut off (`--section benchmark --quick --seeds 1 --days 3`). Expected: n/a, the rule the B6 review applied to alive % after `--days`. The 100-day benchmark is not affected today.
+  - [minor] `docs/BENCHMARKS.md:21` says the careful planner 'fights only when it is at least 90%'. The game needs a fight every day: `pickEnemy` (`tools/balance.mjs:2229-2230`) takes the largest p when no enemy reaches minWin (the bot section counts these as 'no-safe-option fights'; plan 8.3: 'none -> max p'). Suggested wording: 'takes the fight with the best expected value among those it is at least 90% sure of, else the surest one'.
+  - [minor] Economy SUMMARY hard-codes the +12 / +32% efficiency labels: `tools/balance.mjs:758` `searchesAtBonus = { 0: meanKs[0], 12: meanKs[1], 32: meanKs[4] }` and line 1078 prints 'searches per clear cell +0/+12/+32%'. The bonuses come from CONFIG (`skills.activity.searchEff.effects.searchEff` x maxLevel = 1.2 x 10, and the S ring 20 + 12), so if B7 changes either value the label and keys go stale. Expected: build the label from effSkill and from S ring + effSkill.
+
+**Tests (B6)**
+- New `tests/personas.test.mjs` (28 tests; 16 s because eight of them run the tool's command line): `PERSONAS` shape (exactly careful / champion / casual, every key the bot reads, every pick's own keys, lists end in the catch-all); `botParams`
+  merges persona values, scales only the sword weight, `--minwin` / `--future` / `--carry` override; `pickEnemy` (careful: max ev among p >= minWin, boundary included, fallback max p; champion: champion at champMin, elite at eliteMin,
+  best value at 50%+, else max p, the value formula without `ev`; casual: p ignored / missing, normals below the gear level, elites from it, never champions, fewest visible High, hidden Highs do not count, ties lowest index) and `gearLevel`;
+  `spendIntelPoints` against a separately written reference for all three lists point by point, the careful targets, round robin, maxed tracks skipped, nothing spendable left for any persona / `--intel` mode / point count, `only:<track>`,
+  `--intel none` (and `withSets` restoring the config, also after a throw); `parseArgs` (persona, intel, section defaults, benchmark default `all`); `BENCH_DAYS` / `DEATH_BINS`; `judge`; `mapAttempts`; each persona plays 12 days of the real
+  game (trip cap, estimate use, every intel point spent); `choosePlan` for casual (the game's default pack, best-grade rings) and careful (rest rule); the benchmark through child processes gives the same line as one process; the intel,
+  day2, power, specials, estimator, economy and bot sections run with `--quick` and print their SUMMARY lines with target flags. Mutation-checked: off-by-one in the casual gear level, `>` for `>=` in the careful rule, `<=` for `<` in the
+  intel targets, a missing sword bias and an uncounted rested item each fail a test.
+- B6 review additions: `--estimator bot` with the default persona (one process and `--jobs`), n/a for targets after `--days` and the casual row's `estimator no estimate`, T-R33 judged out of 4 / 5 / 1 values (the mean of the three sets), the champion fallback ignoring `ev`, and the exact rested count (a worn spare beyond `packLimit` is not counted). Each was mutation-checked (the old code fails its test).
+- No existing test changed. `npm test`: 589 tests (561 + 28), all green.
 
 ## Session log
 - Session 1: built engine, UI, docs, tests, balance tool.
